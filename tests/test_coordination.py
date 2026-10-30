@@ -424,3 +424,24 @@ def test_api_smoke(client, board):
     assert client.get("/api/v1/alerts").status_code == 200
     assert client.get("/api/v1/shipments").status_code == 200
     assert "text" in client.get("/api/v1/alerts/summary").json()
+
+
+def test_reference_written_with_a_space_still_matches(monkeypatch):
+    from app.services.ai.providers import AIProvider, use_provider
+
+    s = _ship(reference=f"BK{uuid.uuid4().int % 10**6:06d}")
+    spaced = f"{s['reference'][:2]} {s['reference'][2:]}"
+
+    class Reader(AIProvider):
+        name = "fake"
+
+        def structured(self, system, prompt, schema, images=None):
+            return schema(status="DEPARTED", references=[], etd="", eta="", last_free_day="",
+                          summary="Sailed.", confidence=0.95)
+
+    use_provider(Reader())
+    try:
+        out = shipments.ingest_forwarder_email("ops@bluesea.test", "Sailing notice", f"Booking {spaced} has sailed.")
+    finally:
+        use_provider(None)
+    assert out["applied"] and out["shipment"]["id"] == s["id"]

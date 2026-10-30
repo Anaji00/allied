@@ -139,13 +139,24 @@ def test_debug_true_does_not_disable_authentication(auth_enforced):
 
 def test_viewer_cannot_reach_manager_only_endpoints(auth_enforced, client):
     """A VIEWER token is rejected by MANAGER+ endpoints with 403, not 401."""
-    from app.core.security import create_access_token
+    from tests.conftest import staff_token
 
-    token = create_access_token(
-        {"sub": "viewer@allied.com", "name": "V", "role": "VIEWER", "facility": "HQ"}
-    )
+    token = staff_token("viewer@allied.com", "VIEWER")
     response = client.get("/api/v1/audit", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403
+
+
+def test_role_comes_from_the_account_and_removed_accounts_are_refused(auth_enforced, client):
+    """A token minted as ADMIN for a VIEWER account gets VIEWER rights; a token
+    for an account that does not exist is refused."""
+    from app.core.security import create_access_token
+    from tests.conftest import staff_token
+
+    staff_token("demoted@allied.com", "VIEWER")
+    forged = create_access_token({"sub": "demoted@allied.com", "name": "D", "role": "ADMIN", "facility": "HQ"})
+    assert client.get("/api/v1/audit", headers={"Authorization": f"Bearer {forged}"}).status_code == 403
+    ghost = create_access_token({"sub": "nobody-here@allied.com", "name": "G", "role": "ADMIN", "facility": "HQ"})
+    assert client.get("/api/v1/audit", headers={"Authorization": f"Bearer {ghost}"}).status_code == 401
 
 
 def test_refresh_token_is_rejected_as_an_access_token(auth_enforced, client):

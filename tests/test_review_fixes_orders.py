@@ -9,15 +9,16 @@ import pytest
 
 from app.config import Settings, settings
 from app.core.database import SessionLocal
-from app.core.security import create_access_token
+from app.core.security import create_access_token, forget_account
 from app.models.db_models import MondayEventDB, MondayItemStateDB, OrderDB
 from app.models.orders import InboundOrderRequest, OrderLineItem
 from app.services.database_service import DatabaseService
 
 
-def _bearer(role: str, email: str = "reviewer@allied.com") -> dict:
-    token = create_access_token({"sub": email, "name": "R", "role": role, "facility": "HQ"})
-    return {"Authorization": f"Bearer {token}"}
+def _bearer(role: str, email: str = "") -> dict:
+    from tests.conftest import staff_token
+
+    return {"Authorization": f"Bearer {staff_token(email or f'{role.lower()}@allied.com', role)}"}
 
 
 def _order_request(po: str) -> InboundOrderRequest:
@@ -115,6 +116,7 @@ def test_disabled_account_token_is_rejected(auth_enforced, client, admin_token):
     with SessionLocal() as db:
         DatabaseService.get_user_by_email(db, settings.ADMIN_EMAIL).is_active = False
         db.commit()
+    forget_account(settings.ADMIN_EMAIL)
     try:
         assert client.post("/api/v1/orders/dry-run", json=_ORDER_BODY, headers=headers).status_code == 403
         assert client.get("/api/v1/auth/profile", headers=headers).status_code == 403
@@ -122,6 +124,7 @@ def test_disabled_account_token_is_rejected(auth_enforced, client, admin_token):
         with SessionLocal() as db:
             DatabaseService.get_user_by_email(db, settings.ADMIN_EMAIL).is_active = True
             db.commit()
+        forget_account(settings.ADMIN_EMAIL)
 
 
 # -- 5. PO-less emails get distinct synthetic POs ------------------------------
@@ -274,7 +277,7 @@ def test_export_contains_exactly_the_orders_it_claimed(monkeypatch):
     assert sage_export_service.claim_for_export([so]) == [so]
     assert sage_export_service.claim_for_export([so]) == []
 
-    monkeypatch.setattr(sage_export_service, "_get_orders", lambda facility=None, only_new=False: stale)
+    monkeypatch.setattr(sage_export_service, "_get_orders", lambda facility=None, only_new=False, kind="so": stale)
     content = sage_export_service.generate_sales_orders_csv(only_new=True, mark_exported=True)
     assert so not in [r["SO Number"] for r in csv.DictReader(io.StringIO(content))]
 
@@ -290,6 +293,29 @@ def test_amount_is_computed_from_the_rounded_unit_price(monkeypatch):
         "customer_name": "Acme", "shipping_address": "1 Rd, Austin, TX 78701",
         "line_items": [{"item_id": "PLATE-1", "quantity": 3, "unit_price": 0.125}],
     }
-    monkeypatch.setattr(sage_export_service, "_get_orders", lambda facility=None, only_new=False: [order])
+    monkeypatch.setattr(sage_export_service, "_get_orders", lambda facility=None, only_new=False, kind="so": [order])
     row = next(csv.DictReader(io.StringIO(sage_export_service.generate_sales_orders_csv())))
     assert (row["Unit Price"], row["Amount"]) == ("0.13", "0.39")
+
+
+def test_purchase_orders_are_exported_once_and_can_be_put_back(client):
+    from app.core.container import get_orchestrator
+    from app.services.sage_export_service import sage_export_service
+
+    so = get_orchestrator().process_inbound_order(_order_request(f"PO-POX-{uuid.uuid4().hex[:6].upper()}")).sales_order_number
+
+    def pos_in(content):
+        return {r["PO Number"] for r in csv.DictReader(io.StringIO(content))}
+
+    first, marked = sage_export_service.export_purchase_orders(only_new=True, mark_exported=True)
+    assert so in marked and pos_in(first)
+    again, _ = sage_export_service.export_purchase_orders(only_new=True, mark_exported=True)
+    assert so not in _ and not (pos_in(first) & pos_in(again))       # each PO reaches Sage once
+    # Sales orders keep their own mark: exporting POs did not use it up.
+    assert so in sage_export_service.export_sales_orders(only_new=True, mark_exported=True)[1]
+
+    # The download never arrived: put the order back, and it is in the next file.
+    resp = client.post("/api/v1/sage/export/unmark", json={"kind": "purchase-orders", "sales_order_numbers": [so]})
+    assert resp.status_code == 200 and resp.json()["reset"] == [so]
+    resp = client.get("/api/v1/sage/export/purchase-orders?only_new=true&mark_exported=true")
+    assert so in resp.headers["X-Sage-Exported-Orders"].split(",")

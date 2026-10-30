@@ -126,6 +126,7 @@ class DatabaseService:
                 "monday_board_id": r.monday_board_id,
                 "monday_item_id": r.monday_item_id,
                 "sage_exported_at": r.sage_exported_at.isoformat() if r.sage_exported_at else None,
+                "sage_po_exported_at": r.sage_po_exported_at.isoformat() if r.sage_po_exported_at else None,
             }
             for r in rows
         ]

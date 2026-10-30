@@ -17,7 +17,7 @@ Allied designs parts and has them made overseas, so the system is built around t
 | **Alerts** | One alert system for everything: an in-app inbox, email, ntfy phone push (warning and up) and Twilio text (critical only). Each alert is sent once, closes itself when the problem clears, waits out nights and weekends (non-critical), and goes to the owner first, leadership only on escalation. Weekday leadership summary at 7 am. | `coordination/notify.py`, `schedule.py` |
 | **Shipments** | Containers and air shipments with full history. Flags late, slipped 3+ days, missed departure, forwarder silent (5 days at sea, 2 in port) and port free time ending (demurrage). Forwarder status emails update the matching shipment by container or air waybill number. | `coordination/shipments.py` |
 | **monday → orders** | Status changes on the jobs board (webhooks, plus a board reader that polls every 5 minutes) create the Sage sales order and vendor POs, release POs, or dispatch packing slips. Messages are saved before replying, de-duplicated, retried with backoff, and escalated to a person after 6 failures. | `monday_events.py`, `order_orchestrator.py` |
-| **Sage 50** | Import files (`SO_IMPORT.CSV`, `PO_IMPORT.CSV`) in Sage's mm/dd/yy format, only orders not yet exported, claimed atomically so two downloads never contain the same order. Direct writing into Sage is not built (it needs the Sage SDK on the Sage PC). | `sage_export_service.py` |
+| **Sage 50** | Import files (`SO_IMPORT.CSV`, `PO_IMPORT.CSV`) in Sage's mm/dd/yy format. Each file holds only orders not yet sent to Sage (sales orders and vendor POs are tracked separately) and marks them as it is made, claimed atomically so two downloads never contain the same order. The marked order numbers come back in the `X-Sage-Exported-Orders` header; if a file never saved, `POST /sage/export/unmark` (or the screen's "Put them back") returns them to the next file. Direct writing into Sage is not built (it needs the Sage SDK on the Sage PC). | `sage_export_service.py` |
 | **Vendor bills** | 3-way match of the bill against the PO and the sales order: unit price, line totals, freight, invoice total, vendor, and duplicate invoice numbers. Anything off is held and sent to a person. A dispute email goes to the vendor at most once, and never for a bill with no matching PO. | `reconciliation_service.py` |
 | **AI tools** | Email triage and drafts, Vietnamese and Mandarin translation with a glossary, call summaries, order lookup, exception explanations and drawing comparison. Runs on local **Ollama** by default; Claude is opt-in. Anything binding waits for a person to approve it. | `app/services/ai/` |
 | **Documents** | Reads customer POs, drawings and mill certificates. A file that can't be read gets 0% confidence and goes to a person; nothing is filled in from the file name. | `document_scanner_service.py` |
@@ -93,7 +93,7 @@ Docker: `docker compose up` runs the API as a non-root user with `data/` and `ou
 
 ### Roles
 
-`VIEWER` reads. `OPERATOR` submits documents, adds shipments, runs checks and processes orders. `MANAGER` sees everyone's alerts, sends the summary and downloads Sage files. `ADMIN` manages alert contacts. Disabled accounts are refused at once, not when their token expires.
+`VIEWER` reads. `OPERATOR` submits documents, adds shipments, runs checks and processes orders. `MANAGER` sees everyone's alerts, sends the summary and downloads Sage files. `ADMIN` manages alert contacts. The role is read from the account, not the login token, so a disabled, removed or re-roled account takes effect within 30 seconds rather than when the 8-hour token expires.
 
 ---
 
@@ -115,7 +115,7 @@ All three start with the API and stop with it. Each loop survives any single fai
 python -m pytest -q
 ```
 
-Results: 286 passed, 1 skipped. The skipped test calls the live local AI and runs only when Ollama is up.
+Results: 290 passed, 1 skipped. The skipped test calls the live local AI and runs only when Ollama is up.
 
 ```bash
 python tests/run_end_to_end_use_cases.py
@@ -129,7 +129,11 @@ cd frontend && npm run lint && npm run build
 
 Results: clean lint and a production build.
 
-Tests and scenarios each use their own temporary database and data files, never `data/allied_enterprise.db`.
+Tests and scenarios each use their own temporary database, data files and upload folders, never anything under `data/`.
+
+### What is not in git
+
+`.env` (secrets), `data/` (the live database, uploads, design-document submissions, backups), `output/` (packing slips), `.claude/` and Python caches are ignored. Copy `.env.example` to start a new install; back up `data/` with `scripts/backup.py`.
 
 ---
 
@@ -165,4 +169,4 @@ scripts/               backup, Sage connection check
 - **Runs on one server only:** sales order numbers and the submission lock live in the process. Don't run several API workers against one database.
 - **Texts:** carrier email-to-text gateways are shut down. Real texts need Twilio with A2P 10DLC registration; ntfy push is the free option.
 - **Engineer instructions:** the job brief, read-back and sign-off flow is designed but not built.
-- **Version control:** the project folder is not under git yet.
+- **Large uploads without a size header:** a call recording sent without a Content-Length is still written to disk in full before the 25 MB limit applies.

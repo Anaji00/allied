@@ -258,3 +258,21 @@ def test_claude_image_media_type_is_detected():
     Image.new("RGB", (4, 4)).save(buf, format="JPEG")
     assert _media_type(buf.getvalue()) == "image/jpeg"
     assert _media_type(_png()) == "image/png"
+
+
+def test_oversized_call_recording_is_refused_before_it_is_read(client, monkeypatch):
+    from app.api.v1.endpoints import ai as ai_api
+
+    monkeypatch.setattr(settings, "PHONE_WEBHOOK_TOKEN", "phone-test-token")
+    monkeypatch.setattr(ai_api, "_MAX_UPLOAD_BYTES", 1024)
+    seen = []
+    real_form = ai_api.Request.form
+
+    def spy(self, *a, **k):
+        seen.append(True)
+        return real_form(self, *a, **k)
+
+    monkeypatch.setattr(ai_api.Request, "form", spy)
+    resp = client.post("/api/v1/ai/calls/audio?token=phone-test-token",
+                       files={"file": ("call.wav", b"\0" * 200_000, "audio/wav")})
+    assert resp.status_code == 413 and not seen

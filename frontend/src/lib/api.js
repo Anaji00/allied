@@ -392,11 +392,19 @@ export async function generateSageBatchBundle() {
  * kind is 'sales-orders' (params: customer, only_new, mark_exported) or
  * 'purchase-orders' (params: vendor).
  */
+/**
+ * Downloads a Sage import file. By default it holds only orders not yet sent
+ * to Sage and marks them as sent, so a daily download never repeats an order.
+ * Returns the sales order numbers it marked (empty if none were new).
+ */
 export async function downloadSageCsv(kind, params = {}) {
-  const allowed = kind === 'sales-orders' ? ['customer', 'only_new', 'mark_exported'] : ['vendor'];
+  const allowed = kind === 'sales-orders'
+    ? ['customer', 'only_new', 'mark_exported']
+    : ['vendor', 'only_new', 'mark_exported'];
+  const merged = { only_new: true, mark_exported: true, ...params };
   const query = new URLSearchParams();
   for (const key of allowed) {
-    if (params[key] !== undefined && params[key] !== null && params[key] !== '') query.set(key, String(params[key]));
+    if (merged[key] !== undefined && merged[key] !== null && merged[key] !== '') query.set(key, String(merged[key]));
   }
   const qs = query.toString();
   const res = await authFetch(`${API_BASE}/sage/export/${kind}${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
@@ -404,7 +412,23 @@ export async function downloadSageCsv(kind, params = {}) {
     const err = await res.json().catch(() => ({}));
     throw new Error(typeof err.detail === 'string' ? err.detail : `Could not download the Sage file (${res.status})`);
   }
+  const marked = (res.headers.get('X-Sage-Exported-Orders') || '').split(',').filter(Boolean);
   saveBlob(await res.blob(), kind === 'sales-orders' ? 'SO_IMPORT.CSV' : 'PO_IMPORT.CSV');
+  return marked;
+}
+
+/** Puts orders back into the next Sage file, when a downloaded file never saved. */
+export async function unmarkSageExport(kind, salesOrderNumbers) {
+  const res = await authFetch(`${API_BASE}/sage/export/unmark`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, sales_order_numbers: salesOrderNumbers }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Could not undo the export (${res.status})`);
+  }
+  return res.json();
 }
 
 /**

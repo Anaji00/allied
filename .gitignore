@@ -1,1 +1,25 @@
-data/backups/
+# Secrets. Only the documented template is tracked.
+.env
+.env.*
+!.env.example
+
+# Live data and generated files: the database, uploads, design-document
+# submissions, backups and packing slips belong to the running system.
+/data/
+/output/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local tooling (launch configs hold machine paths and generated passwords)
+.claude/
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

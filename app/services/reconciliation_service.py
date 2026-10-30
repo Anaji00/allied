@@ -105,6 +105,7 @@ class ReconciliationService:
         # (vendor, invoice), so a re-submitted invoice is not disputed twice.
         self._dispute_log: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._dispute_lock = threading.Lock()
+        self._invoice_locks: Dict[Tuple[str, str], threading.Lock] = {}
         # Resolved lazily: the matcher loads the catalogues, and constructing
         # this service must not pay that cost when no dispute is ever sent.
         self._matcher = None
@@ -181,7 +182,18 @@ class ReconciliationService:
     def reconcile_vendor_invoice(self, invoice: VendorInvoice) -> ReconciliationResult:
         """
         Validates invoice line items against authorized PO costs and freight rules.
+
+        One bill (supplier + invoice number) is checked at a time, so the same
+        bill arriving twice at once (email and upload) cannot pass the
+        duplicate check twice before either result is saved.
         """
+        key = _dispute_key(invoice.vendor_name, invoice.invoice_number)
+        with self._dispute_lock:
+            lock = self._invoice_locks.setdefault(key, threading.Lock())
+        with lock:
+            return self._reconcile(invoice)
+
+    def _reconcile(self, invoice: VendorInvoice) -> ReconciliationResult:
         logger.info(f"Auditing vendor invoice [{invoice.invoice_number}] from {invoice.vendor_name} for PO #{invoice.po_number}")
 
         rec_id = f"REC-{uuid.uuid4().hex[:8].upper()}"

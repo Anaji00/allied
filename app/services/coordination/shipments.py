@@ -241,8 +241,12 @@ def _match(text: str, refs: List[str]) -> Optional[int]:
     """
     containers = {_norm(c) for c in _CONTAINER.findall(text.upper())}
     awbs = {a + b for a, b in _AWB.findall(text)}
-    words = {_norm(w) for w in re.split(r"[^A-Za-z0-9/-]+", text) if w}
-    refset = {_norm(r) for r in refs if r} | {w.replace("/", "").replace("-", "") for w in words}
+    # Whole words, and runs of up to three, so "BK 778812" matches BK778812
+    # while "4521" still never matches inside MSCU1234521.
+    words = [w for w in (_norm(t) for t in re.split(r"\s+", text)) if w]
+    refset = {_norm(r) for r in refs if r}
+    for size in (1, 2, 3):
+        refset |= {"".join(words[i:i + size]) for i in range(len(words) - size + 1)}
     with SessionLocal() as db:
         open_rows = db.query(ShipmentDB).filter(ShipmentDB.status.notin_(list(FINISHED))).order_by(ShipmentDB.id).all()
         for s in open_rows:

@@ -229,7 +229,12 @@ async def receive_call_audio(request: Request):
     request is refused before its upload is read.
     """
     actor = await _caller(request)
-    form = await request.form()
+    # request.form() writes the whole upload to disk before _read can stop it,
+    # so an oversized recording is refused on its declared size first.
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > _MAX_UPLOAD_BYTES + 64 * 1024:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is larger than 25 MB.")
+    form = await request.form(max_files=1, max_fields=10)
     file = form.get("file")
     if not hasattr(file, "file"):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Attach the recording as 'file'.")

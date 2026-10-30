@@ -10,8 +10,10 @@ Provides:
 
 import hashlib
 import hmac
+import threading
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Dict, List, Optional, Tuple
 
 import jwt
 from fastapi import Depends, HTTPException, Header, Request, Security, status
@@ -113,35 +115,69 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
     email = payload.get("sub", "")
-    _reject_disabled_account(email)
+    role = _live_role(email)
 
     return {
         "email": email,
         "full_name": payload.get("name", ""),
-        "role": payload.get("role", "VIEWER"),
+        "role": role,
         "facility": payload.get("facility", "HQ"),
     }
 
 
-def _reject_disabled_account(email: str) -> None:
-    """Raises 403 when the token's account exists but has been disabled.
+# The account behind each token, re-read at most every 30 seconds: a disabled,
+# removed or re-roled user loses access within that time, not when their
+# 8-hour token runs out, without a database query on every request.
+_ACCOUNT_TTL = 30.0
+_accounts: Dict[str, Tuple[float, Optional[Tuple[bool, str]]]] = {}
+_accounts_lock = threading.Lock()
 
-    Every role dependency goes through get_current_user, so this is the one
-    place that stops a disabled user from riding out an 8-hour access token.
-    It opens its own short session because get_current_user is also called
-    directly (outside FastAPI's dependency injection) by other endpoints.
-    """
+
+def _account(email: str) -> Optional[Tuple[bool, str]]:
+    """(is_active, role) for the account, or None if it does not exist."""
+    key = (email or "").strip().lower()
+    now = time.monotonic()
+    with _accounts_lock:
+        hit = _accounts.get(key)
+        if hit and now - hit[0] < _ACCOUNT_TTL:
+            return hit[1]
     from app.core.database import SessionLocal
     from app.services.database_service import DatabaseService
 
     with SessionLocal() as db:
-        user = DatabaseService.get_user_by_email(db, email)
-        disabled = user is not None and not user.is_active
-    if disabled:
+        user = DatabaseService.get_user_by_email(db, key)
+        found = (bool(user.is_active), user.role or "VIEWER") if user is not None else None
+    with _accounts_lock:
+        _accounts[key] = (now, found)
+    return found
+
+
+def forget_account(email: str) -> None:
+    """Drops the cached account so a change (disable, new role) applies at once."""
+    with _accounts_lock:
+        _accounts.pop((email or "").strip().lower(), None)
+
+
+def _live_role(email: str) -> str:
+    """The account's current role. Refuses removed and disabled accounts.
+
+    Token claims are a snapshot taken at login, so the role is read from the
+    account itself: a demoted user does not keep their old role for 8 hours.
+    """
+    account = _account(email)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This account no longer exists.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    active, role = account
+    if not active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled. Contact your administrator.",
         )
+    return role
 
 
 def assert_account_active(db: Session, email: str) -> None:

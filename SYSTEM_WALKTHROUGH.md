@@ -98,7 +98,7 @@ Later steps follow the same pattern:
 - **Approved for Production** sends the POs to the suppliers.
 - **Shipped** produces the packing slip. Supplier names and Allied's costs never appear on what the customer sees.
 
-Each day someone downloads the **Sage import file** from **Orders & Sage** and imports it into Sage 50. Each order appears in exactly one file, so nothing is entered twice. Writing straight into Sage without the import step needs a small helper program on the Sage computer, which isn't built yet.
+Each day someone downloads the two **Sage import files** (sales orders and supplier POs) from **Orders & Sage** and imports them into Sage 50. Each file holds only what hasn't been sent to Sage yet, so nothing is entered twice, as long as every downloaded file is imported. If a download didn't save, press **Put them back** on the same screen and those orders will be in the next file. Writing straight into Sage without the import step needs a small helper program on the Sage computer, which isn't built yet.
 
 **Supplier bills** are checked against what Allied ordered and agreed to pay:
 - the price per unit;

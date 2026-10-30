@@ -98,7 +98,7 @@ export default function AiToolsPage() {
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       {/* Every tool stays mounted and inactive ones are hidden, so a result
           (or a slow model call still running) survives switching tabs. */}
-      <div hidden={tab !== 'review'}><ReviewQueue /></div>
+      <div hidden={tab !== 'review'}><ReviewQueue active={tab === 'review'} /></div>
       <div hidden={tab !== 'translate'}><TranslateTool /></div>
       <div hidden={tab !== 'email'}><EmailTools /></div>
       <div hidden={tab !== 'drawings'}><DrawingTool /></div>
@@ -110,7 +110,7 @@ export default function AiToolsPage() {
 
 /* ---------------------------------------------------------------- review */
 
-function ReviewQueue() {
+function ReviewQueue({ active }) {
   const { hasRole } = useAuth();
   const canAct = hasRole?.('OPERATOR');
   const [reloadKey, setReloadKey] = useState(0);
@@ -136,11 +136,13 @@ function ReviewQueue() {
         if (alive) setError(e.message);
       }
     }
-    load();
+    // The tab stays mounted while hidden, so it reloads each time it is shown:
+    // the other tools add suggestions while it is out of sight.
+    if (active) load();
     return () => {
       alive = false;
     };
-  }, [reloadKey]);
+  }, [reloadKey, active]);
 
   const retry = () => setReloadKey((k) => k + 1);
 

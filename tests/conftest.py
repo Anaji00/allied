@@ -41,6 +41,8 @@ settings.MASTER_VENDORS_PATH = _TEST_DATA_DIR / "master_vendors.csv"
 settings.ALIAS_DICT_PATH = _TEST_DATA_DIR / "alias_dictionary.json"
 settings.OUTPUT_DIR = _TEST_TMP / "output"
 settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# Design-document submissions are stored under DB_DIR; keep test uploads out of data/.
+settings.DB_DIR = _TEST_TMP
 
 
 @pytest.fixture
@@ -72,3 +74,24 @@ def client():
     from app.main import app
 
     return TestClient(app)
+
+
+def staff_token(email: str, role: str) -> str:
+    """An access token for a real (created if needed) account with this role.
+
+    Roles are read from the account, not the token, so the account must exist.
+    """
+    from app.core.database import SessionLocal as _Session
+    from app.core.security import create_access_token, forget_account, hash_password
+    from app.services.database_service import DatabaseService
+
+    with _Session() as db:
+        user = DatabaseService.get_user_by_email(db, email)
+        if user is None:
+            DatabaseService.create_user(db, email=email, hashed_password=hash_password("x-test-only"),
+                                        full_name=email.split("@")[0], role=role)
+        elif user.role != role:
+            user.role = role
+            db.commit()
+    forget_account(email)
+    return create_access_token({"sub": email, "name": email, "role": role, "facility": "HQ"})

@@ -55,6 +55,7 @@ settings.MASTER_VENDORS_PATH = _RUN_DATA / "master_vendors.csv"
 settings.ALIAS_DICT_PATH = _RUN_DATA / "alias_dictionary.json"
 settings.OUTPUT_DIR = _RUN_TMP / "output"
 settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+settings.DB_DIR = _RUN_TMP  # design-document submissions land here, not in data/
 
 from fastapi.testclient import TestClient
 

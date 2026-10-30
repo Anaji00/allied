@@ -101,6 +101,16 @@ def sage_date(value: Any) -> str:
         return date.today().strftime("%m/%d/%y")
 
 
+def _mark_column(kind: str):
+    """The order column that records each kind of export: "so" sales orders, "po" their vendor POs."""
+    from app.models.db_models import OrderDB
+
+    marks = {"so": OrderDB.sage_exported_at, "po": OrderDB.sage_po_exported_at}
+    if kind not in marks:
+        raise ValueError(f"Unknown export kind '{kind}'.")
+    return marks[kind]
+
+
 class SageExportService:
     """Generates standard Peachtree / Sage 50 US import CSVs."""
 
@@ -112,11 +122,15 @@ class SageExportService:
         self.gl_cogs_ceramic = "51000-00-CER"   # Ceramic Material Cost
         self.gl_freight = "52000-00-FREIGHT"    # Inbound Freight Cost
 
-    def _get_orders(self, facility: Optional[str] = None, only_new: bool = False) -> List[Dict[str, Any]]:
+    def _get_orders(
+        self, facility: Optional[str] = None, only_new: bool = False, kind: str = "so"
+    ) -> List[Dict[str, Any]]:
         """Retrieves orders from SQLite database with fallback to in-memory cache.
 
-        only_new leaves out orders already handed to Sage in an earlier file.
+        only_new leaves out orders already handed to Sage in an earlier file of
+        this kind ("so" for sales orders, "po" for their vendor POs).
         """
+        mark = _mark_column(kind).key
         try:
             with SessionLocal() as db:
                 # No row cap for only_new: an unexported order older than the
@@ -125,7 +139,7 @@ class SageExportService:
                     db, facility=facility, limit=1_000_000 if only_new else 200
                 )
                 if only_new:
-                    return [o for o in db_orders if not o.get("sage_exported_at")]
+                    return [o for o in db_orders if not o.get(mark)]
                 if db_orders:
                     return db_orders
         except Exception as e:
@@ -156,25 +170,26 @@ class SageExportService:
         return self.gl_cogs_steel
 
     @staticmethod
-    def claim_for_export(sales_order_numbers: List[str]) -> List[str]:
+    def claim_for_export(sales_order_numbers: List[str], kind: str = "so") -> List[str]:
         """Atomically stamps unexported orders and returns exactly those stamped.
 
-        Each row is claimed with a conditional UPDATE ... WHERE sage_exported_at
-        IS NULL, so two overlapping exports can never both include an order:
-        whichever claims it first exports it, the other leaves it out.
+        Each row is claimed with a conditional UPDATE ... WHERE <mark> IS NULL,
+        so two overlapping exports can never both include an order: whichever
+        claims it first exports it, the other leaves it out.
         """
         from app.models.db_models import OrderDB
 
         if not sales_order_numbers:
             return []
+        column = _mark_column(kind)
         now = datetime.now(timezone.utc)
         claimed: List[str] = []
         with SessionLocal() as db:
             for so_num in dict.fromkeys(sales_order_numbers):
                 n = (
                     db.query(OrderDB)
-                    .filter(OrderDB.sales_order_number == so_num, OrderDB.sage_exported_at.is_(None))
-                    .update({OrderDB.sage_exported_at: now}, synchronize_session=False)
+                    .filter(OrderDB.sales_order_number == so_num, column.is_(None))
+                    .update({column: now}, synchronize_session=False)
                 )
                 if n:
                     claimed.append(so_num)
@@ -182,20 +197,31 @@ class SageExportService:
         return claimed
 
     @staticmethod
-    def mark_exported(sales_order_numbers: List[str]) -> int:
-        """Stamps orders as handed to Sage so the next only_new export skips them."""
+    def unmark_exported(sales_order_numbers: List[str], kind: str = "so", actor: str = "") -> List[str]:
+        """Puts orders back in the next "only new" file, for a download that never arrived."""
         from app.models.db_models import OrderDB
 
         if not sales_order_numbers:
-            return 0
+            return []
+        column = _mark_column(kind)
         with SessionLocal() as db:
-            n = (
+            rows = (
                 db.query(OrderDB)
-                .filter(OrderDB.sales_order_number.in_(sales_order_numbers), OrderDB.sage_exported_at.is_(None))
-                .update({OrderDB.sage_exported_at: datetime.now(timezone.utc)}, synchronize_session=False)
+                .filter(OrderDB.sales_order_number.in_(list(dict.fromkeys(sales_order_numbers))), column.isnot(None))
+                .all()
             )
+            reset = [r.sales_order_number for r in rows]
+            for r in rows:
+                setattr(r, column.key, None)
             db.commit()
-        return n
+        if reset:
+            audit_log(
+                action="SAGE_50_EXPORT_UNDONE",
+                resource_type="SAGE_SO_CSV" if kind == "so" else "SAGE_PO_CSV",
+                actor_email=actor or "system",
+                detail=f"Export mark cleared for {len(reset)} order(s): {', '.join(reset)}",
+            )
+        return reset
 
     def generate_sales_orders_csv(
         self,
@@ -204,11 +230,20 @@ class SageExportService:
         only_new: bool = False,
         mark_exported: bool = False,
     ) -> str:
+        return self.export_sales_orders(customer_filter, facility, only_new, mark_exported)[0]
+
+    def export_sales_orders(
+        self,
+        customer_filter: Optional[str] = None,
+        facility: Optional[str] = None,
+        only_new: bool = False,
+        mark_exported: bool = False,
+    ) -> Tuple[str, List[str]]:
         """
         Generates official Sage 50 Sales Order import CSV format:
         Customer ID,SO Number,Date,Ship to Name,Ship to Address-Line One,Ship to City,Ship to State,Ship to Zipcode,Terms,Item ID,Description,Quantity,Unit Price,Amount,GL Account
         """
-        orders = self._get_orders(facility=facility, only_new=only_new)
+        orders = self._get_orders(facility=facility, only_new=only_new, kind="so")
         if customer_filter:
             orders = [o for o in orders if customer_filter.lower() in o.get("customer_name", "").lower()]
 
@@ -305,8 +340,9 @@ class SageExportService:
             # delivered. Claiming first and exporting only what was claimed
             # makes the mark atomic: an overlapping run cannot also export an
             # order, and nothing is marked that is not in this file.
-            claimed = set(self.claim_for_export([so for so, _ in order_rows]))
+            claimed = set(self.claim_for_export([so for so, _ in order_rows], kind="so"))
             order_rows = [(so, rows) for so, rows in order_rows if so in claimed]
+        marked = [so for so, _ in order_rows] if mark_exported else []
 
         for _, rows in order_rows:
             writer.writerows(rows)
@@ -325,18 +361,35 @@ class SageExportService:
             ),
         )
 
-        return csv_content
+        return csv_content, marked
 
     def generate_purchase_orders_csv(
         self,
         vendor_filter: Optional[str] = None,
         facility: Optional[str] = None,
+        only_new: bool = False,
+        mark_exported: bool = False,
     ) -> str:
+        return self.export_purchase_orders(vendor_filter, facility, only_new, mark_exported)[0]
+
+    def export_purchase_orders(
+        self,
+        vendor_filter: Optional[str] = None,
+        facility: Optional[str] = None,
+        only_new: bool = False,
+        mark_exported: bool = False,
+    ) -> Tuple[str, List[str]]:
         """
         Generates official Sage 50 Purchase Order import CSV format:
         Vendor ID,PO Number,Date,Ship to Name,Ship to Address-Line One,Ship to City,Ship to State,Ship to Zipcode,Item ID,Description,Quantity,Unit Cost,Amount,GL Account
+
+        only_new / mark_exported work as for sales orders, with their own mark,
+        so each order's POs reach Sage once. A vendor filter never marks: the
+        order's other vendors' POs would then never be exported.
         """
-        orders = self._get_orders(facility=facility)
+        orders = self._get_orders(facility=facility, only_new=only_new, kind="po")
+        mark_exported = mark_exported and not vendor_filter
+        order_rows: List[Tuple[str, List[List[Any]]]] = []
 
         output = io.StringIO()
         writer = csv.writer(output, lineterminator="\n")
@@ -359,8 +412,8 @@ class SageExportService:
             "GL Account",
         ])
 
-        po_lines_written = 0
         for o in orders:
+            rows: List[List[Any]] = []
             po_date = sage_date(o.get("po_date"))
             ship_name = o.get("customer_name") or "Allied Facility"
             ship_line1, ship_city, ship_state, ship_zip = split_shipping_address(
@@ -404,7 +457,7 @@ class SageExportService:
                     continue
                 gl_account = self._resolve_cogs_gl(item_id)
 
-                writer.writerow([
+                rows.append([
                     vend_id,
                     po_num,
                     po_date,
@@ -420,7 +473,17 @@ class SageExportService:
                     f"{amount:.2f}",
                     gl_account,
                 ])
-                po_lines_written += 1
+            if rows:
+                order_rows.append((o.get("sales_order_number"), rows))
+
+        if mark_exported:
+            claimed = set(self.claim_for_export([so for so, _ in order_rows], kind="po"))
+            order_rows = [(so, rows) for so, rows in order_rows if so in claimed]
+        marked = [so for so, _ in order_rows] if mark_exported else []
+        po_lines_written = 0
+        for _, rows in order_rows:
+            writer.writerows(rows)
+            po_lines_written += len(rows)
 
         csv_content = output.getvalue()
         output.close()
@@ -429,10 +492,14 @@ class SageExportService:
         audit_log(
             action="SAGE_50_EXPORT",
             resource_type="SAGE_PO_CSV",
-            detail=f"Generated Sage 50 PO Import CSV ({po_lines_written} lines, vendor={vendor_filter or 'ALL'})",
+            detail=(
+                f"Generated Sage 50 PO Import CSV ({po_lines_written} lines, vendor={vendor_filter or 'ALL'}"
+                + (", marked exported" if mark_exported else "")
+                + ")"
+            ),
         )
 
-        return csv_content
+        return csv_content, marked
 
     @staticmethod
     def to_usd(amount: Decimal, currency: str) -> Decimal:

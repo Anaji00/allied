@@ -110,6 +110,8 @@ class OrderDB(Base):
     # Set when the order is included in a Sage import file, so the next export
     # does not hand Sage the same sales order twice.
     sage_exported_at = Column(DateTime(timezone=True), nullable=True)
+    # The same for the order's vendor POs, which go to Sage in their own file.
+    sage_po_exported_at = Column(DateTime(timezone=True), nullable=True)
 
 
 # ---------------------------------------------------------------------------

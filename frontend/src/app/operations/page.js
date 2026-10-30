@@ -36,6 +36,7 @@ import {
   importCSVData,
   uploadCSVFile,
   downloadSageCsv,
+  unmarkSageExport,
 } from '@/lib/api';
 import styles from './operations.module.css';
 
@@ -90,6 +91,8 @@ export default function OperationsPage() {
   const [exceptions, setExceptions] = useState(null);
   const [errors, setErrors] = useState({});
   const [sageFiles, setSageFiles] = useState(null);
+  // The last download's marked orders, so a file that never saved can be undone.
+  const [lastExport, setLastExport] = useState(null);
 
   // Spreadsheet import
   const [csvType, setCsvType] = useState('ITEMS');
@@ -242,8 +245,23 @@ export default function OperationsPage() {
 
   function handleDownload(key, kind) {
     run(key, async () => {
-      await downloadSageCsv(kind);
-      ok(kind === 'sales-orders' ? 'SO_IMPORT.CSV downloaded.' : 'PO_IMPORT.CSV downloaded.');
+      const file = kind === 'sales-orders' ? 'SO_IMPORT.CSV' : 'PO_IMPORT.CSV';
+      const marked = await downloadSageCsv(kind);
+      setLastExport(marked.length ? { kind, file, orders: marked } : null);
+      ok(marked.length
+        ? `${file} downloaded: ${marked.length} order(s), now marked as sent to Sage.`
+        : `${file} downloaded. No new orders since the last file.`);
+      reload();
+    });
+  }
+
+  function handleUndoExport() {
+    if (!lastExport) return;
+    run('undo-export', async () => {
+      const { reset } = await unmarkSageExport(lastExport.kind, lastExport.orders);
+      setLastExport(null);
+      ok(`${reset.length} order(s) will be in the next ${lastExport.file}.`);
+      reload();
     });
   }
 
@@ -716,6 +734,22 @@ export default function OperationsPage() {
                   </Button>
                 </div>
               </div>
+              <p className={styles.muted}>
+                Each file holds only orders not yet sent to Sage, so import every file you download.
+              </p>
+              {lastExport && (
+                <Notice
+                  tone="info"
+                  title={`${lastExport.file}: ${lastExport.orders.length} order(s) marked as sent to Sage`}
+                  action={(
+                    <Button size="sm" loading={busy === 'undo-export'} disabled={busy !== null} onClick={handleUndoExport}>
+                      File didn&apos;t save? Put them back
+                    </Button>
+                  )}
+                >
+                  {lastExport.orders.join(', ')}
+                </Notice>
+              )}
             </Loadable>
           </Card>
 

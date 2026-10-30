@@ -1,8 +1,11 @@
 """FastAPI router for Sage 50 US standard import CSV batch exports."""
 
-from typing import Optional
-from app.core.security import require_manager
+from typing import List, Literal, Optional
+
 from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel, Field
+
+from app.core.security import require_manager
 
 from app.services.sage_export_service import (
     SageExportSummary,
@@ -10,6 +13,17 @@ from app.services.sage_export_service import (
 )
 
 router = APIRouter()
+
+# Lists the orders a download marked as exported, so the screen can offer to
+# undo it if the file never saved.
+EXPORTED_HEADER = "X-Sage-Exported-Orders"
+
+
+def _csv(content: str, filename: str, marked: List[str]) -> Response:
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    if marked:
+        headers[EXPORTED_HEADER] = ",".join(marked)
+    return Response(content=content, media_type="text/csv", headers=headers)
 
 
 @router.get(
@@ -38,19 +52,16 @@ def download_sales_orders_csv(
     Sage once, so a re-run never imports a duplicate sales order.
 
     Orders are marked exported when the file is generated, not when the
-    download completes: if the download is lost, clear sage_exported_at for
-    those orders before re-running. Marking is atomic -- each order is claimed
-    with a conditional update and the file holds exactly the claimed orders,
-    so two overlapping requests never both export the same order.
+    download completes. The marked sales order numbers come back in the
+    X-Sage-Exported-Orders header; if the file never saved, POST them to
+    /sage/export/unmark. Marking is atomic -- each order is claimed with a
+    conditional update and the file holds exactly the claimed orders, so two
+    overlapping requests never both export the same order.
     """
-    csv_data = sage_export_service.generate_sales_orders_csv(
+    csv_data, marked = sage_export_service.export_sales_orders(
         customer_filter=customer, only_new=only_new, mark_exported=mark_exported
     )
-    return Response(
-        content=csv_data,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=SO_IMPORT.CSV"},
-    )
+    return _csv(csv_data, "SO_IMPORT.CSV", marked)
 
 
 @router.get(
@@ -59,15 +70,33 @@ def download_sales_orders_csv(
 )
 def download_purchase_orders_csv(
     vendor: Optional[str] = None,
+    only_new: bool = False,
+    mark_exported: bool = False,
     _user: dict = Depends(require_manager),
 ):
-    """Generates and returns standard PO_IMPORT.CSV formatted for Sage 50 US."""
-    csv_data = sage_export_service.generate_purchase_orders_csv(vendor_filter=vendor)
-    return Response(
-        content=csv_data,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=PO_IMPORT.CSV"},
+    """Generates and returns standard PO_IMPORT.CSV formatted for Sage 50 US.
+
+    only_new / mark_exported work as for sales orders, with a separate mark,
+    so each order's vendor POs reach Sage once. A vendor filter never marks.
+    """
+    csv_data, marked = sage_export_service.export_purchase_orders(
+        vendor_filter=vendor, only_new=only_new, mark_exported=mark_exported
     )
+    return _csv(csv_data, "PO_IMPORT.CSV", marked)
+
+
+class UnmarkBody(BaseModel):
+    kind: Literal["sales-orders", "purchase-orders"]
+    sales_order_numbers: List[str] = Field(..., min_length=1, max_length=5000)
+
+
+@router.post("/unmark", summary="Put orders back in the next export (the file never arrived)")
+def unmark_exported(body: UnmarkBody, user: dict = Depends(require_manager)):
+    reset = sage_export_service.unmark_exported(
+        body.sales_order_numbers, kind="so" if body.kind == "sales-orders" else "po",
+        actor=user.get("email", ""),
+    )
+    return {"reset": reset}
 
 
 @router.post(
