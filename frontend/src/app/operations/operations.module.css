@@ -1,0 +1,373 @@
+/* Orders & Sage page. Cards, tables, tabs and buttons come from
+   @/components/ui; this file covers the pieces inside them. */
+
+.pad {
+  padding: 4px 20px 16px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form > button {
+  align-self: flex-start;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.textLink {
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.textLink:hover {
+  color: var(--allied-red);
+  text-decoration: underline;
+}
+
+/* ---------- table cells ---------- */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wide {
+  display: block;
+  min-width: 160px;
+  font-weight: 550;
+}
+
+.muted {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.numBad {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* ---------- needs attention ---------- */
+.issues {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.issue,
+.issueDone {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.issueDone {
+  background: var(--surface-muted);
+  padding: 10px 16px;
+}
+
+.issueHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.issueTitle {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.issueText {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.issueMeta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.issueActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.resolved {
+  margin-top: var(--space-md);
+}
+
+.resolved summary {
+  cursor: pointer;
+  padding: 6px 0;
+  font-size: 0.85rem;
+  font-weight: 550;
+  color: var(--text-secondary);
+}
+
+.resolved .issues {
+  margin-top: 8px;
+}
+
+/* ---------- Sage ---------- */
+.sageGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-md);
+}
+
+.sageBox {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.linkButton,
+.uploadButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 550;
+  text-align: center;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.linkButton:hover,
+.uploadButton:hover {
+  background: var(--canvas);
+}
+
+.uploadButton {
+  position: relative;
+}
+
+.uploadButton:focus-within {
+  outline: 2px solid var(--allied-red);
+  outline-offset: 2px;
+}
+
+.previews {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.previewLabel {
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.code {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* ---------- spreadsheet import ---------- */
+.csvBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.csvType {
+  flex: 1 1 240px;
+  max-width: 340px;
+}
+
+.csvButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.csvField textarea {
+  min-height: 220px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.submitRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: var(--space-md);
+}
+
+.errorList {
+  margin-left: 20px;
+  font-size: 0.8rem;
+  color: var(--error);
+  line-height: 1.5;
+}
+
+/* ---------- monday.com tests ---------- */
+.testGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-lg);
+}
+
+.testBody {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.testText {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ---------- preview dialog ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  background: rgba(17, 24, 39, 0.45);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 720px;
+  max-height: 85vh;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+}
+
+.dialogHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialogTitle {
+  font-size: 1rem;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.dialogText {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .pad {
+    padding: 4px 16px 14px;
+  }
+
+  .pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form > button,
+  .submitRow > button {
+    width: 100%;
+  }
+
+  .csvType {
+    max-width: none;
+  }
+
+  .csvButtons,
+  .csvButtons > * {
+    flex: 1 1 auto;
+  }
+
+  .dialog {
+    padding: 16px;
+  }
+}

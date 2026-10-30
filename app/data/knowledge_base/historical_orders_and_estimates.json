@@ -1,0 +1,120 @@
+[
+  {
+    "estimate_id": "EST-2025-0819",
+    "customer_name": "Owens Corning (Edmonton Plant)",
+    "customer_id": "CUST-OC-01",
+    "date": "2025-08-19",
+    "status": "WON_AND_COMPLETED",
+    "requested_items": [
+      {
+        "item_id": "OC755507",
+        "description": "2-1/2\" Dia Holes Hammermill Screen made from Allied 300XL Wear Plate",
+        "quantity": 2,
+        "quoted_unit_price": 3772.91,
+        "vendor_cost": 1785.00,
+        "supplier": "NIBROCK",
+        "margin_pct": 52.68
+      },
+      {
+        "item_id": "BAR-34X2-41",
+        "description": "3/4\" x 2\" x 41-3/4\" C1045 Middle Brace Bars",
+        "quantity": 4,
+        "quoted_unit_price": 284.10,
+        "vendor_cost": 115.00,
+        "supplier": "NIBROCK",
+        "margin_pct": 59.52
+      }
+    ],
+    "payment_terms": "Net 150 Days",
+    "lead_time_days": 12,
+    "estimator_notes": "Client requested 300XL plate due to high sand glass batch abrasion. Quoted volume pricing tier based on 2-screen minimum. Nibrock fabricated per Drawing #OC-ED-218-R2.",
+    "heat_numbers": ["HT-300XL-8819", "HT-C1045-9120"],
+    "win_rationale": "Allied 300XL outlasted standard AR500 by 3.4x in trial run. Customer accepted premium pricing."
+  },
+  {
+    "estimate_id": "EST-2025-1014",
+    "customer_name": "Knauf Insulation (Lanett Plant)",
+    "customer_id": "CUST-KN-01",
+    "date": "2025-10-14",
+    "status": "WON_AND_COMPLETED",
+    "requested_items": [
+      {
+        "item_id": "KN5218554",
+        "description": "300XL Sectional Screw Conveyor Flight Assembly (12\" Dia x 14ft)",
+        "quantity": 1,
+        "quoted_unit_price": 8940.00,
+        "vendor_cost": 4120.00,
+        "supplier": "KWS",
+        "margin_pct": 53.91
+      },
+      {
+        "item_id": "BEAM-W8X31",
+        "description": "W8 x 31# Wide Flange Structural Support Beam (20 Ft)",
+        "quantity": 2,
+        "quoted_unit_price": 780.00,
+        "vendor_cost": 420.00,
+        "supplier": "KWS",
+        "margin_pct": 46.15
+      }
+    ],
+    "payment_terms": "Net 60 Days",
+    "lead_time_days": 21,
+    "estimator_notes": "Custom heavy-duty CEMA class conveyor with 300XL hardfaced leading flight edges. Fabricated by KWS under strict blind-ship compliance.",
+    "heat_numbers": ["HT-300XL-9921", "HT-A992-7712"],
+    "win_rationale": "Fast 3-week lead time beat local competitor by 2 weeks."
+  },
+  {
+    "estimate_id": "EST-2025-1102",
+    "customer_name": "IKO Southwest (Hillsboro Plant)",
+    "customer_id": "CUST-IKO-01",
+    "date": "2025-11-02",
+    "status": "WON_AND_COMPLETED",
+    "requested_items": [
+      {
+        "item_id": "WIRE-2035XL-045",
+        "description": "Allied 20-35XL .045\" Hardsurfacing Wire (33 lb Spool)",
+        "quantity": 10,
+        "quoted_unit_price": 315.00,
+        "vendor_cost": 145.00,
+        "supplier": "STOCK",
+        "margin_pct": 53.97
+      },
+      {
+        "item_id": "PLATE-300XL-38",
+        "description": "Allied 300XL 3/8\" Clad Wear Plate (60\" x 80\")",
+        "quantity": 1,
+        "quoted_unit_price": 2950.00,
+        "vendor_cost": 1450.00,
+        "supplier": "NIBROCK",
+        "margin_pct": 50.85
+      }
+    ],
+    "payment_terms": "Net 30 Days",
+    "lead_time_days": 2,
+    "estimator_notes": "Emergency shingle asphalt granule line wear patch. Wire delivered ex-works Hillsboro warehouse, plate allocated from regional inventory.",
+    "heat_numbers": ["HT-300XL-8819"],
+    "win_rationale": "Same-day dispatch of in-stock wire spools."
+  },
+  {
+    "estimate_id": "EST-2025-0612",
+    "customer_name": "Vulcan Materials (Regional Quarry)",
+    "customer_id": "CUST-VUL-01",
+    "date": "2025-06-12",
+    "status": "LOST_BID",
+    "requested_items": [
+      {
+        "item_id": "PLATE-300XL-12",
+        "description": "Allied 300XL 1/2\" Clad Plate (60\" x 120\")",
+        "quantity": 6,
+        "quoted_unit_price": 4200.00,
+        "vendor_cost": 1950.00,
+        "supplier": "NIBROCK",
+        "margin_pct": 53.57
+      }
+    ],
+    "payment_terms": "Net 30 Days",
+    "lead_time_days": 18,
+    "estimator_notes": "Quoted standard 53.5% margin. Competitor offered standard AR400 plate at $2,400 with 3-day delivery.",
+    "loss_rationale": "Client chose lower-cost AR400 steel for temporary 3-month aggregate project where extreme wear life was not required. Recommendation: Offer hybrid AR400 quote when budget is constrained."
+  }
+]

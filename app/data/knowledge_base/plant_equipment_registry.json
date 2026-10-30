@@ -1,0 +1,47 @@
+[
+  {
+    "equipment_tag": "OC-EDM-HM-01",
+    "customer_name": "Owens Corning (Edmonton Plant)",
+    "customer_id": "CUST-OC-01",
+    "component_name": "Hammermill Screen 2-1/2\" Perforated Plate",
+    "master_sku": "OC755507",
+    "drawing_number": "DWG# OC-ED-218-R2",
+    "operating_material": "Silica Sand, Cullet Glass Batch (High Wear)",
+    "expected_lifespan_days": 180,
+    "last_service_date": "2025-08-19",
+    "historical_unit_price": 3772.91,
+    "suggested_replacement_sku": "OC755507",
+    "mate_accessories": ["BAR-34X2-41", "BOLT-GRADE8-12X2"],
+    "criticality": "HIGH (Main Line Production)"
+  },
+  {
+    "equipment_tag": "KN-LAN-SC-04",
+    "customer_name": "Knauf Insulation (Lanett Plant)",
+    "customer_id": "CUST-KN-01",
+    "component_name": "Sectional Screw Conveyor Flight Assembly",
+    "master_sku": "KN5218554",
+    "drawing_number": "DWG# KN-LAN-5218",
+    "operating_material": "Hot Mineral Slag & Fiberglass Binder",
+    "expected_lifespan_days": 240,
+    "last_service_date": "2025-05-10",
+    "historical_unit_price": 8940.00,
+    "suggested_replacement_sku": "KN5218554",
+    "mate_accessories": ["BEAM-W8X31", "WIRE-2035XL-045"],
+    "criticality": "CRITICAL (Overdue for replacement)"
+  },
+  {
+    "equipment_tag": "OC-STR-FH-09",
+    "customer_name": "Owens Corning (Starr Plant)",
+    "customer_id": "CUST-OC-02",
+    "component_name": "Ceramic Lined Vacuum Transfer Hose 4\" x 10ft",
+    "master_sku": "OC262064",
+    "drawing_number": "DWG# OC-STR-262",
+    "operating_material": "Abrasive Glass Batch Pneumatic Conveying",
+    "expected_lifespan_days": 365,
+    "last_service_date": "2025-09-01",
+    "historical_unit_price": 2450.00,
+    "suggested_replacement_sku": "OC262064",
+    "mate_accessories": ["GASKET-4IN-EPDM"],
+    "criticality": "MEDIUM"
+  }
+]

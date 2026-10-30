@@ -1,0 +1,15 @@
+{
+  "_about": "Engineering-owned term list for AI translation. The AI uses a term only when approved is true. Leave a language blank if unsure; a bilingual engineer fills it in and sets approved to true.",
+  "terms": [
+    {"en": "drawing", "vi": "bản vẽ", "zh": "图纸", "approved": false},
+    {"en": "revision", "vi": "phiên bản", "zh": "版本", "approved": false},
+    {"en": "tolerance", "vi": "dung sai", "zh": "公差", "approved": false},
+    {"en": "hardness", "vi": "độ cứng", "zh": "硬度", "approved": false},
+    {"en": "wear plate", "vi": "tấm chịu mài mòn", "zh": "耐磨板", "approved": false},
+    {"en": "fillet weld", "vi": "mối hàn góc", "zh": "角焊缝", "approved": false},
+    {"en": "welding procedure specification", "vi": "quy trình hàn", "zh": "焊接工艺规程", "approved": false},
+    {"en": "mill test report", "vi": "chứng chỉ vật liệu", "zh": "材质证明书", "approved": false},
+    {"en": "heat number", "vi": "", "zh": "炉号", "approved": false},
+    {"en": "clad plate", "vi": "", "zh": "复合板", "approved": false}
+  ]
+}

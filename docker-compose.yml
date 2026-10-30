@@ -1,0 +1,54 @@
+# ==============================================================================
+# Allied Welding Systems Universal Engine — Docker Compose
+# ==============================================================================
+
+services:
+  # FastAPI Backend (Python 3.11 / Uvicorn)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: allied-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    # The image runs as uid/gid 10001 (allieduser). A host bind mount keeps the
+    # host's ownership, so these directories must be writable by that uid or
+    # SQLite and the packing-slip writer will fail with EACCES:
+    #   mkdir -p data output && sudo chown -R 10001:10001 data output
+    user: "10001:10001"
+    volumes:
+      - ./output:/app/output
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - app-network
+
+  # Next.js Frontend (Node 20 / Standalone)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: allied-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

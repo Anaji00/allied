@@ -1,0 +1,6 @@
+customer_id,customer_name,billing_address,shipping_address,payment_terms,sales_rep,email,contact_name,shipping_method
+10221,Owens Corning Insulating Systems Canada LP,"Owens Corning Insulating Systems Canada, LP, INVOICES@OWENSCORNING.COM","OWENS CORNING- EDMONTON, 831 Hayter Rd NW, Edmonton, AB T6S 1A1, Canada",Net 150 Days,Karissa M. Rakestraw,invoices@owenscorning.com,Gail Brodrick,MOTOR FRT
+10195,Owens Corning Starr Composites,"Owens Corning Starr Composites, INVOICES@OWENSCORNING.COM","OWENS CORNING- STARR, 4837 Highway 81 South, Starr, SC 29684, USA",Net 150 Days,Karissa M. Rakestraw,invoices@owenscorning.com,Derrick Barnes,MOTOR FRT
+10148,Knauf Insulation Inc. - Lanett,"Knauf Insulation Inc., One Knauf Drive, Shelbyville, IN 46176","KNAUF FIBERGLASS, 3502 43RD STREET SW, LANETT, AL 36863, USA",Net 30 Days,Karissa M. Rakestraw,invoices0089@knauf.com,Bo Smith,UPS
+681111,IKO Southwest Inc.,"IKO SOUTHWEST INC., 6 DENNY ROAD, SUITE 200, WILMINGTON, DE 19809, USA","IKO SOUTHWEST INC.-HILLSBORO, 1001 IKO WAY, HILLSBORO, TX 76645, USA",Net 30 Days,Karissa M. Rakestraw,IKOSouthWest.AP@iko.com,Mitchell Chandler,MOTOR FRT
+90901,Vulcan Materials Quarry,"100 Vulcan Dr, Birmingham, AL 35242","100 Quarry Rd, Calera, AL 35040",Net 30 Days,Karissa M. Rakestraw,ap@vulcan.com,Tom Bradley,MOTOR FRT

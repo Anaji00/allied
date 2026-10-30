@@ -1,0 +1,152 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pad {
+  padding: 0 20px 16px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.small {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.small code {
+  font-size: 0.78rem;
+  background: var(--surface-muted);
+  padding: 1px 4px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.prose {
+  font-size: 0.92rem;
+  color: var(--text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.subhead {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.list {
+  padding-left: 18px;
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.pre,
+.letter {
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.letter {
+  font-family: inherit;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+/* review queue */
+.queue {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.queueItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.queueItem:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.queueHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.queueTitle {
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.queueTitle:hover {
+  text-decoration: underline;
+}
+
+.queueActions {
+  align-items: center;
+}
+
+/* dictation */
+.dictate {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.listening {
+  font-size: 0.8rem;
+  color: var(--error);
+}
+
+.dictateError {
+  font-size: 0.78rem;
+  color: var(--warning);
+}
+
+/* files */
+.files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.file {
+  font-size: 0.85rem;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  width: 100%;
+}

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "allied-universal-bridge"
+version = "2.0.0"
+description = "Allied Welding Systems Universal Engine - Monday.com to Sage 50 Integration Bridge"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Allied Engineering & Systems", email = "engineering@alliedweldingsystems.com" }
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "httpx>=0.27.0",
+    "rapidfuzz>=3.6.0",
+    "reportlab>=4.1.0",
+    "pypdf>=4.0.0",
+    "pymupdf>=1.24.0",
+    "pytesseract>=0.3.10",
+    "pillow>=10.0.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "PyJWT>=2.8.0",
+    "passlib[bcrypt]>=1.7.4",
+]
+
+[project.optional-dependencies]
+# Web lead sourcing. LeadAgent degrades to its curated target list when this is
+# absent, so it is not required for the service to run.
+leads = [
+    "duckduckgo-search>=5.0.0",
+]
+# Optional AI engines. Local Ollama needs nothing extra (it is called over HTTP).
+cloud-ai = [
+    "anthropic>=1.0",
+]
+speech = [
+    "faster-whisper>=1.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.12.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100

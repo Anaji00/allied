@@ -1,0 +1,164 @@
+.pad {
+  padding: 4px 20px 16px;
+}
+
+.filter {
+  min-width: 180px;
+}
+
+.cellMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+
+.muted {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.wearList {
+  display: block;
+  min-width: 180px;
+  max-width: 280px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* ---------- calculator ---------- */
+.calc {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.resultStats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary {
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.summaryLabel {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---------- email dialog ---------- */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  background: rgba(17, 24, 39, 0.45);
+}
+
+.dialog {
+  width: 100%;
+  max-width: 640px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+}
+
+.dialogHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 0;
+}
+
+.dialogTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.dialogBody {
+  padding: 16px 20px;
+}
+
+.drafting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 120px;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.dialogFoot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 20px 20px;
+}
+
+.copied {
+  font-size: 0.8rem;
+  color: var(--success);
+}
+
+@media (max-width: 1100px) {
+  .calc {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .pad {
+    padding: 4px 16px 14px;
+  }
+
+  .filter {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .formGrid,
+  .resultStats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "supplier_id": "NIBROCK",
+    "company_name": "Nibrock Mining & Wear Solutions Inc.",
+    "contract_tier": "Tier-1 Master Fabricator",
+    "products_supplied": "Chromium Carbide Clad Plates (300XL / 200), Perforated Hammermill Screens, C1045 Brace Bars",
+    "standard_lead_times": "Standard Sheets: 5–7 business days; Custom Perforated Screens: 10–14 business days",
+    "expediting_option": "Hot Shot Dedicated Flatbed available for +15% surcharge (48-hour delivery)",
+    "wholesale_discount_basis": "35.0% off standard list pricing",
+    "payment_terms": "2% 10 Net 30",
+    "blind_shipping_protocol": {
+      "crate_labeling": "Affix Allied Welding Systems packing slip only.",
+      "packing_list_rule": "Strict omission: No Nibrock invoices, heat certifications with Nibrock letterhead, or factory origin paperwork inside crates.",
+      "carrier_instruction": "Driver bill of lading must list Allied Welding Systems as Shipper."
+    }
+  },
+  {
+    "supplier_id": "KWS",
+    "company_name": "KWS Manufacturing Company, Ltd.",
+    "contract_tier": "Exclusive Heavy Fabrication Partner",
+    "products_supplied": "Custom Screw Conveyors, Heavy Structural Beams (W8x31, W10x49), Precision Machining",
+    "standard_lead_times": "Structural Beams (in-stock): 3–5 days; Custom Screw Conveyors: 3–4 weeks",
+    "cema_compliance": "Fabricated to CEMA Standard 300 / 350 heavy-duty industrial specifications.",
+    "wholesale_discount_basis": "28.0% off published list pricing",
+    "payment_terms": "Net 30 Days",
+    "blind_shipping_protocol": {
+      "crate_labeling": "Direct blind packaging with Allied job numbers.",
+      "stencil_rule": "No KWS logos or stencils on conveyor troughs, end plates, or drive shafts.",
+      "bill_of_lading": "Shipper: Allied Welding Systems (Burleson Logistics Hub)."
+    }
+  },
+  {
+    "supplier_id": "ZIBO",
+    "company_name": "Zibo Supereal Ceramics Co., Ltd.",
+    "contract_tier": "International Ceramic Liner Partner",
+    "products_supplied": "Ceramic Lined Suction Hoses, Alumina Hex Wear Tiles, Silicon Carbide Liners",
+    "standard_lead_times": "In-Stock Starr Warehouse: 2–3 days; Custom Ocean Import: 4–6 weeks",
+    "wholesale_discount_basis": "42.0% off retail pricing",
+    "payment_terms": "Net 60 Days",
+    "blind_shipping_protocol": {
+      "customs_and_crating": "All foreign shipping marks and Chinese language customs tags must be completely stripped at Starr warehouse before domestic freight dispatch.",
+      "repackaging": "Hoses re-banded onto clean Allied pallets with Allied inspection tags."
+    }
+  }
+]

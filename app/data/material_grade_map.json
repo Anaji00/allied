@@ -1,0 +1,7 @@
+{
+  "_about": "Chinese GB grade -> the ASTM grade Allied accepts in its place. Used by the drawing check only when approved is true. Engineering must confirm chemistry and mechanical properties against the actual mill certificates before approving a row; commonly cited equivalents are approximate.",
+  "mappings": [
+    {"gb": "Q355B", "astm": "ASTM A572 Gr 50", "approved": false, "note": "Commonly cited as approximately equivalent; confirm before approving."},
+    {"gb": "Q235B", "astm": "ASTM A36", "approved": false, "note": "Commonly cited as approximately equivalent; confirm before approving."}
+  ]
+}

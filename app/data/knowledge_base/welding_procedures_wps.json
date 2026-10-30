@@ -1,0 +1,41 @@
+[
+  {
+    "wps_id": "WPS-300XL-01",
+    "title": "Allied 300XL Chromium Carbide Overlay Welding & Hardfacing Procedures",
+    "base_metal": "ASTM A36 / ASTM A572 Grade 50 Mild Steel Backing",
+    "overlay_alloy": "Allied 300XL (Hypereutectic Chromium Carbide, 28–32% Cr, 4.5–5.2% C)",
+    "hardness_range": "58 to 62 HRC (Rockwell C)",
+    "preheat_temperature": "Minimum 250°F (120°C) on backing steel; do not exceed 600°F (315°C)",
+    "interpass_temperature": "Maximum 500°F (260°C)",
+    "welding_process": "FCAW (Flux Cored Arc Welding) / GMAW with Allied 20-35XL Wire",
+    "shielding_gas": "75% Argon / 25% CO2 (for smooth bead profile) or 98% Argon / 2% O2",
+    "wire_feed_and_current": {
+      "diameter_045": "180–240 Amps, 24–28 Volts, WFS 280–360 ipm",
+      "diameter_116": "240–320 Amps, 26–30 Volts, WFS 220–300 ipm"
+    },
+    "plasma_cutting_directions": "MANDATORY: Always pierce and cut from the mild steel base plate side toward the chromium carbide overlay. Cutting from the overlay side causes excessive spatter, localized delamination, and rapid torch nozzle wear.",
+    "forming_and_bending": "Roll with the cladding overlay on the inside radius (minimum inside radius = 15x plate thickness) or outside radius (minimum 25x thickness with relief check cracks).",
+    "check_cracking_guidelines": "Cross-check relief cracks perpendicular to the bead direction are normal and engineered into the metallurgy to relieve residual cooling stress. They must not propagate into the A36 base steel."
+  },
+  {
+    "wps_id": "WPS-200-02",
+    "title": "Allied 200 Extreme Sliding Abrasion Hardfacing Procedure",
+    "base_metal": "ASTM A36 Structural Carbon Plate",
+    "overlay_alloy": "Allied 200 (High-Density Primary Chromium Carbide, 30–35% Cr, 5.0–5.8% C)",
+    "hardness_range": "60 to 65 HRC (Rockwell C)",
+    "preheat_temperature": "Minimum 300°F (150°C)",
+    "interpass_temperature": "Maximum 450°F (230°C)",
+    "welding_process": "Automated Submerged Arc / Open Arc Robotic Cladding",
+    "recommended_application": "Severe sliding abrasion with negligible impact (e.g. cement chutes, glass batch hoppers, cyclone separators). For moderate impact, Allied 300XL must be specified instead.",
+    "cutting_method": "High-definition plasma or abrasive waterjet only. Cannot be oxy-fuel flame cut."
+  },
+  {
+    "wps_id": "WPS-STRUCT-03",
+    "title": "ASTM A992 Structural Beams & A36 Channels Joint Welding",
+    "base_metal": "ASTM A992 (50 ksi Yield) and ASTM A36 (36 ksi Yield)",
+    "filler_metal": "AWS E7018-H4R (SMAW) or AWS ER70S-6 (GMAW)",
+    "preheat_temperature": "50°F minimum for thickness <= 3/4\"; 150°F minimum for thickness > 3/4\" up to 1.5\"",
+    "shielding_gas": "75% Argon / 25% CO2",
+    "inspection_requirements": "100% visual inspection per AWS D1.1 Structural Welding Code; ultrasonic testing for complete joint penetration (CJP) moment connections."
+  }
+]

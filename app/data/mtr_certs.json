@@ -1,0 +1,110 @@
+[
+  {
+    "heat_number": "HT-300XL-8819",
+    "item_id": "PLATE-300XL-38",
+    "material_spec": "Allied 300XL Chromium Carbide Overlay on ASTM A36",
+    "mill_supplier": "Nibrock Clad Foundry / Allied Welding Systems",
+    "chemical_analysis": {
+      "carbon_pct": 5.0,
+      "chromium_pct": 30.2,
+      "manganese_pct": 1.4,
+      "silicon_pct": 0.8,
+      "molybdenum_pct": 0.4,
+      "iron_pct": 62.2
+    },
+    "mechanical_tests": {
+      "yield_strength_psi": 58000,
+      "tensile_strength_psi": 82000,
+      "elongation_pct": 18.5,
+      "hardness_rating": "60.5 HRC"
+    },
+    "verified_compliant": true,
+    "compliance_notes": [
+      "Certified Chromium Carbide complex microstructure verified.",
+      "Hardness within 58-62 HRC ASTM G65 wear specification."
+    ]
+  },
+  {
+    "heat_number": "HT-300XL-9921",
+    "item_id": "PLATE-300XL-12",
+    "material_spec": "Allied 300XL 1/2\" Heavy Clad Plate",
+    "mill_supplier": "Nibrock Clad Foundry",
+    "chemical_analysis": {
+      "carbon_pct": 4.9,
+      "chromium_pct": 31.0,
+      "manganese_pct": 1.5,
+      "silicon_pct": 0.7,
+      "iron_pct": 61.9
+    },
+    "mechanical_tests": {
+      "yield_strength_psi": 60000,
+      "tensile_strength_psi": 85000,
+      "hardness_rating": "61.2 HRC"
+    },
+    "verified_compliant": true,
+    "compliance_notes": ["ASTM G65 Procedure A volume loss < 0.12g."]
+  },
+  {
+    "heat_number": "HT-A992-7712",
+    "item_id": "BEAM-W8X31",
+    "material_spec": "ASTM A992 / A572-50 Structural Wide Flange",
+    "mill_supplier": "Nucor Steel Yamato",
+    "chemical_analysis": {
+      "carbon_pct": 0.08,
+      "manganese_pct": 1.25,
+      "silicon_pct": 0.22,
+      "phosphorus_pct": 0.015,
+      "sulfur_pct": 0.008,
+      "iron_pct": 98.4
+    },
+    "mechanical_tests": {
+      "yield_strength_psi": 54200,
+      "tensile_strength_psi": 73800,
+      "elongation_pct": 23.0,
+      "hardness_rating": "165 HBW"
+    },
+    "verified_compliant": true,
+    "compliance_notes": ["Yield to tensile ratio < 0.85 compliant."]
+  },
+  {
+    "heat_number": "HT-A36-4410",
+    "item_id": "CHAN-C8X115",
+    "material_spec": "ASTM A36 Carbon Structural Steel Channel",
+    "mill_supplier": "Steel Dynamics Inc.",
+    "chemical_analysis": {
+      "carbon_pct": 0.18,
+      "manganese_pct": 0.85,
+      "silicon_pct": 0.19,
+      "phosphorus_pct": 0.02,
+      "sulfur_pct": 0.012,
+      "iron_pct": 98.7
+    },
+    "mechanical_tests": {
+      "yield_strength_psi": 42000,
+      "tensile_strength_psi": 64500,
+      "elongation_pct": 26.0,
+      "hardness_rating": "142 HBW"
+    },
+    "verified_compliant": true,
+    "compliance_notes": ["Certified standard A36 channel."]
+  },
+  {
+    "heat_number": "HT-C1045-9120",
+    "item_id": "BAR-34X2-41",
+    "material_spec": "AISI / ASTM C1045 Hot Rolled Carbon Bar",
+    "mill_supplier": "Gerdau Special Steel",
+    "chemical_analysis": {
+      "carbon_pct": 0.46,
+      "manganese_pct": 0.72,
+      "silicon_pct": 0.24,
+      "iron_pct": 98.5
+    },
+    "mechanical_tests": {
+      "yield_strength_psi": 50000,
+      "tensile_strength_psi": 82000,
+      "hardness_rating": "190 HBW"
+    },
+    "verified_compliant": true,
+    "compliance_notes": ["Middle brace bar certified."]
+  }
+]

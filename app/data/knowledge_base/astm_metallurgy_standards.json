@@ -1,0 +1,55 @@
+[
+  {
+    "alloy_name": "Allied 300XL",
+    "classification": "Hypereutectic Complex Chromium Carbide Cladding",
+    "base_material": "ASTM A36 Structural Carbon Steel (Weldable & Formable)",
+    "nominal_chemistry": {
+      "Chromium_Cr": "28.0% – 32.0%",
+      "Carbon_C": "4.5% – 5.2%",
+      "Manganese_Mn": "1.0% – 2.0%",
+      "Silicon_Si": "0.5% – 1.5%",
+      "Iron_Fe": "Balance"
+    },
+    "hardness": "58 to 62 HRC",
+    "microstructure": "Primary M7C3 hexagonal chromium carbides (1500–1800 HV micro-hardness) densely distributed within a tough austenitic matrix.",
+    "service_temperature": "Up to 1,100°F (593°C)",
+    "primary_application": "Severe sliding abrasion combined with moderate impact (e.g. glass batch hammermill screens, cement clinker chutes, asphalt aggregate hoppers).",
+    "comparison_vs_ar500": "Lasts 3.5x to 5.0x longer than AR500 / Hardox 500 under severe sliding silica abrasion."
+  },
+  {
+    "alloy_name": "Allied 200",
+    "classification": "High-Carbide Sliding Wear Cladding",
+    "base_material": "ASTM A36 Plate",
+    "nominal_chemistry": {
+      "Chromium_Cr": "30.0% – 35.0%",
+      "Carbon_C": "5.0% – 5.8%",
+      "Iron_Fe": "Balance"
+    },
+    "hardness": "60 to 65 HRC",
+    "microstructure": "Ultra-high volume fraction of hexagonal chromium carbides.",
+    "service_temperature": "Up to 1,000°F (538°C)",
+    "primary_application": "Extreme sliding abrasion with zero-to-low impact (fine powders, coal dust, fly ash pipelines).",
+    "limitation": "Not recommended for high-impact drop zones; specify Allied 300XL for impact resistance."
+  },
+  {
+    "alloy_name": "ASTM A992",
+    "classification": "High-Strength Structural Steel (Wide Flange Beams)",
+    "mechanical_properties": {
+      "minimum_yield_strength": "50.0 ksi (345 MPa)",
+      "tensile_strength": "65.0 ksi (450 MPa)",
+      "yield_to_tensile_ratio": "Max 0.85"
+    },
+    "chemistry_limits": "Carbon max 0.23%, Manganese 0.50–1.60%, Silicon max 0.40%, Vanadium max 0.11%",
+    "dual_certification": "Certified to meet both ASTM A992 and ASTM A36 structural building standards."
+  },
+  {
+    "alloy_name": "ASTM A36",
+    "classification": "Standard Carbon Structural Steel (Channels, Angles, Base Plates)",
+    "mechanical_properties": {
+      "minimum_yield_strength": "36.0 ksi (250 MPa)",
+      "tensile_strength": "58.0 to 80.0 ksi"
+    },
+    "chemistry_limits": "Carbon max 0.25%, Manganese balance, Phosphorus max 0.04%, Sulfur max 0.05%",
+    "machinability_and_welding": "Excellent weldability with AWS E7018 or ER70S-6 wire without high preheat requirements."
+  }
+]

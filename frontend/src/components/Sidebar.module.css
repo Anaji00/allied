@@ -1,0 +1,174 @@
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  z-index: 100;
+  overflow-y: auto;
+  transition: transform var(--transition-base);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 20px 12px;
+}
+
+.mark {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--allied-red);
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.brandText strong {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.brandText small {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.nav {
+  flex: 1;
+  padding: 8px 12px;
+}
+
+.group + .group {
+  margin-top: 14px;
+}
+
+.section {
+  padding: 0 8px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.link {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.link:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.active,
+.active:hover {
+  background: var(--allied-red-subtle);
+  color: var(--allied-red);
+  font-weight: 600;
+}
+
+.footer {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.status:hover {
+  background: var(--gray-200);
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.statusLabel {
+  flex: 1;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.statusValue {
+  color: var(--text-muted);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gray-300);
+}
+
+.dotOn {
+  background: var(--success);
+}
+
+.dotOff {
+  background: var(--warning);
+}
+
+.signBtn {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.signBtn:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  /* Closed drawer is hidden from focus and screen readers; visibility flips
+     after the slide-out so the animation still plays. */
+  .sidebar {
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-lg);
+    visibility: hidden;
+    transition: transform var(--transition-base), visibility 0s linear 250ms;
+  }
+
+  .open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform var(--transition-base), visibility 0s;
+  }
+}

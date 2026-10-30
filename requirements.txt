@@ -1,0 +1,22 @@
+# Runtime dependencies. Must stay in sync with [project.dependencies] in
+# pyproject.toml -- the Dockerfile installs from this file, so anything listed
+# only in pyproject.toml is absent from the container image.
+#
+# Dev/test tooling lives in requirements-dev.txt so it is not installed into
+# the production image.
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+python-multipart>=0.0.9
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+httpx>=0.27.0
+rapidfuzz>=3.6.0
+reportlab>=4.1.0
+pypdf>=4.0.0
+pymupdf>=1.24.0
+pytesseract>=0.3.10
+pillow>=10.0.0
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4

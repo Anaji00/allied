@@ -1,0 +1,389 @@
+/* Ask the assistant: a messaging-style thread with the composer pinned to the
+   bottom of the card. The card fills the viewport under the app header. */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 150px);
+  min-height: 460px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.thread {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---------- empty conversation ---------- */
+.welcome {
+  margin: auto;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-lg) 0;
+  text-align: center;
+}
+
+.welcomeTitle {
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.welcomeText {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+.chipSkeleton {
+  width: 100%;
+  max-width: 360px;
+  margin-top: var(--space-md);
+}
+
+.chip {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.chip:hover:not(:disabled) {
+  background: var(--surface-muted);
+  border-color: var(--gray-300);
+}
+
+.chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ---------- messages ---------- */
+.userRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.userBubble {
+  max-width: min(80%, 620px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--surface-muted);
+}
+
+.attachNote {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.assistantRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: min(92%, 760px);
+}
+
+.answer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px 14px 14px 4px;
+  background: var(--surface);
+}
+
+.text {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code {
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.actions button {
+  white-space: normal;
+  height: auto;
+  min-height: 30px;
+  text-align: left;
+}
+
+.engine {
+  padding-left: 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* ---------- citations ---------- */
+.details summary,
+.sources > summary {
+  width: fit-content;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.details > pre {
+  margin-top: 6px;
+}
+
+.sources {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sourceList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  list-style: none;
+}
+
+.source {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+}
+
+.source > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.source > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sourceTitle {
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.sourceMeta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.sourceBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 10px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- composer ---------- */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: 12px var(--space-md) 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.flash {
+  font-size: 0.8rem;
+  color: var(--success);
+}
+
+.attached {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.attached > :first-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.removeFile {
+  background: none;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.attach {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.attach:hover:not(:disabled) {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.attach svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hidden {
+  display: none;
+}
+
+.textbox {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  max-height: 160px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  resize: none;
+  field-sizing: content;
+}
+
+.textbox:focus {
+  outline: none;
+  border-color: var(--allied-red);
+  box-shadow: 0 0 0 3px var(--allied-red-subtle);
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.option input {
+  accent-color: var(--allied-red);
+}
+
+/* ---------- side column ---------- */
+.taskForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.taskForm > button {
+  align-self: flex-start;
+}
+
+.quiet {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .chat {
+    height: calc(100dvh - 100px);
+    min-height: 420px;
+  }
+
+  .thread {
+    padding: var(--space-md);
+  }
+
+  .userBubble {
+    max-width: 88%;
+  }
+
+  .assistantRow {
+    max-width: 100%;
+  }
+}

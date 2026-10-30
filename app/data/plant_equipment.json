@@ -1,0 +1,67 @@
+[
+  {
+    "equipment_tag": "OC-EDM-HM-01",
+    "customer_id": "10221",
+    "customer_name": "Owens Corning Insulating Systems Canada LP",
+    "plant_location": "Edmonton, AB Plant",
+    "component_name": "Primary Hammermill Screen #1",
+    "installed_item_id": "OC755507",
+    "install_date": "2026-06-14",
+    "expected_lifespan_days": 135,
+    "suggested_replacement_sku": "OC755507",
+    "historical_unit_price": 3772.91,
+    "last_service_order": "SO-10221-A"
+  },
+  {
+    "equipment_tag": "OC-EDM-CH-03",
+    "customer_id": "10221",
+    "customer_name": "Owens Corning Insulating Systems Canada LP",
+    "plant_location": "Edmonton, AB Plant",
+    "component_name": "Raw Cullet Infeed Chute Liners",
+    "installed_item_id": "PLATE-300XL-38",
+    "install_date": "2026-08-04",
+    "expected_lifespan_days": 180,
+    "suggested_replacement_sku": "PLATE-300XL-38",
+    "historical_unit_price": 2950.0,
+    "last_service_order": "SO-10221-B"
+  },
+  {
+    "equipment_tag": "KNF-LAN-SC-02",
+    "customer_id": "10148",
+    "customer_name": "Knauf Insulation Inc. - Lanett",
+    "plant_location": "Lanett, AL Plant",
+    "component_name": "16\" Binder Batch Sectional Screw Conveyor",
+    "installed_item_id": "KN5218554",
+    "install_date": "2026-06-15",
+    "expected_lifespan_days": 160,
+    "suggested_replacement_sku": "KN5218554",
+    "historical_unit_price": 14500.0,
+    "last_service_order": "SO-10148-A"
+  },
+  {
+    "equipment_tag": "OC-STR-FLEX-01",
+    "customer_id": "10195",
+    "customer_name": "Owens Corning Starr Composites",
+    "plant_location": "Starr, SC Plant",
+    "component_name": "5\" Vacuum Suction Ceramic Hose Line #2",
+    "installed_item_id": "OC262064",
+    "install_date": "2026-08-13",
+    "expected_lifespan_days": 120,
+    "suggested_replacement_sku": "OC262064",
+    "historical_unit_price": 2480.0,
+    "last_service_order": "SO-10195-A"
+  },
+  {
+    "equipment_tag": "IKO-HSB-GUIDE-04",
+    "customer_id": "681111",
+    "customer_name": "IKO Southwest Inc.",
+    "plant_location": "Hillsboro, TX Plant",
+    "component_name": "Shingle Slat Conveyor Bed Channel Guides",
+    "installed_item_id": "CHAN-C8X115",
+    "install_date": "2026-09-23",
+    "expected_lifespan_days": 90,
+    "suggested_replacement_sku": "CHAN-C8X115",
+    "historical_unit_price": 365.0,
+    "last_service_order": "SO-681111-A"
+  }
+]
