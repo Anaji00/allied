@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.logging import logger
@@ -97,39 +98,117 @@ class DatabaseService:
         return record
 
     @staticmethod
+    def order_dict(r: OrderDB) -> Dict[str, Any]:
+        """One order as the API and services see it."""
+        return {
+            "order_id": r.order_id,
+            "customer_po_number": r.customer_po_number,
+            "sales_order_number": r.sales_order_number,
+            "customer_id": r.customer_id,
+            "customer_name": r.customer_name,
+            "facility": r.facility,
+            "currency": r.currency,
+            "status": r.status,
+            "archetype": r.archetype,
+            "total_revenue": r.total_revenue,
+            "total_expense": r.total_expense,
+            "gross_margin_pct": r.gross_margin_pct,
+            "purchase_orders": r.purchase_orders or {},
+            "line_items": r.line_items or [],
+            "shipping_address": r.shipping_address,
+            "payment_terms": r.payment_terms,
+            "po_date": r.po_date,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_by": r.created_by,
+            "monday_board_id": r.monday_board_id,
+            "monday_item_id": r.monday_item_id,
+            "sage_exported_at": r.sage_exported_at.isoformat() if r.sage_exported_at else None,
+            "sage_po_exported_at": r.sage_po_exported_at.isoformat() if r.sage_po_exported_at else None,
+        }
+
+    @staticmethod
     def get_all_orders(db: Session, facility: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
         """Retrieves all orders from the database, optionally filtered by facility."""
         query = db.query(OrderDB).order_by(OrderDB.created_at.desc())
         if facility:
             query = query.filter(OrderDB.facility == facility)
-        rows = query.limit(limit).all()
-        return [
-            {
-                "order_id": r.order_id,
-                "customer_po_number": r.customer_po_number,
-                "sales_order_number": r.sales_order_number,
-                "customer_id": r.customer_id,
-                "customer_name": r.customer_name,
-                "facility": r.facility,
-                "currency": r.currency,
-                "status": r.status,
-                "total_revenue": r.total_revenue,
-                "total_expense": r.total_expense,
-                "gross_margin_pct": r.gross_margin_pct,
-                "purchase_orders": r.purchase_orders or {},
-                "line_items": r.line_items or [],
-                "shipping_address": r.shipping_address,
-                "payment_terms": r.payment_terms,
-                "po_date": r.po_date,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-                "created_by": r.created_by,
-                "monday_board_id": r.monday_board_id,
-                "monday_item_id": r.monday_item_id,
-                "sage_exported_at": r.sage_exported_at.isoformat() if r.sage_exported_at else None,
-                "sage_po_exported_at": r.sage_po_exported_at.isoformat() if r.sage_po_exported_at else None,
-            }
-            for r in rows
-        ]
+        return [DatabaseService.order_dict(r) for r in query.limit(limit).all()]
+
+    # The order list's views. "attention" is anything a person has to fix
+    # before the order can go on: a failed write, a failed check, or a margin
+    # under the floor.
+    ORDER_ERROR_STATUSES = ("VALIDATION_ERROR", "SAGE_ERROR")
+
+    @staticmethod
+    def list_orders(
+        db: Session,
+        *,
+        q: Optional[str] = None,
+        view: str = "all",
+        status: Optional[str] = None,
+        vendor: Optional[str] = None,
+        min_margin_pct: float = 0.0,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """A page of orders, newest first, with the total that matched.
+
+        q matches the sales order, customer PO or customer name. view is
+        "all", "attention", "in_sage" (sales order exported) or "not_in_sage".
+        """
+        from sqlalchemy import or_
+
+        query = db.query(OrderDB)
+        if q:
+            like = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    OrderDB.sales_order_number.ilike(like),
+                    OrderDB.customer_po_number.ilike(like),
+                    OrderDB.customer_name.ilike(like),
+                )
+            )
+        if status:
+            query = query.filter(OrderDB.status == status)
+        if view == "attention":
+            query = query.filter(
+                or_(
+                    OrderDB.status.in_(DatabaseService.ORDER_ERROR_STATUSES),
+                    (OrderDB.total_revenue > 0) & (OrderDB.gross_margin_pct < min_margin_pct),
+                )
+            )
+        elif view == "in_sage":
+            query = query.filter(OrderDB.sage_exported_at.isnot(None))
+        elif view == "not_in_sage":
+            query = query.filter(OrderDB.sage_exported_at.is_(None))
+
+        query = query.order_by(OrderDB.created_at.desc(), OrderDB.id.desc())
+        if vendor:
+            # Vendor POs are a JSON map; filter in Python rather than per-dialect JSON SQL.
+            wanted = vendor.strip().upper()
+            matched = [r for r in query.all() if wanted in {str(k).upper() for k in (r.purchase_orders or {})}]
+            total, page = len(matched), matched[offset:offset + limit]
+        else:
+            total, page = query.count(), query.offset(offset).limit(limit).all()
+        return {"total": total, "items": [DatabaseService.order_dict(r) for r in page]}
+
+    @staticmethod
+    def get_order_by_so(db: Session, so_number: str) -> Optional[Dict[str, Any]]:
+        """One order by sales order number, with or without the "SO-" prefix."""
+        bare = so_number[3:] if so_number.upper().startswith("SO-") else so_number
+        row = (
+            db.query(OrderDB)
+            .filter(OrderDB.sales_order_number.in_([bare, f"SO-{bare}"]))
+            .order_by(OrderDB.created_at.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        data = DatabaseService.order_dict(row)
+        data["packing_slip_path"] = row.packing_slip_path
+        data["internal_notes"] = row.internal_notes
+        data["updated_at"] = row.updated_at.isoformat() if row.updated_at else None
+        return data
 
     # -----------------------------------------------------------------------
     # Reconciliations
@@ -251,6 +330,24 @@ class DatabaseService:
         ]
 
     @staticmethod
+    def find_open_exception(
+        db: Session, exception_type: str, reference_id: str, vendor_or_customer: str
+    ) -> Optional[Dict[str, Any]]:
+        """The open exception already raised for this problem, if any."""
+        row = (
+            db.query(ExceptionDB)
+            .filter(
+                ExceptionDB.status == "OPEN",
+                ExceptionDB.exception_type == exception_type,
+                ExceptionDB.reference_id == reference_id,
+                ExceptionDB.vendor_or_customer == vendor_or_customer,
+            )
+            .order_by(ExceptionDB.created_at.asc())
+            .first()
+        )
+        return DatabaseService.get_exception_by_id(db, row.exception_id) if row else None
+
+    @staticmethod
     def get_exception_by_id(db: Session, exception_id: str) -> Optional[Dict[str, Any]]:
         """Fetches one exception by id, filtering in SQL on the indexed column."""
         row = (
@@ -350,15 +447,33 @@ class DatabaseService:
         resource_type: Optional[str] = None,
         actor_email: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Retrieves audit log entries with optional filters."""
-        query = db.query(AuditLogDB).order_by(AuditLogDB.timestamp.desc())
+        q: Optional[str] = None,
+        offset: int = 0,
+        with_total: bool = False,
+    ):
+        """Audit entries, newest first, with optional filters.
+
+        `q` matches the record id, the detail, the action or who did it. With
+        `with_total` it returns (entries, total matching) for paging.
+        """
+        query = db.query(AuditLogDB)
         if resource_type:
             query = query.filter(AuditLogDB.resource_type == resource_type)
         if actor_email:
             query = query.filter(AuditLogDB.actor_email == actor_email)
-        rows = query.limit(limit).all()
-        return [
+        if q and q.strip():
+            like = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    AuditLogDB.resource_id.ilike(like),
+                    AuditLogDB.detail.ilike(like),
+                    AuditLogDB.action.ilike(like),
+                    AuditLogDB.actor_email.ilike(like),
+                )
+            )
+        total = query.count() if with_total else None
+        rows = query.order_by(AuditLogDB.timestamp.desc()).offset(offset).limit(limit).all()
+        entries = [
             {
                 "event_id": r.event_id,
                 "timestamp": r.timestamp.isoformat() if r.timestamp else None,
@@ -372,6 +487,12 @@ class DatabaseService:
             }
             for r in rows
         ]
+        return (entries, total) if with_total else entries
+
+    @staticmethod
+    def audit_resource_types(db: Session) -> List[str]:
+        """Every kind of record the audit trail holds, for the filter."""
+        return sorted(t for (t,) in db.query(AuditLogDB.resource_type).distinct() if t)
 
     # -----------------------------------------------------------------------
     # Users

@@ -638,7 +638,7 @@ def handle_create_order(event: Dict[str, Any]) -> Dict[str, Any]:
     )
     _link_item(result.order_id, board_id, item_id)
 
-    staged = "staged for Sage import" if settings.SAGE_SIMULATION_MODE else "written to Sage"
+    staged = "written to Sage" if settings.sage_live else "staged for Sage import"
     _write_back(event, "Synced", result.sales_order_number)
     _monday().post_pulse_update(
         item_id,

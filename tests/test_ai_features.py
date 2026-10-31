@@ -154,7 +154,10 @@ def test_item_suggestion_ignores_invented_items_and_remembers_approved_ones(clie
     invented = client.post("/api/v1/ai/items/suggest", json={"raw_text": "AR400 plate"}).json()
     assert invented["result"]["item_id"] == ""
 
-    raw = f"shop slang {uuid.uuid4().hex[:6]}"
+    # A new nickname for the same plate: its candidates include `real`, so the
+    # pick is allowed. (A random phrase only sometimes shared those candidates.)
+    raw = f"AR400 plate shop slang {uuid.uuid4().hex[:6]}"
+    assert real in {c["item_id"] for c in features.candidate_items(raw)}
     chosen = client.post("/api/v1/ai/items/suggest", json={"raw_text": raw}).json()
     assert chosen["result"]["item_id"] == real
     review = client.post(f"/api/v1/ai/suggestions/{chosen['suggestion_id']}/review", json={"approve": True})

@@ -44,8 +44,31 @@ def _labels(raw: str) -> set:
 # ---------------------------------------------------------------------------
 
 
+class _Cols(dict):
+    """Column values by id, also findable by the column's title as shown on the board
+    (any case), so settings can name "Engineer" instead of an id like "person4".
+    "a|b" means the first of those columns that holds a value."""
+
+    def get(self, key, default=None):
+        if not key:
+            return default
+        if "|" in str(key):
+            options = [self.get(k.strip()) for k in str(key).split("|") if k.strip()]
+            options = [cv for cv in options if cv is not None]
+            filled = [cv for cv in options if (cv.get("text") or "").strip() or cv.get("value") not in (None, "", "null")]
+            return (filled or options or [default])[0]
+        found = super().get(key)
+        return found if found is not None else super().get(f"title:{str(key).strip().casefold()}", default)
+
+
 def _cols(item: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    return {cv.get("id"): cv for cv in item.get("column_values") or []}
+    out = _Cols()
+    for cv in item.get("column_values") or []:
+        out[cv.get("id")] = cv
+        title = ((cv.get("column") or {}).get("title") or "").strip().casefold()
+        if title:
+            out.setdefault(f"title:{title}", cv)  # the first column with that title wins
+    return out
 
 
 def _json(cv: Optional[Dict[str, Any]]) -> Any:
@@ -174,6 +197,7 @@ def sync_projects(client=None) -> Dict[str, Any]:
         for sub in item.get("subitems") or []:
             milestone(sub, pid, str((sub.get("board") or {}).get("id") or ""))
 
+    moved = []
     with SessionLocal() as db:
         for model, rows in ((MondayProjectDB, projects), (MondayMilestoneDB, milestones)):
             for key, values in rows.items():
@@ -181,6 +205,8 @@ def sync_projects(client=None) -> Dict[str, Any]:
                 if row is None:
                     db.add(model(**values))
                 else:
+                    if model is MondayMilestoneDB and (row.status or "") != (values.get("status") or ""):
+                        moved.append((values, row.status))
                     for k, v in values.items():
                         setattr(row, k, v)
         # Projects deleted from the board leave the mirror with their milestones.
@@ -192,6 +218,13 @@ def sync_projects(client=None) -> Dict[str, Any]:
         if stale:
             db.query(MondayMilestoneDB).filter(MondayMilestoneDB.item_id.in_(stale)).delete(synchronize_session=False)
         db.commit()
+    if moved:
+        from app.services.coordination import events
+
+        for values, old in moved:
+            events.emit("milestone.status_changed", {"milestone": {k: v for k, v in values.items() if k != "synced_at"},
+                                                     "from": old, "to": values.get("status")},
+                        f"{values['name']}: {old or 'no status'} -> {values.get('status') or 'no status'}")
     return {"projects": len(projects), "milestones": len(milestones), "removed": len(gone)}
 
 

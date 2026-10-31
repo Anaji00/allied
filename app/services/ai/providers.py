@@ -3,8 +3,12 @@
 Every feature asks for one of two things: free text, or JSON that fits a
 pydantic model. The provider decides which engine produces it:
 
-- ``ollama`` (default): local models, nothing leaves the building and nothing
-  is billed. Structured answers use Ollama's JSON-schema ``format``.
+- ``groq`` (default): Groq's free tier over its OpenAI-compatible API. Fast
+  and free, but rate limited (per minute and per day) and prompts are sent to
+  Groq (US servers; nothing kept by default). Structured answers use strict
+  JSON-schema output. A rate-limited call can fall back to AI_FALLBACK_PROVIDER.
+- ``ollama``: local models, nothing leaves the building and nothing is
+  billed, but slow on a CPU. Structured answers use Ollama's ``format``.
 - ``claude``: the Anthropic API, for when local models are not good enough
   (drawings as images, careful translation). Needs ANTHROPIC_API_KEY and the
   ``anthropic`` package; never the default.
@@ -18,6 +22,7 @@ person in the loop for anything binding.
 import base64
 import copy
 import json
+import time
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import httpx
@@ -31,6 +36,10 @@ T = TypeVar("T", bound=BaseModel)
 
 class AIUnavailableError(Exception):
     """AI could not answer: switched off, engine down, model missing, or a bad answer."""
+
+
+class AIRateLimitedError(AIUnavailableError):
+    """The engine's usage limit is reached for now; another engine may still answer."""
 
 
 def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -47,6 +56,26 @@ def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
         return node
 
     return walk(schema)
+
+
+def _strict_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """The form strict structured output needs: every object closed, every field required.
+
+    Fields with defaults become required too; the model then fills them in,
+    which pydantic accepts. Optional fields stay nullable (an anyOf with null).
+    """
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            node = {k: walk(v) for k, v in node.items() if k not in ("default", "title")}
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+                node["required"] = list(node["properties"])
+            return node
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        return node
+
+    return walk(_inline_refs(schema))
 
 
 def _parse(schema: Type[T], raw: str, engine: str) -> T:
@@ -87,6 +116,27 @@ class AIProvider:
     @property
     def can_see_images(self) -> bool:
         return False
+
+    def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """One turn of a tool-using conversation, in OpenAI message format.
+
+        Returns {"content": str, "tool_calls": [{"id", "name", "arguments": dict}]}.
+        """
+        raise AIUnavailableError(f"{self.name} does not support the assistant's tools.")
+
+
+def _openai_calls(message: Dict[str, Any]) -> List[Dict[str, Any]]:
+    calls = []
+    for i, c in enumerate(message.get("tool_calls") or []):
+        fn = c.get("function") or {}
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except ValueError:
+                args = {"_unreadable": args[:200]}
+        calls.append({"id": c.get("id") or f"call_{i}", "name": fn.get("name") or "", "arguments": args or {}})
+    return calls
 
 
 class OllamaProvider(AIProvider):
@@ -163,6 +213,29 @@ class OllamaProvider(AIProvider):
             raise AIUnavailableError(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
         return (response.json().get("message") or {}).get("content") or ""
 
+    def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        converted = []
+        for m in messages:
+            m = dict(m)
+            if m.get("tool_calls"):
+                m["tool_calls"] = [{"function": {"name": c["function"]["name"],
+                                                 "arguments": json.loads(c["function"]["arguments"] or "{}")}}
+                                   for c in m["tool_calls"]]
+            converted.append(m)
+        body = {"model": self.model, "messages": converted, "tools": tools, "stream": False,
+                "options": {"temperature": 0, "num_ctx": settings.AI_CONTEXT_TOKENS,
+                            "num_predict": settings.AI_MAX_OUTPUT_TOKENS}}
+        try:
+            response = httpx.post(f"{self.host}/api/chat", json=body, timeout=settings.AI_TIMEOUT_SECONDS)
+        except httpx.TimeoutException:
+            raise AIUnavailableError(f"The local model took longer than {settings.AI_TIMEOUT_SECONDS:.0f}s.")
+        except httpx.TransportError as exc:
+            raise AIUnavailableError(f"Ollama is not reachable at {self.host} ({exc}).")
+        if response.status_code >= 400:
+            raise AIUnavailableError(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
+        message = response.json().get("message") or {}
+        return {"content": (message.get("content") or "").strip(), "tool_calls": _openai_calls(message)}
+
     def text(self, system: str, prompt: str) -> str:
         return self._chat(
             self.model,
@@ -182,6 +255,196 @@ class OllamaProvider(AIProvider):
         fmt = _inline_refs(schema.model_json_schema())
         raw = self._chat(model, [{"role": "system", "content": system}, user], fmt)
         return _parse(schema, raw, "Ollama")
+
+
+class GroqProvider(AIProvider):
+    """Groq's OpenAI-compatible API. The free tier is rate limited per model."""
+
+    name = "groq"
+
+    @property
+    def model(self) -> str:
+        return settings.GROQ_TEXT_MODEL
+
+    @property
+    def can_see_images(self) -> bool:
+        return bool(settings.GROQ_VISION_MODEL)
+
+    def status(self) -> Dict[str, Any]:
+        if not settings.GROQ_API_KEY:
+            return {"provider": self.name, "model": self.model, "ready": False,
+                    "detail": "Set GROQ_API_KEY (free at console.groq.com) to use Groq."}
+        return {
+            "provider": self.name,
+            "model": self.model,
+            "vision_model": settings.GROQ_VISION_MODEL or None,
+            "vision_ready": self.can_see_images,
+            "ready": True,
+            "detail": (
+                f"Groq free tier ({self.model}). Prompts are sent to Groq's US servers and not kept by "
+                "default; free-tier limits apply per minute and per day."
+            ),
+        }
+
+    def _post(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """One chat completion. Waits once for a short per-minute limit; longer waits are reported."""
+        if not settings.GROQ_API_KEY:
+            raise AIUnavailableError("Set GROQ_API_KEY to use Groq.")
+        headers = {"Authorization": f"Bearer {settings.GROQ_API_KEY}"}
+        url = f"{settings.GROQ_BASE_URL.rstrip('/')}/chat/completions"
+        for attempt in (1, 2):
+            try:
+                response = httpx.post(url, json=body, headers=headers, timeout=settings.AI_TIMEOUT_SECONDS)
+            except httpx.TimeoutException:
+                raise AIUnavailableError(f"Groq took longer than {settings.AI_TIMEOUT_SECONDS:.0f}s.")
+            except httpx.TransportError as exc:
+                raise AIUnavailableError(f"Groq is not reachable from this server ({type(exc).__name__}).")
+            if response.status_code == 429:
+                wait = _retry_after(response.headers.get("retry-after"))
+                if attempt == 1 and wait <= 10:
+                    time.sleep(wait)
+                    continue
+                raise AIRateLimitedError(
+                    f"Groq's free-tier limit is reached; try again in about {max(1, round(wait))}s."
+                )
+            if response.status_code in (401, 403):
+                raise AIUnavailableError("Groq rejected the key (GROQ_API_KEY).")
+            if response.status_code == 413:
+                raise AIUnavailableError("This is too much text for Groq's free tier in one go; shorten it.")
+            if response.status_code >= 400:
+                raise _GroqBadRequest(response.status_code, response.text[:300])
+            return response.json()
+        raise AIRateLimitedError("Groq's free-tier limit is reached; try again shortly.")
+
+    def _body(self, model: str, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0,  # the same email should sort the same way twice
+            "max_completion_tokens": settings.AI_MAX_OUTPUT_TOKENS,
+        }
+        if model.startswith("openai/gpt-oss"):
+            # Thinking tokens count against the answer budget and the per-minute limit.
+            body["reasoning_effort"] = settings.GROQ_REASONING_EFFORT or "low"
+            body["max_completion_tokens"] = settings.AI_MAX_OUTPUT_TOKENS * 2
+        return body
+
+    @staticmethod
+    def _content(data: Dict[str, Any]) -> str:
+        choice = (data.get("choices") or [{}])[0]
+        if choice.get("finish_reason") == "length":
+            raise AIUnavailableError("The AI answer was cut off (too long); try a shorter request.")
+        return ((choice.get("message") or {}).get("content") or "").strip()
+
+    def text(self, system: str, prompt: str) -> str:
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        try:
+            return self._content(self._post(self._body(self.model, messages)))
+        except _GroqBadRequest as exc:
+            raise AIUnavailableError(f"Groq returned HTTP {exc.status}: {exc.detail}")
+
+    def structured(self, system: str, prompt: str, schema: Type[T], images: Optional[List[bytes]] = None) -> T:
+        model = self.model
+        content: Any = prompt
+        if images:
+            if not settings.GROQ_VISION_MODEL:
+                raise AIUnavailableError("Reading images needs GROQ_VISION_MODEL set.")
+            model = settings.GROQ_VISION_MODEL
+            content = [{"type": "text", "text": prompt}] + [
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{_media_type(img)};base64,{base64.b64encode(img).decode('ascii')}"}}
+                for img in images[:3]  # the vision model takes at most 3 images per request
+            ]
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+        strict = _strict_schema(schema.model_json_schema())
+        # Strict schema first. A model or schema Groq will not constrain falls
+        # back to JSON mode with the schema in the prompt; pydantic still checks it.
+        formats = [
+            {"type": "json_schema", "json_schema": {"name": schema.__name__, "strict": True, "schema": strict}},
+            {"type": "json_object"},
+        ]
+        last: Optional[_GroqBadRequest] = None
+        for fmt in formats:
+            body = self._body(model, messages if fmt["type"] == "json_schema" else [
+                {"role": "system", "content": f"{system}\n\nAnswer with JSON only, matching this schema:\n"
+                                              f"{json.dumps(strict)}"},
+                {"role": "user", "content": content},
+            ])
+            body["response_format"] = fmt
+            try:
+                return _parse(schema, self._content(self._post(body)), "Groq")
+            except _GroqBadRequest as exc:
+                last = exc
+                logger.warning(f"Groq refused {fmt['type']} for {schema.__name__} on {model}: {exc.detail}")
+        raise AIUnavailableError(f"Groq returned HTTP {last.status}: {last.detail}")
+
+    def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # gpt-oss on Groq makes one tool call per turn; parallel calls are not offered.
+        body = self._body(self.model, messages)
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        try:
+            data = self._post(body)
+        except _GroqBadRequest as exc:
+            raise AIUnavailableError(f"Groq returned HTTP {exc.status}: {exc.detail}")
+        choice = (data.get("choices") or [{}])[0]
+        if choice.get("finish_reason") == "length":
+            raise AIUnavailableError("The AI answer was cut off (too long); ask something narrower.")
+        message = choice.get("message") or {}
+        return {"content": (message.get("content") or "").strip(), "tool_calls": _openai_calls(message)}
+
+
+class _GroqBadRequest(Exception):
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+def _retry_after(value: Optional[str]) -> float:
+    try:
+        return max(0.0, float(value)) if value else 5.0
+    except ValueError:
+        return 5.0
+
+
+class FallbackProvider(AIProvider):
+    """The main engine, and a second one for when the first is rate limited or down."""
+
+    def __init__(self, primary: AIProvider, fallback: AIProvider):
+        self.primary, self.fallback = primary, fallback
+        self.name = primary.name
+
+    @property
+    def model(self) -> str:
+        return self.primary.model
+
+    @property
+    def can_see_images(self) -> bool:
+        return self.primary.can_see_images or self.fallback.can_see_images
+
+    def status(self) -> Dict[str, Any]:
+        out = self.primary.status()
+        out["fallback"] = {"provider": self.fallback.name, "model": self.fallback.model}
+        return out
+
+    def _run(self, call):
+        try:
+            return call(self.primary)
+        except AIUnavailableError as exc:
+            if isinstance(exc, AIRateLimitedError) or not self.primary.status().get("ready"):
+                logger.warning(f"{self.primary.name} unavailable ({exc}); using {self.fallback.name}.")
+                return call(self.fallback)
+            raise
+
+    def text(self, system: str, prompt: str) -> str:
+        return self._run(lambda p: p.text(system, prompt))
+
+    def structured(self, system: str, prompt: str, schema: Type[T], images: Optional[List[bytes]] = None) -> T:
+        return self._run(lambda p: p.structured(system, prompt, schema, images))
+
+    def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return self._run(lambda p: p.chat(messages, tools))
 
 
 class ClaudeProvider(AIProvider):
@@ -278,11 +541,8 @@ class ClaudeProvider(AIProvider):
 _override: Optional[AIProvider] = None
 
 
-def get_provider() -> AIProvider:
-    """The configured provider, read at call time so settings changes apply."""
-    if _override is not None:
-        return _override
-    choice = (settings.AI_PROVIDER or "ollama").strip().lower()
+def _named(choice: str) -> AIProvider:
+    choice = (choice or "").strip().lower()
     if choice == "off":
         return AIProvider()
     if choice == "claude":
@@ -291,7 +551,20 @@ def get_provider() -> AIProvider:
         except AIUnavailableError as exc:
             logger.error(str(exc))
             return AIProvider()
-    return OllamaProvider()
+    if choice == "ollama":
+        return OllamaProvider()
+    return GroqProvider()
+
+
+def get_provider() -> AIProvider:
+    """The configured provider, read at call time so settings changes apply."""
+    if _override is not None:
+        return _override
+    primary = _named(settings.AI_PROVIDER or "groq")
+    fallback = (settings.AI_FALLBACK_PROVIDER or "").strip().lower()
+    if fallback and fallback != primary.name:
+        return FallbackProvider(primary, _named(fallback))
+    return primary
 
 
 def use_provider(provider: Optional[AIProvider]) -> None:

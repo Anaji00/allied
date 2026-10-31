@@ -381,7 +381,10 @@ class SageExportService:
     ) -> Tuple[str, List[str]]:
         """
         Generates official Sage 50 Purchase Order import CSV format:
-        Vendor ID,PO Number,Date,Ship to Name,Ship to Address-Line One,Ship to City,Ship to State,Ship to Zipcode,Item ID,Description,Quantity,Unit Cost,Amount,GL Account
+        Vendor ID,PO Number,Date,Number of Distributions,PO Distribution,Ship to Name,Ship to Address-Line One,Ship to City,Ship to State,Ship to Zipcode,Item ID,Description,Quantity,Unit Cost,Amount,GL Account
+
+        As in the sales-order file, Sage groups rows into one PO by number and
+        needs every row to say how many lines that PO has and which one it is.
 
         only_new / mark_exported work as for sales orders, with their own mark,
         so each order's POs reach Sage once. A vendor filter never marks: the
@@ -399,6 +402,8 @@ class SageExportService:
             "Vendor ID",
             "PO Number",
             "Date",
+            "Number of Distributions",
+            "PO Distribution",
             "Ship to Name",
             "Ship to Address-Line One",
             "Ship to City",
@@ -474,6 +479,17 @@ class SageExportService:
                     gl_account,
                 ])
             if rows:
+                # Line counts per PO number: one order can raise POs to several
+                # vendors. Each PO's lines are kept together, in order.
+                first_seen = {po: i for i, po in reversed(list(enumerate(r[1] for r in rows)))}
+                rows.sort(key=lambda r: first_seen[r[1]])
+                totals: Dict[str, int] = {}
+                for r in rows:
+                    totals[r[1]] = totals.get(r[1], 0) + 1
+                seen: Dict[str, int] = {}
+                for r in rows:
+                    seen[r[1]] = seen.get(r[1], 0) + 1
+                    r[3:3] = [totals[r[1]], seen[r[1]]]
                 order_rows.append((o.get("sales_order_number"), rows))
 
         if mark_exported:

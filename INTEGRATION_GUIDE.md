@@ -162,12 +162,12 @@ Today's drawing reader (`vision_parser.py`) only pulls out the drawing number, r
 
 ## 8. Further improvements (roadmap)
 
-1. **Nightly catch-up check.** monday gives up on a message after 30 minutes of retries. A nightly job should read the board and flag any item whose status says "Ready for Sage" but has no order.
+1. **Done: board reader.** monday gives up on a message after 30 minutes of retries, so every 5 minutes the system also reads the boards itself and queues any change a webhook missed.
 2. **Sage agent on the Sage PC** (section 6) to remove the last manual click.
 3. **Webhooks created through a monday app**, so every message carries a signature. monday is retiring its older "custom trigger" features, so build any app against monday *workflows*.
 4. **Postgres instead of SQLite** if more than one server runs this system. The inbox design already supports it.
-5. **Tidy the older screens** so they use the new lighter style. Seven existing pages also carry pre-existing code-quality warnings.
-6. **Rename `SAGE_SIMULATION_MODE`.** "Simulation" is really the supported import-file mode, and the name confuses people.
+5. **Done: every screen redesigned** on one shared style; all pass the code checks and fit a phone screen.
+6. **Done: `SAGE_SIMULATION_MODE` renamed** to `SAGE_LIVE_CONNECTION` (off = import files, the supported mode). The old name still works.
 
 ---
 

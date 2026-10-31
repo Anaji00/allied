@@ -76,7 +76,23 @@ function setSession(next) {
 
 // ---------------------------------------------------------------------------
 
-const AuthContext = createContext({
+/**
+ * What useAuth() returns. Typed here so the TypeScript shell sees real
+ * signatures rather than the placeholders below.
+ *
+ * @typedef {object} AuthValue
+ * @property {boolean} isAuthenticated
+ * @property {string} userRole ADMIN, MANAGER, OPERATOR, VIEWER, or GUEST when signed out
+ * @property {string} employeeName
+ * @property {string} employeeEmail
+ * @property {string} facility
+ * @property {boolean} isInitialized
+ * @property {(email: string, password: string) => Promise<{ ok: boolean, error?: string }>} loginEmployee
+ * @property {() => void} logoutEmployee
+ * @property {(minimumRole: string) => boolean} hasRole True at or above the given role
+ */
+
+const AuthContext = createContext(/** @type {AuthValue} */ ({
   isAuthenticated: false,
   userRole: 'GUEST',
   employeeName: '',
@@ -86,7 +102,7 @@ const AuthContext = createContext({
   loginEmployee: async () => ({ ok: false, error: 'not ready' }),
   logoutEmployee: () => {},
   hasRole: () => false,
-});
+}));
 
 export function AuthProvider({ children }) {
   const session = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);

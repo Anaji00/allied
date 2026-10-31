@@ -115,6 +115,7 @@ class InboundEmailDaemon:
         logger.info(f"Processing inbound email [{email.email_id}] from {email.sender_email}: '{email.subject}'")
 
         # Freight forwarders' status emails update shipments, not orders.
+        from app.services.coordination import rfqs as _rfqs
         from app.services.coordination import shipments as _shipments
 
         if _shipments.is_forwarder(email.sender_email):
@@ -137,6 +138,8 @@ class InboundEmailDaemon:
         # goes to a person. When AI is off or down, the pattern parser below
         # runs exactly as before.
         ai = self._ai_read(email)
+        if (ai is not None and ai.category == "quote_request") or (ai is None and _rfqs.looks_like_rfq(email.subject)):
+            return self._log_rfq(email, ai)
         if ai is not None and (ai.category != "order" or not self._ai_order_usable(ai)):
             return self._ai_hold(email, ai)
 
@@ -287,6 +290,26 @@ class InboundEmailDaemon:
             "received_at": email.received_at.isoformat(),
         }
         self._inbox_feed.insert(0, feed_entry)
+        del self._inbox_feed[_MAX_FEED:]
+        return result
+
+    def _log_rfq(self, email: InboundEmailMessage, ai) -> "EmailIngestionResult":
+        """A request for a quote becomes a tracked RFQ with a deadline, not an order."""
+        from app.services.coordination import rfqs
+
+        rfq = rfqs.from_email(email.email_id, email.sender_email, email.sender_name or "", email.subject,
+                              email.body_text, ai, email.received_at)
+        result = EmailIngestionResult(
+            email_id=email.email_id,
+            status="RFQ_STAGED",
+            customer_name=rfq["customer"] or email.sender_email,
+            customer_po_number="",
+            line_items_count=len(rfq.get("items") or []),
+            notes=f"Logged as {rfq['number']}; quote due {rfq['due_at'][:10]}."
+            + (" (already logged)" if rfq.get("duplicate") else ""),
+        )
+        self._inbox_feed.insert(0, {**result.model_dump(), "sender_email": email.sender_email,
+                                    "subject": email.subject, "received_at": email.received_at.isoformat()})
         del self._inbox_feed[_MAX_FEED:]
         return result
 

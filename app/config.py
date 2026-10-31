@@ -23,11 +23,27 @@ class Settings(BaseSettings):
     # non-AI answers. qwen2.5 handles English, Vietnamese and Mandarin.
     OLLAMA_MODEL: str = "qwen2.5:7b"
 
-    # AI features (app/services/ai). Local Ollama is the default so nothing is
-    # spent on inference; "claude" switches to the Anthropic API (needs
-    # ANTHROPIC_API_KEY and `pip install anthropic`); "off" disables AI and
-    # every feature reports that plainly instead of guessing.
-    AI_PROVIDER: str = "ollama"
+    # AI features (app/services/ai). "groq" (default) uses Groq's free tier:
+    # fast, no cost, but it is rate limited and prompts leave the building
+    # (Groq keeps no inputs by default; turn on Zero Data Retention in the
+    # Groq console). "ollama" runs local models; "claude" uses the Anthropic
+    # API (billed, needs ANTHROPIC_API_KEY and `pip install anthropic`); "off"
+    # disables AI and every feature reports that plainly instead of guessing.
+    AI_PROVIDER: str = "groq"
+    GROQ_API_KEY: str = ""
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    # Production models on Groq as of Oct 2026 (the Llama 3.x models were shut
+    # down in Aug 2026). gpt-oss-120b supports strict JSON-schema answers.
+    GROQ_TEXT_MODEL: str = "openai/gpt-oss-120b"
+    # Reads scanned drawings. Preview on Groq: may change without notice.
+    GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
+    GROQ_SPEECH_MODEL: str = "whisper-large-v3-turbo"
+    # gpt-oss thinks before it answers; its thinking counts against the
+    # free tier's tokens-per-minute, so keep it short.
+    GROQ_REASONING_EFFORT: str = "low"
+    # When the main engine is rate limited or down, try this one instead
+    # (e.g. "ollama" if a local model is installed). Blank = say AI is busy.
+    AI_FALLBACK_PROVIDER: str = ""
     AI_TEXT_MODEL: str = "qwen2.5:7b"
     # Reads drawings as images. Blank = drawings are read from their text
     # layer only. e.g. `ollama pull qwen2.5vl:7b` then set it here.
@@ -44,9 +60,10 @@ class Settings(BaseSettings):
     AI_CONFIDENCE_THRESHOLD: float = 0.8
     # When on, inbound email is sorted and read by AI before the pattern parser.
     AI_EMAIL_TRIAGE_ENABLED: bool = False
-    # Server-side transcription of recordings (phone calls). Needs
-    # `pip install faster-whisper`; e.g. "small". Blank = off. Live dictation
-    # in the browser works without it.
+    # Server-side transcription of recordings (phone calls). With
+    # AI_PROVIDER=groq and a GROQ_API_KEY, Groq's Whisper is used. Otherwise
+    # a local model: `pip install faster-whisper`, then e.g. "small". Blank =
+    # off. Live dictation in the browser works without either.
     AI_WHISPER_MODEL: str = ""
     # The phone system posts transcripts to /ai/calls?token=<this>. Blank =
     # only signed-in operators can submit calls.
@@ -66,6 +83,10 @@ class Settings(BaseSettings):
     # Previously this was tied to SAGE_SIMULATION_MODE, so going live on Sage
     # also silently started writing to the real board, and vice versa.
     MONDAY_SIMULATION_MODE: bool = True
+    # Reads only. With this on (the default), no change of any kind is sent
+    # to monday, even with simulation off: every GraphQL mutation is blocked
+    # and logged in the client. Turn it off only for a test board.
+    MONDAY_READ_ONLY: bool = True
     MONDAY_BOARD_ID: Optional[str] = None
 
     # Webhook authentication. monday does not HMAC-sign webhook bodies:
@@ -110,7 +131,12 @@ class Settings(BaseSettings):
     #   "groups":   each group is a project, its items are the milestones
     MONDAY_PROJECTS_BOARD_ID: str = ""
     MONDAY_PROJECTS_LAYOUT: str = "subitems"
-    PROJECTS_POLL_SECONDS: int = 600
+    # Full re-read of every board: a safety net once change checks are on.
+    PROJECTS_POLL_SECONDS: int = 3600
+    # A one-call check of each board's last change; only changed boards are read.
+    # 0 turns it off (then boards are only read every PROJECTS_POLL_SECONDS).
+    MONDAY_CHANGE_CHECK_SECONDS: int = 90
+    MONDAY_CHANGE_CHECK_OFF_HOURS_SECONDS: int = 900
     PROJECT_OWNER_COLUMN_ID: str = "person"
     PROJECT_DUE_COLUMN_ID: str = "date"
     PROJECT_STATUS_COLUMN_ID: str = "status"
@@ -123,6 +149,8 @@ class Settings(BaseSettings):
     MILESTONE_SUBMISSION_COLUMN_ID: str = ""
     MILESTONE_SUBMISSION_KEYWORDS: str = "drawing,model,calc,submission,design package,design doc"
     MILESTONE_DONE_LABELS: str = "Done,Approved,Complete,Completed"
+    # Tell owners (and leadership for unowned work) about open milestones with no due date or owner.
+    MILESTONE_UNPLANNED_ALERTS: bool = True
     # Written back to the milestone's status column as submissions move.
     MILESTONE_SUBMITTED_LABEL: str = "Submitted"
     MILESTONE_APPROVED_LABEL: str = "Approved"
@@ -143,6 +171,106 @@ class Settings(BaseSettings):
     SCHEDULE_CHECK_SECONDS: int = 900
     # Freight forwarders' sending domains; their emails become shipment updates.
     FORWARDER_DOMAINS: str = ""
+
+    # Working hours for business-day clocks (RFQ deadlines, vendor chasers).
+    BUSINESS_DAY_START: int = 8
+    BUSINESS_DAY_END: int = 17
+    BUSINESS_HOLIDAYS: str = "2026-11-26,2026-11-27,2026-12-24,2026-12-25,2027-01-01,2027-05-31,2027-07-05,2027-09-06"
+
+    # Vendor jobs: one item per vendor PO, read from a monday board (or added
+    # here). Each needs a ship-by date worked back from the project due date:
+    # due - transit (door to door) - buffer. The defaults are China to the US.
+    MONDAY_VENDOR_BOARD_ID: str = ""
+    VENDOR_VENDOR_COLUMN_ID: str = ""      # text, dropdown or connect-boards; blank = group title
+    VENDOR_PROJECT_COLUMN_ID: str = ""     # connect-boards column to the projects board
+    VENDOR_PO_COLUMN_ID: str = ""
+    VENDOR_DESCRIPTION_COLUMN_ID: str = ""  # added after the item name (Allied: the item name is the customer)
+    VENDOR_OWNER_COLUMN_ID: str = ""
+    VENDOR_STATUS_COLUMN_ID: str = ""
+    VENDOR_ORDERED_COLUMN_ID: str = ""     # PO placed
+    VENDOR_REQUESTED_COLUMN_ID: str = ""   # ship date Allied asked for
+    VENDOR_ACK_COLUMN_ID: str = ""         # vendor confirmed the PO
+    VENDOR_PROMISED_COLUMN_ID: str = ""    # vendor's current promised ship date
+    VENDOR_SHIPPED_COLUMN_ID: str = ""     # actually shipped / ready
+    VENDOR_LEAD_DAYS_COLUMN_ID: str = ""   # vendor's quoted lead time in days
+    VENDOR_MODE_COLUMN_ID: str = ""        # Sea / Air / Truck
+    # The customer's date, for jobs not linked to a project: a date column, or
+    # a start date column plus a number of weeks (Allied: Vendor PO Issued + Cust Lead).
+    VENDOR_CUSTOMER_DUE_COLUMN_ID: str = ""
+    VENDOR_CUSTOMER_FROM_COLUMN_ID: str = ""
+    VENDOR_CUSTOMER_WEEKS_COLUMN_ID: str = ""
+    # True: the customer's date is delivery, so transit is taken off. False: it is the ship date.
+    VENDOR_CUSTOMER_DUE_IS_DELIVERY: bool = True
+    # Only items in these groups are open vendor work; other groups count as shipped. Blank = all.
+    VENDOR_OPEN_GROUPS: str = ""
+    VENDOR_DONE_LABELS: str = "Shipped,Done,Complete,Received"
+    VENDOR_TRANSIT_DAYS_SEA: int = 45      # vendor door to US customer: ~5-6 weeks West Coast, 7-9 East
+    VENDOR_TRANSIT_DAYS_AIR: int = 10
+    VENDOR_TRANSIT_DAYS_TRUCK: int = 5
+    # Vendors that ship within the US, by the name used on the board. With no mode
+    # column on the board, these get truck transit and every other vendor gets sea.
+    VENDOR_DOMESTIC_VENDORS: str = ""
+    VENDOR_BUFFER_DAYS: int = 7            # safety margin before the need date
+    VENDOR_ACK_BUSINESS_DAYS: int = 2      # PO not confirmed after this: chase
+    VENDOR_CHECKIN_DAYS: int = 7           # ask the vendor to reconfirm this long before the ship date
+    VENDOR_HISTORY_MIN_JOBS: int = 5       # fewer shipped jobs: plan on quote + 20%
+    VENDOR_OTD_TARGET: float = 0.95
+
+    # Autopilot: what Allied's system does on its own, on a timer. Each play is
+    # off, suggest (anything sent outside Allied waits for a person to confirm
+    # it) or auto (done straight away; email still goes out only when sending
+    # is switched on). Nothing is ever written to monday by these plays.
+    AUTOPILOT_ENABLED: bool = True
+    AUTOPILOT_MODES: str = "rfq_board=auto,orders_watch=auto,vendor_chaser=suggest,rfq_vendor_chaser=suggest,quote_followup=suggest"
+    AUTOPILOT_SECONDS: int = 3600
+    AUTOPILOT_DRAFT_HOURS: int = 72          # drafts waiting for a person expire after this
+    # Event-driven reactions (things that happen, not the timer), each off / suggest / auto.
+    AUTOPILOT_REACTIONS: str = ("rfq_acknowledge=suggest,rfq_ask_vendors=suggest,rfq_won=auto,"
+                                "order_shipped=auto,order_photos=auto,vendor_late_chase=suggest")
+    AUTOPILOT_EVENTS_ASYNC: bool = True      # reactions run in the background, never slowing the request
+    # Who confirms drafts: "management" (the reviewers below) or "owner" (the job's owner when
+    # it has one, else the reviewers).
+    AUTOPILOT_REVIEW_BY: str = "management"
+    AUTOPILOT_REVIEWER_EMAILS: str = ""      # blank = leadership on the Alerts screen, else ADMIN_EMAIL
+    # Vendor contacts, as name=email pairs, for names on the boards ("HELEN=helen@...").
+    # Names are also matched against the vendor master (id, name, or the part before @).
+    VENDOR_EMAILS: str = ""
+    # The monday Open RFQs board, read into the RFQ tracker. Columns by id or title.
+    MONDAY_RFQ_BOARD_ID: str = ""
+    RFQ_BOARD_CUSTOMER_COLUMN_ID: str = "Customer"
+    RFQ_BOARD_STATUS_COLUMN_ID: str = "Status"
+    RFQ_BOARD_VENDORS_COLUMN_ID: str = "Bidding vendors"
+    RFQ_BOARD_FOLLOWUP_COLUMN_ID: str = "Last follow up"
+    RFQ_BOARD_STATUS_MAP: str = ("waiting on vendor quote=WAITING_VENDOR,waiting on freight=WAITING_VENDOR,"
+                                 "waiting on drawing=CLARIFYING,need quote checked=PRICING,need markup=PRICING,"
+                                 "need revised quote=PRICING,stuck=ACKNOWLEDGED")
+    QUOTE_FOLLOWUP_DAYS: str = "2,7"         # working days after a quote is sent
+    # Orders board (MONDAY_VENDOR_BOARD_ID) watch: unpaid orders and vendor photos waiting.
+    ORDERS_PAYMENT_GROUPS: str = "Payment"
+    ORDERS_PAYMENT_STATUS_COLUMN_ID: str = "Payment Status"
+    ORDERS_PAID_LABELS: str = "Paid in Full"
+    ORDERS_PHOTO_LABELS: str = "EXPECTING PICS,NEED PICS APPROVED"
+
+    # Customer RFQs. The clock starts when the request arrives and counts
+    # business hours; waiting on a vendor's price still counts.
+    RFQ_ACK_BUSINESS_HOURS: int = 4
+    RFQ_QUOTE_DAYS_SIMPLE: int = 1         # repeat or catalogue parts
+    RFQ_QUOTE_DAYS_STANDARD: int = 2
+    RFQ_QUOTE_DAYS_COMPLEX: int = 5        # new design or vendor pricing needed
+    RFQ_VENDOR_CHASE_DAYS: int = 2         # business days waiting on a vendor price before a chaser
+    RFQ_VENDOR_ESCALATE_DAYS: int = 4
+    RFQ_TEAM_EMAILS: str = ""              # who is told about new RFQs; blank = leadership
+
+    # Assistant (the chat widget). It reads through tools and only proposes
+    # changes; a person confirms each one. MCP servers add third-party tools:
+    # a JSON list of {"name", "url", "headers": {...}, "read_only_tools": [...], "min_role"}.
+    # Header values written as "env:NAME" are read from that environment variable.
+    ASSISTANT_ENABLED: bool = True
+    ASSISTANT_MAX_STEPS: int = 5
+    ASSISTANT_RESULT_CHARS: int = 4000
+    ASSISTANT_HISTORY_MESSAGES: int = 10
+    ASSISTANT_ACTION_TTL_MINUTES: int = 15
+    ASSISTANT_MCP_SERVERS: str = ""
 
     # Notifications. The in-app inbox always gets every alert; email, text
     # and push are deliveries of it.
@@ -183,6 +311,11 @@ class Settings(BaseSettings):
     SAGE_COMPANY_PATH: str = r"C:\Sage\Peachtree\Company\AlliedWelding"
     SAGE_USER: str = "allied_api"
     SAGE_PASSWORD: str = ""
+    # Connect to the Sage 50 company on this machine (ODBC reads). Off, the
+    # supported mode, means Sage is reached through import files only. Direct
+    # writes are not built, so leave this off until the Sage-PC helper exists.
+    SAGE_LIVE_CONNECTION: bool = False
+    # Old name for the inverse of SAGE_LIVE_CONNECTION, still honoured when set.
     SAGE_SIMULATION_MODE: bool = True
 
     # JWT Authentication
@@ -304,6 +437,15 @@ class Settings(BaseSettings):
     def label_set(raw: str) -> set:
         """Parses a comma-separated label list into a case-folded set."""
         return {part.strip().casefold() for part in (raw or "").split(",") if part.strip()}
+
+    @property
+    def sage_live(self) -> bool:
+        """True when connected to the Sage company on this machine (see SAGE_LIVE_CONNECTION)."""
+        if "SAGE_LIVE_CONNECTION" in self.model_fields_set:
+            return self.SAGE_LIVE_CONNECTION
+        if "SAGE_SIMULATION_MODE" in self.model_fields_set:
+            return not self.SAGE_SIMULATION_MODE
+        return self.SAGE_LIVE_CONNECTION
 
     @property
     def is_production(self) -> bool:

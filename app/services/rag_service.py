@@ -10,8 +10,6 @@ import re
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 from app.config import settings
 from app.core.logging import logger
 from app.core.uploads import resolve_upload_path
@@ -24,13 +22,9 @@ from app.models.rag_chat import (
     RAGSourceCitation,
 )
 from app.services.agent_memory_cache import agent_memory_cache
+from app.services.ai.providers import AIUnavailableError, get_provider
 from app.services.document_scanner_service import document_scanner_service
 from app.services.vision_parser import VisionParser
-
-# Local LLM calls sit in the request path, so the budget is deliberately short:
-# a slow Ollama should fall through to deterministic synthesis, not stall a reply.
-_OLLAMA_TIMEOUT_SECONDS = 8.0
-
 
 class RAGService:
     """Enterprise RAG Service indexing documents, master CSVs, quotes, and live order memory."""
@@ -42,8 +36,6 @@ class RAGService:
         # any test working on a copy, silently indexed a different directory.
         self.data_dir = str(settings.DATA_DIR)
         self.kb_dir = os.path.join(self.data_dir, "knowledge_base")
-        self.ollama_host = getattr(settings, "OLLAMA_HOST", "http://127.0.0.1:11434")
-        self.ollama_model = getattr(settings, "OLLAMA_MODEL", "llama3.2")
         self.documents: List[Dict[str, Any]] = []
         self.vision_parser = VisionParser()
         self._load_knowledge_bases()
@@ -475,53 +467,34 @@ class RAGService:
         return None
 
 
-    def _query_ollama(self, prompt: str, context: str) -> Optional[str]:
-        """Calls the local Ollama LLM if online."""
+    def _query_model(self, prompt: str, context: str) -> Tuple[Optional[str], str]:
+        """Asks the configured AI provider (Groq by default, Ollama as fallback).
+
+        Returns the answer and the engine that wrote it, or (None, "") when no
+        provider is available so the caller falls back to deterministic
+        synthesis. This used to call a local Ollama directly, so the copilot
+        ignored AI_PROVIDER and only ever worked where Ollama was running.
+        """
+        system_prompt = (
+            "You are the Allied Welding Systems Enterprise Copilot. "
+            "Answer the user's question accurately using ONLY the provided internal context. "
+            "Format your answer with clear markdown headers, bold part numbers, bullet points, and pricing tables where appropriate. "
+            "Always emphasize compliance, accurate 4-document order flow (Client PO -> Allied Internal SO -> Vendor POs -> Client Order Acknowledgment), automated packing lists, and margin preservation."
+        )
+        full_prompt = f"=== INTERNAL KNOWLEDGE CONTEXT ===\n{context}\n\n=== USER QUESTION ===\n{prompt}"
+        provider = get_provider()
         try:
-            system_prompt = (
-                "You are the Allied Welding Systems Enterprise Copilot. "
-                "Answer the user's question accurately using ONLY the provided internal context. "
-                "Format your answer with clear markdown headers, bold part numbers, bullet points, and pricing tables where appropriate. "
-                "Always emphasize compliance, accurate 4-document order flow (Client PO -> Allied Internal SO -> Vendor POs -> Client Order Acknowledgment), automated packing lists, and margin preservation."
-            )
-            full_prompt = f"{system_prompt}\n\n=== INTERNAL KNOWLEDGE CONTEXT ===\n{context}\n\n=== USER QUESTION ===\n{prompt}\n\n=== ANSWER ==="
-
-            req_body = json.dumps({
-                "model": self.ollama_model,
-                "prompt": full_prompt,
-                "stream": False,
-                "options": {"temperature": 0.2, "top_p": 0.9},
-            }).encode("utf-8")
-
-            # httpx is already a project dependency and is used for every other
-            # outbound call; urllib was the odd one out here.
-            response = httpx.post(
-                f"{self.ollama_host}/api/generate",
-                content=req_body,
-                headers={"Content-Type": "application/json"},
-                timeout=_OLLAMA_TIMEOUT_SECONDS,
-            )
-            if response.status_code == 200:
-                return (response.json().get("response") or "").strip() or None
-            logger.warning(
-                f"Ollama at {self.ollama_host} returned {response.status_code}; "
-                f"falling back to deterministic synthesis."
-            )
-        except httpx.ConnectError:
-            # Expected whenever Ollama is not running locally: debug, not error.
-            logger.debug(
-                f"Ollama not reachable at {self.ollama_host}; using deterministic synthesis."
-            )
-        except httpx.TimeoutException:
-            logger.warning(
-                f"Ollama did not respond within {_OLLAMA_TIMEOUT_SECONDS}s; "
-                f"using deterministic synthesis."
-            )
+            answer = (provider.text(system_prompt, full_prompt) or "").strip()
+        except AIUnavailableError as exc:
+            # Expected when no key is set or the engine is off: not an error.
+            logger.debug(f"AI provider unavailable ({exc}); using deterministic synthesis.")
+            return None, ""
         except Exception as exc:
-            # A bare `except: pass` here meant a misconfigured host, a bad
-            # payload or a JSON error all looked identical to "LLM offline".
-            logger.warning(f"Ollama query failed ({type(exc).__name__}: {exc}); using fallback.")
-        return None
+            logger.warning(f"AI query failed ({type(exc).__name__}: {exc}); using fallback.")
+            return None, ""
+        if not answer:
+            return None, ""
+        return answer, f"{provider.name} ({provider.model})" if provider.model else provider.name
 
     def _deterministic_synthesis(
         self,
@@ -931,14 +904,14 @@ class RAGService:
 
         full_context = "\n\n".join(context_parts)
 
-        # 4. Attempt Ollama LLM if dev_bypass is False
+        # 4. Ask the configured AI provider unless dev_bypass is set
         llm_answer = None
         model_used = "Deterministic Business Reasoning Engine"
 
         if not request.dev_bypass:
-            llm_answer = self._query_ollama(request.query, full_context)
+            llm_answer, engine = self._query_model(request.query, full_context)
             if llm_answer:
-                model_used = f"Local Ollama ({self.ollama_model})"
+                model_used = engine
 
         # 5. Deterministic Synthesis Fallback
         if not llm_answer:

@@ -14,17 +14,20 @@ from pathlib import Path
 
 from app.config import settings
 
-# Anchored to BASE_DIR rather than the process working directory, so the
-# location does not change with however the server happens to be launched.
-UPLOAD_DIR: Path = settings.BASE_DIR / "data" / "uploads"
+# Under the data folder (settings.DB_DIR, anchored to BASE_DIR), so the
+# location does not change with however the server happens to be launched,
+# and tests that point DB_DIR at a temporary folder never write into data/.
+def upload_dir() -> Path:
+    return settings.DB_DIR / "uploads"
 
 _UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def ensure_upload_dir() -> Path:
     """Creates the upload directory if it does not exist and returns it."""
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    return UPLOAD_DIR
+    folder = upload_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def safe_upload_name(filename: str) -> str:
@@ -43,7 +46,7 @@ def safe_upload_name(filename: str) -> str:
 
 
 def resolve_upload_path(candidate: str) -> Path:
-    """Resolves a client-supplied path and confirms it stays inside UPLOAD_DIR.
+    """Resolves a client-supplied path and confirms it stays inside the upload folder.
 
     Raises:
         ValueError: if the path escapes the upload directory or does not exist.

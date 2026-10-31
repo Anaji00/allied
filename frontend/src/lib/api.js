@@ -29,7 +29,7 @@ export function setUnauthorizedHandler(handler) {
  * returns a new one, the request is retried once. This keeps an expired
  * access token from surfacing as a spurious error during a working session.
  */
-async function authFetch(url, options = {}) {
+export async function authFetch(url, options = {}) {
   const send = (token) => {
     const headers = new Headers(options.headers || {});
     if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -100,6 +100,10 @@ export async function dryRunOrder(payload) {
 
 /**
  * Master Data & Batch Order CSV Imports API
+ */
+/**
+ * @param {string | object} importTypeOrPayload
+ * @param {string | null} [csvText]
  */
 export async function importCSVData(importTypeOrPayload, csvText = null) {
   const body = csvText !== null
@@ -217,6 +221,13 @@ export async function searchCachedOrders(params = {}) {
   return res.json();
 }
 
+/** Every supplier profile, keyed by supplier id (NIBROCK, ZIBO, KWS, STOCK). */
+export async function fetchVendors() {
+  const res = await authFetch(`${API_BASE}/cache/vendors`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Could not load the supplier list');
+  return res.json();
+}
+
 export async function fetchCachedVendor(vendorId) {
   const res = await authFetch(`${API_BASE}/cache/vendors/${encodeURIComponent(vendorId)}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch vendor ${vendorId}`);
@@ -274,10 +285,16 @@ export async function draftQuoteFromWear(payload) {
 
 
 /**
- * PDF Packing Slip Stream
+ * Packing slip PDF. Fetched with the sign-in token and handed over as a file;
+ * a plain link to the route would arrive without the token and be refused.
  */
-export function getPackingSlipUrl(soNumber) {
-  return `${API_BASE}/orders/${soNumber}/packing-slip`;
+export async function downloadPackingSlip(soNumber) {
+  const res = await authFetch(`${API_BASE}/orders/${encodeURIComponent(soNumber)}/packing-slip`, { cache: 'no-store' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Could not download the packing slip (${res.status})`);
+  }
+  saveBlob(await res.blob(), `packing_slip_${soNumber}.pdf`);
 }
 
 /**
@@ -539,7 +556,10 @@ export async function generateLeadOutreach(profile) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(profile),
   });
-  if (!res.ok) throw new Error('Failed to generate outreach');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Could not write the draft (${res.status})`);
+  }
   return res.json();
 }
 
@@ -584,13 +604,15 @@ export async function fetchAuditLog(resourceType = null, limit = 50) {
 }
 
 /**
- * Logistics & Customs Dispatch
+ * Dispatches an order: packing list, customs papers if cross-border, carrier
+ * and customer notice. `details` takes carrier_name, origin_facility,
+ * tracking_number, recipient_email, freight_terms and currency.
  */
-export async function dispatchLogistics(payload) {
-  const res = await authFetch(`${API_BASE}/logistics/dispatch`, {
+export async function dispatchOrder(soNumber, details = {}) {
+  const res = await authFetch(`${API_BASE}/orders/${encodeURIComponent(soNumber)}/dispatch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(details),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

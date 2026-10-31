@@ -44,5 +44,15 @@ class CreateUserRequest(BaseModel):
     facility: str = "HQ"
 
 
+class UpdateUserRequest(BaseModel):
+    """Admin-only change to an account. Fields left out stay as they are."""
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    facility: Optional[str] = None
+    is_active: Optional[bool] = None
+    # Sets a new password, e.g. after a person forgets theirs; never read back.
+    new_password: Optional[str] = Field(None, min_length=8)
+
+
 # Resolve forward reference
 TokenResponse.model_rebuild()

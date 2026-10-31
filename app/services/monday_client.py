@@ -14,6 +14,7 @@ Behaviour that matters in production:
 """
 
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -27,6 +28,48 @@ from app.core.exceptions import MondayAPIError
 from app.core.logging import logger
 
 # GraphQL error codes monday returns for limits that clear on their own.
+_MUTATION = re.compile(r"(?:^|[\s{}])mutation\b")
+
+
+def _code_only(query: str) -> str:
+    """The document with strings and comments blanked, in one pass, so neither can hide the other."""
+    out, i, n = [], 0, len(query)
+    while i < n:
+        if query.startswith('"""', i):
+            j = query.find('"""', i + 3)
+            i = n if j < 0 else j + 3
+            out.append(" ")
+        elif query[i] == '"':
+            i += 1
+            while i < n and query[i] != '"':
+                i += 2 if query[i] == "\\" else 1
+            i += 1
+            out.append(" ")
+        elif query[i] == "#":
+            j = query.find("\n", i)
+            i = n if j < 0 else j
+        else:
+            out.append(query[i])
+            i += 1
+    return "".join(out)
+
+
+def is_mutation(query: str) -> bool:
+    """True when a GraphQL document changes anything (mutation, or anything not plainly a query).
+
+    Strings and comments are removed first, so a search term like "mutation"
+    is not mistaken for one, and an unrecognisable document counts as a write.
+    """
+    text = _code_only(query or "").strip()
+    if _MUTATION.search(text):
+        return True
+    return not (text.startswith("{") or text.startswith("query"))
+
+
+class MondayReadOnlyError(MondayAPIError):
+    """A write was refused because MONDAY_READ_ONLY is on."""
+
+
 _RETRYABLE_ERROR_CODES = {
     "COMPLEXITY_BUDGET_EXHAUSTED",
     "ComplexityException",
@@ -70,6 +113,11 @@ class MondayClient:
         # Read at call time so tests and config reloads take effect.
         return bool(self.api_key) and not settings.MONDAY_SIMULATION_MODE
 
+    @property
+    def writable(self) -> bool:
+        """Live and allowed to change data. Reads need only `live`."""
+        return self.live and not settings.MONDAY_READ_ONLY
+
     def _http(self) -> httpx.Client:
         """One pooled connection per process instead of a TLS handshake per call."""
         with self._client_lock:
@@ -82,6 +130,10 @@ class MondayClient:
     # ------------------------------------------------------------------
 
     def _post_once(self, payload: Dict[str, Any], idempotency_key: Optional[str] = None) -> Dict[str, Any]:
+        # Second guard, at the only place a request leaves: nothing that writes
+        # is sent while read-only is on, whatever the caller did.
+        if settings.MONDAY_READ_ONLY and is_mutation(payload.get("query") or ""):
+            raise MondayReadOnlyError("monday is read-only (MONDAY_READ_ONLY); the change was not sent.")
         headers = dict(self.headers)
         if idempotency_key:
             # monday caches the response for 30 minutes under this key, so a
@@ -133,6 +185,18 @@ class MondayClient:
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Executes a GraphQL query/mutation, retrying limits and transient failures."""
+        if self.live and settings.MONDAY_READ_ONLY and is_mutation(query):
+            # Treated like simulation, so callers carry on: recorded, not sent.
+            self.simulated_calls.append(
+                {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "query": " ".join(query.split())[:160],
+                    "variables": variables or {},
+                    "blocked": "read-only",
+                }
+            )
+            logger.warning("[READ-ONLY] monday change blocked, not sent: " + " ".join(query.split())[:120])
+            return {"data": {"simulation": True, "read_only": True}}
         if not self.live:
             self.simulated_calls.append(
                 {
@@ -301,8 +365,8 @@ class MondayClient:
 
 
 def _projects_query(subitems: bool) -> tuple:
-    sub = "subitems { id name board { id } column_values { id text value } }" if subitems else ""
-    fields = f"id name group {{ id title }} column_values {{ id text value }} {sub}"
+    sub = "subitems { id name board { id } column_values { id text value column { title } } }" if subitems else ""
+    fields = f"id name created_at group {{ id title }} column_values {{ id text value column {{ title }} }} {sub}"
     return (
         "query ($boardId: [ID!], $limit: Int!) { boards(ids: $boardId) { id name "
         f"items_page(limit: $limit) {{ cursor items {{ {fields} }} }} }} }}",

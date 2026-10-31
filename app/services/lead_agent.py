@@ -20,7 +20,9 @@ class LeadProfile(BaseModel):
     title: str
     company: str
     industry: str
-    email: str
+    # The draft never uses it, and target accounts carry no address, so the
+    # page had to invent one to get past validation.
+    email: Optional[str] = None
 
 
 class ROICalculatorRequest(BaseModel):
@@ -341,69 +343,48 @@ class LeadAgent:
         location: str,
         max_results: int = 15,
     ) -> List[Dict[str, str]]:
-        """Scrapes web or returns targeted industrial prospects."""
-        logger.info(f"Searching leads: {job_titles} in {industries} ({location})")
+        """Searches public profiles for plant maintenance and reliability people.
+
+        Returns only what the search found; an empty list means nothing
+        matched. It used to fall back to made-up people with real-looking
+        email addresses, which read as genuine prospects. When the search
+        cannot run, LeadSearchUnavailable says why instead.
+        """
+        titles = [t.strip() for t in job_titles if t and t.strip()]
+        sectors = [i.strip() for i in industries if i and i.strip()]
+        if not titles or not sectors:
+            raise ValueError("Give at least one job title and one industry.")
+        logger.info(f"Searching leads: {titles} in {sectors} ({location})")
 
         if not HAS_DDGS:
-            return [
-                {
-                    "name": "Marcus Vance",
-                    "title": "Plant Maintenance Manager",
-                    "company": "Owens Corning",
-                    "industry": "Asphalt & Roofing",
-                    "location": "Medina, OH",
-                    "email": "m.vance@owenscorning.com",
-                    "snippet": "Overseeing plant maintenance, hammermill screening operations, and wear mitigation.",
-                },
-                {
-                    "name": "Sarah Jenkins",
-                    "title": "Reliability Engineer",
-                    "company": "Knauf Insulation",
-                    "industry": "Glass & Mineral Wool",
-                    "location": "Lanett, AL",
-                    "email": "sarah.jenkins@knauf.com",
-                    "snippet": "Managing batch plant maintenance and cullet conveying system reliability.",
-                },
-                {
-                    "name": "Dave Kowalski",
-                    "title": "Lead Maintenance Planner",
-                    "company": "IKO Southwest",
-                    "industry": "Asphalt Roofing",
-                    "location": "Terrell, TX",
-                    "email": "dave.k@iko.com",
-                    "snippet": "Planning turnaround schedules and rotary trommel wear parts procurement.",
-                },
-            ]
+            raise LeadSearchUnavailable(
+                "Web search isn't installed on this server (it needs the duckduckgo-search package)."
+            )
+
+        titles_query = " OR ".join(f'"{t}"' for t in titles)
+        industries_query = " OR ".join(f'"{i}"' for i in sectors)
+        query = f'site:linkedin.com/in ({titles_query}) ({industries_query}) "{location}"'
+        try:
+            found = DDGS().text(query, max_results=max_results) or []
+        except Exception as e:  # noqa: BLE001 - reported to the person, never replaced
+            logger.warning(f"Lead search failed: {e}")
+            raise LeadSearchUnavailable(f"The web search didn't work just now: {e}") from e
 
         results = []
-        try:
-            ddgs = DDGS()
-            titles_query = " OR ".join([f'"{t}"' for t in job_titles])
-            industries_query = " OR ".join([f'"{i}"' for i in industries])
-            query = f'site:linkedin.com/in ({titles_query}) ({industries_query}) "{location}"'
+        for item in found:
+            parts = (item.get("title") or "").split(" - ")
+            results.append({
+                "name": parts[0].strip() if parts and parts[0].strip() else "",
+                "title": parts[1].strip() if len(parts) > 1 else "",
+                "company": parts[2].split("|")[0].strip() if len(parts) > 2 else "",
+                "snippet": item.get("body", ""),
+                "profile_url": item.get("href", ""),
+            })
+        return results
 
-            search_results = ddgs.text(query, max_results=max_results)
-            for item in search_results:
-                title_snippet = item.get("title", "")
-                parts = title_snippet.split(" - ")
-                name = parts[0].strip() if len(parts) > 0 else "Industrial Lead"
-                job_title = parts[1].strip() if len(parts) > 1 else job_titles[0]
-                company = parts[2].split("|")[0].strip() if len(parts) > 2 else industries[0]
 
-                results.append({
-                    "name": name,
-                    "title": job_title,
-                    "company": company,
-                    "snippet": item.get("body", ""),
-                    "profile_url": item.get("href", ""),
-                })
-            return results
-        except Exception as e:
-            logger.warning(f"Error scraping web for leads: {e}. Falling back to curated targets.")
-            return [
-                {"name": t.key_contact, "title": t.contact_title, "company": t.company, "industry": t.industry, "location": t.location}
-                for t in self._target_accounts[:max_results]
-            ]
+class LeadSearchUnavailable(RuntimeError):
+    """The web search could not run; the message says why, in plain words."""
 
 
 # Lazily constructed: building this at import time created a MondayClient

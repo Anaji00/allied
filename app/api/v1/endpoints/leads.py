@@ -3,10 +3,11 @@
 from typing import Any, Dict, List
 from app.core.security import require_operator, require_viewer
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.lead_agent import (
     LeadProfile,
+    LeadSearchUnavailable,
     ROICalculatorRequest,
     ROICalculatorResult,
     TargetPlantAccount,
@@ -30,7 +31,7 @@ class ScrapeLeadsRequest(BaseModel):
     job_titles: List[str]
     industries: List[str]
     location: str
-    max_results: int = 15
+    max_results: int = Field(15, ge=1, le=50)
 
 
 @router.post(
@@ -87,8 +88,10 @@ def scrape_for_leads(request: ScrapeLeadsRequest, _user: dict = Depends(require_
             location=request.location,
             max_results=request.max_results,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except LeadSearchUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.post(

@@ -50,12 +50,12 @@ def system_health(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": settings.APP_ENV,
-        "simulation_mode": settings.SAGE_SIMULATION_MODE,
+        "simulation_mode": not settings.sage_live,
         "components": {
             "sage_odbc_reader": odbc_status,
             "sage_com_sdk_writer": {
                 "status": "ready",
-                "mode": "simulation" if settings.SAGE_SIMULATION_MODE else "live_com",
+                "mode": "live_com" if settings.sage_live else "simulation",
                 "transactions_executed": len(sdk_writer.transaction_log),
             },
             "in_memory_catalogs": {

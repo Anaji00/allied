@@ -80,3 +80,16 @@ def test_lead_cold_outreach_generation():
     assert response.status_code == 200
     assert "Marcus" in response.json()["email_body"]
     assert "Allied 300XL" in response.json()["email_body"]
+
+
+def test_lead_outreach_needs_no_contact_address():
+    """Target accounts have no email on file; drafting must not require one."""
+    payload = {
+        "name": "Marcus Vance",
+        "title": "Plant Maintenance Manager",
+        "company": "Owens Corning",
+        "industry": "Asphalt & Roofing",
+    }
+    response = client.post("/api/v1/leads/outreach", json=payload)
+    assert response.status_code == 200, response.text
+    assert "Marcus" in response.json()["email_body"]

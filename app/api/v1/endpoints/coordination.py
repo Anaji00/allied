@@ -1,5 +1,6 @@
-"""Projects and milestones (from monday), design-doc submissions, shipments, alerts."""
+"""Projects and milestones (from monday), design-doc submissions, shipments, vendor jobs, RFQs, alerts."""
 
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -11,11 +12,14 @@ from app.core.database import SessionLocal
 from app.core.security import require_admin, require_manager, require_operator, require_viewer
 from app.models.db_models import StaffContactDB
 from app.services.coordination import notify as alerts
-from app.services.coordination import projects, schedule, shipments
+from app.services.coordination import projects, rfqs, schedule, shipments, vendors
 
 projects_router = APIRouter()
 shipments_router = APIRouter()
 alerts_router = APIRouter()
+vendors_router = APIRouter()
+rfqs_router = APIRouter()
+autopilot_router = APIRouter()
 
 
 def _fail(exc: Exception):
@@ -166,6 +170,121 @@ def forwarder_email(body: ForwarderEmail, user: dict = Depends(require_operator)
 
 
 # ---------------------------------------------------------------------------
+# Vendor jobs
+# ---------------------------------------------------------------------------
+
+
+@vendors_router.get("", summary="Vendor jobs, whether each still lets its project finish on time, and vendor scores")
+def vendor_overview(include_shipped: bool = False, _user: dict = Depends(require_viewer)):
+    data = vendors.overview(include_shipped=include_shipped)
+    data["last_sync"] = schedule.coordination_worker.last.get("vendor_sync")
+    return data
+
+
+@vendors_router.post("/sync", summary="Read the monday vendor board now")
+def vendor_sync(_user: dict = Depends(require_operator)):
+    try:
+        return vendors.sync_vendor_board()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not read monday: {exc}")
+
+
+class VendorJobIn(BaseModel):
+    vendor: Optional[str] = None
+    description: Optional[str] = None
+    project_item_id: Optional[str] = None
+    po_number: Optional[str] = None
+    owner_email: Optional[str] = None
+    status: Optional[str] = None
+    mode: Optional[Literal["SEA", "AIR", "TRUCK"]] = None
+    ordered_on: Optional[str] = Field(None, description="PO placed, YYYY-MM-DD")
+    requested_on: Optional[str] = Field(None, description="Ship date Allied asked for")
+    acknowledged_on: Optional[str] = Field(None, description="Vendor confirmed the PO")
+    quoted_lead_days: Optional[int] = Field(None, ge=0, le=730)
+    promised_on: Optional[str] = Field(None, description="Vendor's promised ship date")
+    shipped_on: Optional[str] = Field(None, description="Actually shipped")
+    need_by: Optional[str] = Field(None, description="Override the ship-by date worked out from the project")
+    note: Optional[str] = None
+
+
+@vendors_router.post("", summary="Add a vendor job")
+def add_vendor_job(body: VendorJobIn, user: dict = Depends(require_operator)):
+    if not (body.vendor or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Say which vendor.")
+    try:
+        return vendors.create(body.model_dump(exclude_none=True), user)
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+
+
+@vendors_router.patch("/{job_id}", summary="Record a vendor date or detail")
+def update_vendor_job(job_id: int, body: VendorJobIn, user: dict = Depends(require_operator)):
+    try:
+        return vendors.update(job_id, body.model_dump(exclude_none=True), user)
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+
+
+# ---------------------------------------------------------------------------
+# RFQs
+# ---------------------------------------------------------------------------
+
+
+@rfqs_router.get("", summary="Customer RFQs with their quote deadlines")
+def rfq_list(open_only: bool = True, mine: bool = False, user: dict = Depends(require_viewer)):
+    return {"rfqs": rfqs.list_rfqs(open_only, user.get("email") if mine else None),
+            "metrics": rfqs.metrics(), "statuses": rfqs.STATUSES,
+            "targets": {"ack_hours": settings.RFQ_ACK_BUSINESS_HOURS, "simple_days": settings.RFQ_QUOTE_DAYS_SIMPLE,
+                        "standard_days": settings.RFQ_QUOTE_DAYS_STANDARD, "complex_days": settings.RFQ_QUOTE_DAYS_COMPLEX}}
+
+
+@rfqs_router.get("/{rfq_id}", summary="One RFQ with its history")
+def rfq_detail(rfq_id: str, _user: dict = Depends(require_viewer)):
+    try:
+        return rfqs.get(rfq_id)
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+
+
+class RfqIn(BaseModel):
+    customer: str = ""
+    contact_email: Optional[str] = None
+    subject: str = ""
+    summary: Optional[str] = None
+    complexity: Literal["SIMPLE", "STANDARD", "COMPLEX"] = "STANDARD"
+    owner_email: Optional[str] = None
+    received_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+@rfqs_router.post("", summary="Log an RFQ")
+def add_rfq(body: RfqIn, user: dict = Depends(require_operator)):
+    try:
+        return rfqs.create(body.model_dump(), user)
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+
+
+class RfqUpdate(BaseModel):
+    status: Optional[str] = None
+    reason: Optional[str] = None
+    owner_email: Optional[str] = None
+    vendor: Optional[str] = None
+    complexity: Optional[Literal["SIMPLE", "STANDARD", "COMPLEX"]] = None
+    quote_number: Optional[str] = None
+    quote_amount: Optional[str] = None
+    note: Optional[str] = None
+
+
+@rfqs_router.patch("/{rfq_id}", summary="Move an RFQ along, assign it, or record the quote")
+def update_rfq(rfq_id: str, body: RfqUpdate, user: dict = Depends(require_operator)):
+    try:
+        return rfqs.update(rfq_id, body.model_dump(exclude_none=True), user)
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+
+
+# ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
 
@@ -249,3 +368,37 @@ def send_summary_now(_user: dict = Depends(require_manager)):
 @alerts_router.post("/check-now", summary="Run the behind-schedule checks now")
 def check_now(_user: dict = Depends(require_operator)):
     return schedule.run_checks()
+
+
+# ---------------------------------------------------------------------------
+# Autopilot
+# ---------------------------------------------------------------------------
+
+
+class AutopilotRun(BaseModel):
+    play: Optional[str] = None
+    dry_run: bool = True  # say what would happen; a real run must ask for it
+
+
+@autopilot_router.get("", summary="What the autopilot does on its own, each play's mode and last run")
+def autopilot_status(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import autopilot
+
+    return autopilot.status()
+
+
+@autopilot_router.get("/events", summary="Recent events and what each reaction did")
+def autopilot_events(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import events
+
+    return events.status()
+
+
+@autopilot_router.post("/run", summary="Run the autopilot now (a dry run unless dry_run is false)")
+def autopilot_run(body: AutopilotRun, _user: dict = Depends(require_admin)) -> Dict[str, Any]:
+    from app.services.coordination import autopilot
+
+    try:
+        return autopilot.run(body.play, dry_run=body.dry_run)
+    except LookupError as exc:
+        _fail(exc)

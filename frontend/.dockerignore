@@ -1,8 +1,14 @@
-node_modules/
-.next/
-.git/
-.gitignore
-*.md
+# Built inside the image, or local only. .env files hold secrets and are never copied.
+node_modules
+.next
+out
+coverage
+*.tsbuildinfo
+npm-debug.log*
 .env
 .env.*
 !.env.example
+.git
+.gitignore
+Dockerfile
+.dockerignore

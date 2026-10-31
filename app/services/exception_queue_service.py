@@ -168,18 +168,90 @@ class ExceptionQueueService:
         )
 
     def add_exception(self, item: ExceptionItem) -> ExceptionItem:
-        """Adds a new exception into the queue and persists to DB."""
-        with self._lock:
-            self._queue[item.exception_id] = item
-        logger.info(f"Queued exception [{item.exception_id}]: {item.title}")
+        """Adds an exception to the queue and persists it to the DB.
 
-        try:
-            with SessionLocal() as db:
-                DatabaseService.persist_exception(db, item.model_dump())
-        except Exception as e:
-            logger.warning(f"Could not persist exception to DB: {e}")
+        A problem that is already open (same type, reference and party) is
+        refreshed in place rather than raised again: rechecking the same bill
+        used to add a fresh copy of "Invoice already approved once" each time.
+        """
+        with self._lock:
+            existing = self._find_open(item)
+            if existing is not None and existing.exception_id != item.exception_id:
+                logger.info(f"Exception [{existing.exception_id}] already open; refreshed: {item.title}")
+                item = item.model_copy(
+                    update={"exception_id": existing.exception_id, "created_at": existing.created_at}
+                )
+            else:
+                logger.info(f"Queued exception [{item.exception_id}]: {item.title}")
+            self._queue[item.exception_id] = item
+
+            try:
+                with SessionLocal() as db:
+                    DatabaseService.persist_exception(db, item.model_dump())
+            except Exception as e:
+                logger.warning(f"Could not persist exception to DB: {e}")
 
         return item
+
+    def _find_open(self, item: ExceptionItem) -> Optional[ExceptionItem]:
+        """The open exception that `item` repeats, from the DB or else memory."""
+        try:
+            with SessionLocal() as db:
+                row = DatabaseService.find_open_exception(
+                    db, item.exception_type, item.reference_id, item.vendor_or_customer
+                )
+            if row:
+                return self._row_to_item(row)
+        except Exception as e:
+            logger.warning(f"Could not check for an open duplicate exception: {e}")
+        return next(
+            (
+                q for q in self._queue.values()
+                if q.status.upper() == "OPEN"
+                and q.exception_type == item.exception_type
+                and q.reference_id == item.reference_id
+                and q.vendor_or_customer == item.vendor_or_customer
+            ),
+            None,
+        )
+
+    def close_open(self, exception_type: str, reference_id: str, note: str, actor_email: str = "system") -> List[str]:
+        """Resolves the open exceptions of one type for one reference.
+
+        For work finished somewhere other than the queue, such as a monday
+        event replayed from the event log, so the queue doesn't keep asking.
+        """
+        closed: List[str] = []
+        try:
+            with SessionLocal() as db:
+                rows = [
+                    r for r in DatabaseService.get_exceptions(db, status_filter="OPEN", limit=1000)
+                    if r["exception_type"] == exception_type and r["reference_id"] == reference_id
+                ]
+                for r in rows:
+                    DatabaseService.resolve_exception(
+                        db, exception_id=r["exception_id"], action_type=MANUAL_RESOLUTION_ACTION,
+                        resolution_notes=note, actor_email=actor_email,
+                    )
+                    closed.append(r["exception_id"])
+        except Exception as e:
+            logger.warning(f"Could not close exceptions for {reference_id}: {e}")
+        with self._lock:
+            for q in self._queue.values():
+                if q.status.upper() == "OPEN" and q.exception_type == exception_type and q.reference_id == reference_id:
+                    q.status = "RESOLVED"
+                    q.resolution_notes = f"{MANUAL_RESOLUTION_ACTION}: {note}"
+                    if q.exception_id not in closed:
+                        closed.append(q.exception_id)
+        for exception_id in closed:
+            audit_log(
+                action="EXCEPTION_RESOLVED",
+                resource_type="EXCEPTION",
+                resource_id=exception_id,
+                actor_email=actor_email,
+                detail=note,
+            )
+        return closed
 
     def resolve_exception(self, exception_id: str, request: ResolveExceptionRequest, actor_email: str = "system") -> Dict[str, Any]:
         """Marks an exception resolved and performs the requested system action."""
@@ -388,6 +460,24 @@ class ExceptionQueueService:
                 actor_email=actor_email,
             )
             return f"NCR {item.reference_id} dispositioned: {action}.", True
+
+        if action == "REPLAY_MONDAY_EVENT":
+            from app.services import monday_events
+
+            match = re.fullmatch(r"MONDAY-EVT-(\d+)", item.reference_id or "")
+            if not match:
+                return f"No monday event on {item.reference_id}; nothing replayed.", False
+            event_id = int(match.group(1))
+            if not monday_events.replay(event_id):
+                return f"monday event #{event_id} is not waiting for a replay; nothing replayed.", False
+            audit_log(
+                action="REPLAY",
+                resource_type="MONDAY_EVENT",
+                resource_id=str(event_id),
+                actor_email=actor_email,
+                detail=f"Replayed from exception {item.exception_id}",
+            )
+            return f"monday event #{event_id} is queued to run again.", True
 
         if action == "ACCEPT_PRICE_SURCHARGE":
             # A decision, and recording it is the action. Releasing the payment

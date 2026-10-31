@@ -68,3 +68,28 @@ def test_dispatch_does_not_claim_a_packing_slip_that_does_not_exist():
         assert result.dispatch_status == "DISPATCHED_PACKING_LIST_MISSING"
         assert "Official Allied Packing List" not in result.customer_notification_email
         assert "separate cover" in result.customer_notification_email
+
+
+def test_dispatch_route_dispatches_and_requires_an_operator(client, auth_enforced):
+    """POST /orders/{so}/dispatch is the real route the frontend calls."""
+    from tests.conftest import staff_token
+
+    _cache_order("SO-12931")
+    body = {"carrier_name": "TForce Freight", "tracking_number": "PRO-12931"}
+
+    viewer = staff_token("dispatch-viewer@allied.com", "VIEWER")
+    denied = client.post("/api/v1/orders/SO-12931/dispatch", json=body,
+                         headers={"Authorization": f"Bearer {viewer}"})
+    assert denied.status_code == 403
+
+    operator = staff_token("dispatch-operator@allied.com", "OPERATOR")
+    res = client.post("/api/v1/orders/SO-12931/dispatch", json=body,
+                      headers={"Authorization": f"Bearer {operator}"})
+    assert res.status_code == 200, res.text
+    assert res.json()["sales_order_number"] == "SO-12931"
+    assert "PRO-12931" in res.json()["customer_notification_email"]
+
+
+def test_dispatch_route_refuses_path_tricks(client):
+    res = client.post("/api/v1/orders/..%5C..%5Cx/dispatch", json={})
+    assert res.status_code in (400, 404)

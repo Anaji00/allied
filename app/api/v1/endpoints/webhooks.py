@@ -123,6 +123,16 @@ def replay_monday_event(
         actor_role=user.get("role", "SYSTEM"),
         detail="Operator replayed a monday.com webhook event",
     )
+    # The stuck-event problem raised for it is handled now; if the replay
+    # fails again, a fresh one is raised.
+    from app.services.exception_queue_service import exception_queue_service
+
+    exception_queue_service.close_open(
+        "MONDAY_EVENT_FAILED",
+        f"MONDAY-EVT-{event_id}",
+        "Replayed from the monday event log",
+        actor_email=user.get("email", "system"),
+    )
     background_tasks.add_task(monday_events.process_event, event_id)
     return {"status": "requeued", "event_id": event_id}
 
@@ -142,6 +152,12 @@ def monday_setup(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
             "label": "Board writes switched on",
             "ok": settings.monday_live,
             "hint": "Set MONDAY_SIMULATION_MODE=False once the token and board are confirmed.",
+        },
+        {
+            "key": "read_only",
+            "label": "Read-only (no changes sent to monday)",
+            "ok": settings.MONDAY_READ_ONLY,
+            "hint": "MONDAY_READ_ONLY is off: the app can change monday data. Keep it on except for a test board.",
         },
         {
             "key": "auth",

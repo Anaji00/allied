@@ -8,7 +8,7 @@ from app.core.security import require_operator, require_viewer
 from app.core.uploads import ensure_upload_dir, resolve_upload_path, safe_upload_name
 from app.models.rag_chat import KnowledgeBaseSummary, RAGChatResponse, RAGQueryRequest, ActionExecutionRequest
 from app.services.rag_service import rag_service
-from app.services.lead_agent import LeadAgent
+from app.services.lead_agent import LeadAgent, LeadSearchUnavailable
 from app.services.monday_client import MondayClient
 from app.services.sales_service import SalesService
 from app.core.container import get_orchestrator
@@ -277,6 +277,8 @@ def execute_system_action(
         else:
             return {"status": "unsupported", "detail": f"Action {request.action_type} not supported directly yet."}
 
+    except LeadSearchUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

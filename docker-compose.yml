@@ -1,54 +1,69 @@
 # ==============================================================================
-# Allied Welding Systems Universal Engine — Docker Compose
+# Allied Operations: backend (FastAPI) + frontend (Next.js)
+#
+#   docker compose up --build -d       build and start
+#   docker compose logs -f backend     follow the backend
+#   docker compose down                stop (data/ and output/ are kept)
+#
+# The frontend is the one public port. It proxies /api/v1 to the backend, so
+# monday webhooks and the browser both go through http://<host>:3000/api/v1/...
+# The backend listens on this machine only (127.0.0.1:8000) for local tools.
+#
+# data/ holds the live database, uploads and the master catalog; output/ holds
+# packing slips. Both are bind-mounted and survive rebuilds. On a Linux host the
+# container user (uid 10001) must be able to write them:
+#   mkdir -p data output && sudo chown -R 10001:10001 data output
 # ==============================================================================
 
+name: allied
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
-  # FastAPI Backend (Python 3.11 / Uvicorn)
   backend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: allied-backend
-    ports:
-      - "8000:8000"
+    image: allied-backend:latest
     env_file:
       - path: .env
         required: false
-    # The image runs as uid/gid 10001 (allieduser). A host bind mount keeps the
-    # host's ownership, so these directories must be writable by that uid or
-    # SQLite and the packing-slip writer will fail with EACCES:
-    #   mkdir -p data output && sudo chown -R 10001:10001 data output
-    user: "10001:10001"
+    environment:
+      # Safe unless .env (or the shell) says otherwise: monday is read in
+      # simulation and can never be written to while MONDAY_READ_ONLY is on.
+      MONDAY_SIMULATION_MODE: ${MONDAY_SIMULATION_MODE:-True}
+      MONDAY_READ_ONLY: ${MONDAY_READ_ONLY:-True}
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ./output:/app/output
       - ./data:/app/data
+      - ./output:/app/output
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - app-network
+    stop_grace_period: 30s
+    logging: *logging
+    networks: [allied]
 
-  # Next.js Frontend (Node 20 / Standalone)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: allied-frontend
+      args:
+        # Built into the /api/v1 rewrite; this is the backend's name on the compose network.
+        NEXT_PUBLIC_API_URL: http://backend:8000
+    image: allied-frontend:latest
     ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    networks:
-      - app-network
+    logging: *logging
+    networks: [allied]
 
 networks:
-  app-network:
+  allied:
     driver: bridge

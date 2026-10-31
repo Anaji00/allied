@@ -231,6 +231,94 @@ class ShipmentEventDB(Base):
     raw = Column(JSON, nullable=True)
 
 
+class VendorJobDB(Base):
+    """One vendor PO for a project: when it was asked for, promised and shipped.
+
+    The first promise is kept apart from the current one, so a vendor that
+    keeps re-promising does not look on time. Every date change is in history.
+    """
+
+    __tablename__ = "vendor_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    monday_item_id = Column(String(32), nullable=True, unique=True)
+    board_id = Column(String(32), nullable=True)
+    vendor = Column(String(256), nullable=False, index=True)
+    description = Column(String(512), nullable=False, default="")
+    project_item_id = Column(String(32), nullable=True, index=True)
+    po_number = Column(String(64), nullable=True)
+    owner_email = Column(String(256), nullable=True)
+    status = Column(String(128), nullable=True)
+    mode = Column(String(8), nullable=False, default="SEA")
+    ordered_on = Column(String(10), nullable=True)
+    requested_on = Column(String(10), nullable=True)
+    acknowledged_on = Column(String(10), nullable=True)
+    quoted_lead_days = Column(Integer, nullable=True)
+    promised_original = Column(String(10), nullable=True)
+    promised_on = Column(String(10), nullable=True)
+    shipped_on = Column(String(10), nullable=True)
+    need_by = Column(String(10), nullable=True)  # set by hand; otherwise worked out from the project
+    customer_due = Column(String(10), nullable=True)  # the customer's date, when no project is linked
+    slips = Column(Integer, nullable=False, default=0)
+    history = Column(JSON, nullable=False, default=list)
+    source = Column(String(16), nullable=False, default="manual")  # manual, monday
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RfqDB(Base):
+    """A customer's request for a quote, and how long the quote took."""
+
+    __tablename__ = "rfqs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    number = Column(String(24), nullable=False, unique=True)
+    email_id = Column(String(256), nullable=True, unique=True)
+    monday_item_id = Column(String(32), nullable=True, unique=True, index=True)  # from the Open RFQs board
+    customer = Column(String(256), nullable=False, default="")
+    contact_email = Column(String(256), nullable=True)
+    subject = Column(String(512), nullable=False, default="")
+    summary = Column(Text, nullable=True)
+    items = Column(JSON, nullable=False, default=list)
+    complexity = Column(String(16), nullable=False, default="STANDARD")  # SIMPLE, STANDARD, COMPLEX
+    status = Column(String(20), nullable=False, default="NEW", index=True)
+    owner_email = Column(String(256), nullable=True, index=True)
+    vendor = Column(String(256), nullable=True)
+    received_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    ack_due_at = Column(DateTime(timezone=True), nullable=False)
+    due_at = Column(DateTime(timezone=True), nullable=False)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    waiting_since = Column(DateTime(timezone=True), nullable=True)   # asked a vendor for a price
+    paused_at = Column(DateTime(timezone=True), nullable=True)       # waiting on the customer
+    paused_hours = Column(Numeric(9, 2), nullable=False, default=0)
+    quoted_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    quote_number = Column(String(64), nullable=True)
+    quote_amount = Column(MONEY, nullable=True)
+    close_reason = Column(String(256), nullable=True)
+    notes = Column(Text, nullable=True)
+    history = Column(JSON, nullable=False, default=list)
+    source = Column(String(16), nullable=False, default="manual")  # manual, email, assistant
+    created_by = Column(String(256), nullable=True)
+
+
+class AssistantActionDB(Base):
+    """A change the assistant proposed. Nothing happens until its user confirms it."""
+
+    __tablename__ = "assistant_actions"
+
+    id = Column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    user_email = Column(String(256), nullable=False, index=True)
+    user_role = Column(String(32), nullable=False)
+    tool = Column(String(128), nullable=False)
+    args = Column(JSON, nullable=False, default=dict)
+    summary = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default="PENDING")  # PENDING, DONE, FAILED, CANCELLED, EXPIRED
+    result = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class SubmissionDB(Base):
     """Design documents submitted against a milestone, and the review of them.
 

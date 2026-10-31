@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from app.config import settings
 from app.core.logging import logger
 from app.services.coordination import notify as alerts
-from app.services.coordination import projects, shipments
+from app.services.coordination import projects, rfqs, shipments, vendors
 
 
 def _when(days: int) -> str:
@@ -51,7 +51,8 @@ def _docs_note(m: Dict[str, Any]) -> str:
 
 def run_checks(on: Optional[date] = None) -> Dict[str, int]:
     on = on or alerts.today()
-    sent = {"due_soon": 0, "overdue": 0, "escalated": 0, "review_waiting": 0, "project_overdue": 0, "shipments": 0}
+    sent = {"due_soon": 0, "overdue": 0, "escalated": 0, "review_waiting": 0, "project_overdue": 0, "shipments": 0,
+            "unplanned": 0}
     data = projects.overview(on)
 
     def count(key: str, nid: Optional[int]) -> None:
@@ -161,6 +162,53 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                                     "Arrange pickup now.", severity="critical", to=owner, include_leadership=True,
                                     link=link, project_item_id=s.get("project_item_id"))
             count("shipments", nid)
+    sent["unplanned"] = _unplanned_checks(data, on)
+    for name, check in (("vendors", vendors.run_checks), ("rfqs", rfqs.run_checks)):
+        try:
+            sent.update(check(on) if name == "vendors" else check())
+        except Exception as exc:  # noqa: BLE001 - one failing check must not stop the others
+            logger.error(f"{name} checks failed: {exc}")
+    return sent
+
+
+def unplanned(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Open milestones nobody can be chased on: no due date, or no owner."""
+    out = []
+    for p in data["projects"]:
+        if p.get("done"):
+            continue
+        for m in p["milestones"]:
+            if m["state"] in ("done", "waiting_review"):
+                continue
+            missing = [w for w, gap in (("no due date", not m.get("due_date")), ("no owner", not m.get("owner_emails"))) if gap]
+            if missing:
+                out.append({**m, "project_name": p["name"], "missing": missing})
+    return out
+
+
+def _unplanned_checks(data: Dict[str, Any], on: date) -> int:
+    """One list a week per owner (leadership gets the unowned ones), not one alert per job."""
+    if not settings.MILESTONE_UNPLANNED_ALERTS:
+        return 0
+    week = f"{on.isocalendar()[0]}w{on.isocalendar()[1]}"
+    by_owner: Dict[str, List[Dict[str, Any]]] = {}
+    for m in unplanned(data):
+        for owner in m.get("owner_emails") or ["nobody"]:
+            by_owner.setdefault(owner, []).append(m)
+    alerts.resolve_missing(("ms-unplanned:",), (f"{o}|{week}" for o in by_owner))
+    sent = 0
+    for owner, jobs in by_owner.items():
+        lines = [f"- {m['name']} ({m['project_name']}): {', '.join(m['missing'])}" for m in jobs[:40]]
+        if len(jobs) > 40:
+            lines.append(f"- and {len(jobs) - 40} more")
+        whose = "Nobody is assigned to these open jobs" if owner == "nobody" else "These open jobs are yours"
+        nid = alerts.notify(
+            "milestone_unplanned", f"ms-unplanned:{owner}|{week}:",
+            f"{len(jobs)} open job(s) with no due date or owner",
+            f"{whose}, but they can't be tracked until they have a due date and an owner on monday.\n" + "\n".join(lines),
+            to=[] if owner == "nobody" else [owner], include_leadership=owner == "nobody", link="/projects",
+        )
+        sent += int(bool(nid))
     return sent
 
 
@@ -187,29 +235,42 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
                 review.append(f"{line} (submitted by {m['latest_submission']['submitted_by']})")
     ships = [f"{shipments._label(s)}: {', '.join(s['flags'])}" for s in shipments.list_shipments(False) if s["flags"]]
     open_alerts = [n for n in alerts.inbox(open_only=True, limit=200) if n["severity"] == "critical"]
+    vendor_risks = vendors.risks_for_summary(on)
+    late_quotes = rfqs.for_summary()
+    gaps = unplanned(data)
+    from app.services.coordination import autopilot
+
+    drafts = autopilot.drafts_waiting()
+    no_plan = [f"{m['project_name']}: {m['name']} ({', '.join(m['missing'])})" for m in gaps[:10]]
+    if len(gaps) > 10:
+        no_plan.append(f"and {len(gaps) - 10} more on the Projects screen")
     sections = [
-        ("Behind schedule", behind), ("Shipments needing attention", ships),
+        ("Behind schedule", behind), ("Vendors putting projects at risk", vendor_risks),
+        ("Quotes overdue or not acknowledged", late_quotes), ("Shipments needing attention", ships),
         ("Waiting for review", review), ("Due in the next 7 days", due_week),
+        ("Open with no due date or owner", no_plan),
+        ("Messages drafted, waiting for approval in the assistant", drafts),
     ]
     lines = [f"Allied operations summary for {on:%A %d %B %Y}", ""]
     if not any(items for _, items in sections):
         lines.append("Nothing is behind schedule. Nothing needs you today.")
     for title, items in sections:
         if items:
-            lines.append(f"{title} ({len(items)})")
+            lines.append(f"{title} ({len(gaps) if items is no_plan else len(items)})")
             lines += [f"  - {i}" for i in items]
             lines.append("")
     if open_alerts:
         lines.append(f"{len(open_alerts)} urgent alert(s) are not yet acknowledged in the app.")
-    return {"behind": behind, "shipments": ships, "review": review, "due_week": due_week,
+    return {"behind": behind, "vendors": vendor_risks, "rfqs": late_quotes, "shipments": ships,
+            "review": review, "due_week": due_week, "unplanned": len(gaps), "drafts": len(drafts),
             "urgent_open": len(open_alerts), "text": "\n".join(lines).strip()}
 
 
 def send_summary(on: Optional[date] = None, force: bool = False) -> Optional[int]:
     on = on or alerts.today()
     s = build_summary(on)
-    headline = (f"{len(s['behind'])} behind, {len(s['shipments'])} shipment issue(s), "
-                f"{len(s['review'])} waiting for review")
+    headline = (f"{len(s['behind'])} behind, {len(s['vendors'])} vendor risk(s), {len(s['rfqs'])} late quote(s), "
+                f"{len(s['shipments'])} shipment issue(s), {len(s['review'])} waiting for review")
     return alerts.notify(
         "daily_summary", f"summary:{on}{':manual:' + str(time.time()) if force else ''}",
         f"Daily summary: {headline}", s["text"], to=alerts.summary_recipients(), link="/projects",
@@ -227,6 +288,8 @@ class CoordinationWorker:
         self._stop = threading.Event()
         self._next_sync = 0.0
         self._next_check = 0.0
+        self._next_autopilot = 0.0
+        self._next_change_check = 0.0
         self._summary_date: Optional[date] = None
         self.last: Dict[str, Any] = {}
 
@@ -258,17 +321,39 @@ class CoordinationWorker:
             now = time.monotonic()
             if settings.PROJECTS_POLL_SECONDS > 0 and now >= self._next_sync:
                 self._next_sync = now + max(60, settings.PROJECTS_POLL_SECONDS)
+                if settings.MONDAY_CHANGE_CHECK_SECONDS > 0:
+                    from app.services.coordination import changes
+
+                    # Note each board's last change first, so the change check only
+                    # reads boards that move after this full read.
+                    self._step("changes_mark", changes.changed)
+                    self._next_change_check = now + changes.interval()
                 self._step("sync", projects.sync_projects)
+                self._step("vendor_sync", vendors.sync_vendor_board)
+                if settings.MONDAY_RFQ_BOARD_ID:
+                    from app.services.coordination import autopilot
+
+                    self._step("rfq_board", lambda: autopilot.run("rfq_board"))
+            elif settings.MONDAY_CHANGE_CHECK_SECONDS > 0 and now >= self._next_change_check:
+                from app.services.coordination import changes
+
+                self._next_change_check = now + changes.interval()
+                self._step("changes", changes.check)
             if now >= self._next_check:
                 self._next_check = now + max(60, settings.SCHEDULE_CHECK_SECONDS)
                 self._step("checks", run_checks)
+            if settings.AUTOPILOT_ENABLED and now >= self._next_autopilot:
+                from app.services.coordination import autopilot
+
+                self._next_autopilot = now + max(300, settings.AUTOPILOT_SECONDS)
+                self._step("autopilot", lambda: {k: len(v["did"]) for k, v in autopilot.run()["plays"].items()})
             self._step("held", alerts.release_held)
             local = alerts.now_local()
             if local.weekday() < 5 and local.hour >= settings.DIGEST_HOUR and self._summary_date != local.date():
                 # The key per date also makes this once a day across restarts.
                 self._summary_date = local.date()
                 self._step("summary", send_summary)
-            self._stop.wait(60)
+            self._stop.wait(30)
 
 
 coordination_worker = CoordinationWorker()

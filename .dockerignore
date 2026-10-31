@@ -1,20 +1,13 @@
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.git/
-.gitignore
-.env
-.env.*
-!.env.example
-output/
-*.egg-info/
-dist/
-build/
-node_modules/
-frontend/.next/
-frontend/node_modules/
-*.md
-tests/
-.vscode/
-.idea/
+# The backend image needs only these. Everything else stays out of the build
+# context, above all .env (secrets), data/ (the live database, uploads) and
+# output/ (packing slips), which must never be baked into an image.
+*
+!app/
+!migrations/
+!alembic.ini
+!requirements.txt
+!docker/
+
+**/__pycache__
+**/*.py[co]
+**/.pytest_cache

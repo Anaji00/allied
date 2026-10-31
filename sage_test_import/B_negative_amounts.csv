@@ -1,0 +1,2 @@
+Customer ID,SO Number,Date,Customer PO,Number of Distributions,SO Distribution,Ship to Name,Ship to Address-Line One,Ship to City,Ship to State,Ship to Zipcode,Terms,Item ID,Description,Quantity,Unit Price,Amount,GL Account
+10221,TEST-0002,10/31/26,TEST-PO-1,1,1,Owens Corning Insulating Systems Canada LP,831 Hayter Rd NW,Edmonton,AB,T6S 1A1,Net 150 Days,OC755507,HAMMERMILL SCREEN 41in (TEST),2,-100.00,-200.00,40000-00-FAB

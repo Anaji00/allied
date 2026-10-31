@@ -9,6 +9,7 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 from concurrent.futures import ThreadPoolExecutor
 
 from pypdf import PdfReader
@@ -36,6 +37,18 @@ from app.models.documents import (
 )
 from app.services.entity_matcher import EntityMatcher, contains_term
 from app.core.container import get_entity_matcher
+
+
+def _new_order_link(customer: Optional[str], part: Optional[str], price: Any) -> str:
+    """The New order form, filled in with what the document says."""
+    params = {"new": "true"}
+    if customer:
+        params["customer"] = str(customer)
+    if part:
+        params["part"] = str(part)
+    if price not in (None, "", 0):
+        params["price"] = str(price)
+    return f"/orders?{urlencode(params)}"
 
 
 def get_tesseract_path() -> Optional[str]:
@@ -331,7 +344,7 @@ class DocumentScannerService:
                 ActionRoutingPayload(
                     target_action="STAGE_OPERATIONS",
                     label="Check this document by hand",
-                    route_url="/documents",
+                    route_url="/chat?tab=documents",
                     prefill_data={"filename": filename},
                 )
             ]
@@ -672,11 +685,13 @@ class DocumentScannerService:
             )
 
         first_item = line_items[0]
+        # Opens the New order form filled in from the PO; nothing is created
+        # until a person checks it there.
         actions.append(
             ActionRoutingPayload(
                 target_action="STAGE_SAGE_ORDER",
-                label="🚀 [Sage 50 + Monday] Stage Inbound Order (1 SO + Split POs)",
-                route_url=f"/chat?prompt=Process+inbound+order+{po_number}+for+{cust_name}",
+                label="Start an order from this PO",
+                route_url=_new_order_link(cust_name, first_item.item_id, first_item.unit_price),
                 prefill_data={
                     "customer_name": cust_name,
                     "customer_po_number": po_number,
@@ -686,14 +701,6 @@ class DocumentScannerService:
                     "quantity": str(first_item.quantity),
                     "unit_price": str(first_item.unit_price),
                 },
-            )
-        )
-        actions.append(
-            ActionRoutingPayload(
-                target_action="STAGE_OPERATIONS",
-                label="⚙️ Stage in Operations Workbench",
-                route_url="/operations",
-                prefill_data={"customer_name": cust_name, "customer_po_number": po_number},
             )
         )
 
@@ -830,8 +837,8 @@ class DocumentScannerService:
             actions.append(
                 ActionRoutingPayload(
                     target_action="REVIEW_RECONCILIATION",
-                    label="Open the invoice check",
-                    route_url="/reconciliation",
+                    label="Open supplier bills",
+                    route_url="/orders?tab=bills",
                     prefill_data={
                         "invoice_number": invoice_no,
                         "po_number": po_number,
@@ -844,8 +851,8 @@ class DocumentScannerService:
             actions.append(
                 ActionRoutingPayload(
                     target_action="STAGE_OPERATIONS",
-                    label="Check this invoice by hand",
-                    route_url="/reconciliation",
+                    label="Check this bill by hand",
+                    route_url="/orders?tab=bills",
                     prefill_data={"invoice_number": invoice_no, "po_number": po_number},
                 )
             )
@@ -1134,8 +1141,8 @@ class DocumentScannerService:
         actions.append(
             ActionRoutingPayload(
                 target_action="STAGE_OPERATIONS",
-                label="Stage in Operations Workbench",
-                route_url="/operations",
+                label="Start an order from this PO",
+                route_url="/orders",
                 prefill_data=prefill,
             )
         )
@@ -1144,11 +1151,8 @@ class DocumentScannerService:
             actions.append(
                 ActionRoutingPayload(
                     target_action="STAGE_SAGE_ORDER",
-                    label="Stage fabricated item as an order",
-                    route_url=(
-                        f"/orders/new?item_id={li.item_id}&price={li.unit_price}"
-                        f"&quantity=1&notes=Drawing+{dwg_no or 'UNKNOWN'}"
-                    ),
+                    label="Start an order for this part",
+                    route_url=_new_order_link(None, li.item_id, li.unit_price),
                     prefill_data={
                         "item_id": li.item_id,
                         "price": str(li.unit_price),
@@ -1207,11 +1211,9 @@ class DocumentScannerService:
         actions.append(
             ActionRoutingPayload(
                 target_action="REGISTER_MTR",
-                label="📜 Register in Certified MTR Vault & Generate CofC",
-                # Routed at the vault, which is where registering actually
-                # happens. This pointed at the customer portal, which never
-                # registered anything and no longer exists.
-                route_url="/compliance/vault",
+                label="Open this heat's mill certificate",
+                # The certificates screen, where a heat is looked up or registered.
+                route_url=f"/compliance/vault?{urlencode({'tab': 'certificates', 'heat': heat_no or ''})}",
                 prefill_data={"heat_number": heat_no, "carbon": str(c_val), "chromium": str(cr_val), "hardness": hardness_val},
             )
         )
@@ -1229,7 +1231,7 @@ class DocumentScannerService:
         actions: List[ActionRoutingPayload] = [
             ActionRoutingPayload(
                 target_action="RAG_INDEX",
-                label="🧠 Index Document into Enterprise RAG Knowledge",
+                label="Ask the assistant about it",
                 route_url="/chat",
                 prefill_data={"title": filename, "text": text[:500]},
             )

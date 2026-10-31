@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints import (
     ai,
+    assistant,
     auth,
     automation,
     audit,
@@ -43,8 +44,12 @@ api_v1_router.include_router(compliance.router, prefix="/compliance", tags=["Com
 api_v1_router.include_router(sales.router, prefix="/sales", tags=["Sales Pipeline & Predictive Wear"])
 api_v1_router.include_router(webhooks.router, prefix="/webhooks", tags=["Monday.com Webhooks"])
 api_v1_router.include_router(ai.router, prefix="/ai", tags=["AI Tools"])
+api_v1_router.include_router(assistant.router, prefix="/assistant", tags=["Assistant"])
 api_v1_router.include_router(coordination.projects_router, prefix="/projects", tags=["Projects & Milestones"])
 api_v1_router.include_router(coordination.shipments_router, prefix="/shipments", tags=["Shipments"])
 api_v1_router.include_router(coordination.alerts_router, prefix="/alerts", tags=["Staff Alerts"])
+api_v1_router.include_router(coordination.vendors_router, prefix="/vendors", tags=["Vendor Lead Times"])
+api_v1_router.include_router(coordination.rfqs_router, prefix="/rfqs", tags=["Customer RFQs"])
+api_v1_router.include_router(coordination.autopilot_router, prefix="/autopilot", tags=["Autopilot"])
 
 __all__ = ["api_v1_router"]

@@ -145,3 +145,39 @@ def test_rag_execute_outreach_email_action():
     assert "Tom Davis" in data["data"]["email_body"]
     assert "Allied Welding Systems" in data["data"]["email_body"]
 
+
+
+def test_copilot_uses_the_configured_ai_provider():
+    """The copilot asks the shared provider (Groq by default), not a hard-wired Ollama."""
+    from app.services.ai.providers import AIProvider, use_provider
+
+    class Fake(AIProvider):
+        name = "groq"
+
+        @property
+        def model(self):
+            return "test-model"
+
+        def text(self, system, prompt):
+            assert "USER QUESTION" in prompt
+            return "Answer from the configured engine."
+
+    use_provider(Fake())
+    try:
+        res = rag_service.answer_query(RAGQueryRequest(query="What is Allied 300XL?"))
+    finally:
+        use_provider(None)
+    assert res.model_used == "groq (test-model)"
+    assert "configured engine" in res.answer
+
+
+def test_copilot_falls_back_when_no_ai_is_available():
+    from app.services.ai.providers import AIProvider, use_provider
+
+    use_provider(AIProvider())  # AI_PROVIDER=off
+    try:
+        res = rag_service.answer_query(RAGQueryRequest(query="What is Allied 300XL?"))
+    finally:
+        use_provider(None)
+    assert res.model_used == "Deterministic Business Reasoning Engine"
+    assert res.answer

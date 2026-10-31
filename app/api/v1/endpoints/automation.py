@@ -75,14 +75,14 @@ def automation_status(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
         {
             "key": "sage_write",
             "name": "Written straight into Sage",
-            "live": not settings.SAGE_SIMULATION_MODE,
+            "live": settings.sage_live,
             "detail": (
                 "Orders are written directly into Sage."
-                if not settings.SAGE_SIMULATION_MODE
+                if settings.sage_live
                 else "Sage files are produced correctly; someone still clicks import."
             ),
             "saves_minutes": _LINK_MINUTES["sage_write"],
-            "needs": None if not settings.SAGE_SIMULATION_MODE else "Sage 50 desktop on this machine.",
+            "needs": None if settings.sage_live else "Sage 50 desktop on this machine.",
         },
         {
             # Not part of the per-order minutes: the board is how work is
@@ -123,7 +123,60 @@ def automation_status(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
         ),
         "mail": mail,
         "mailbox": inbox,
+        "workers": _workers(inbox),
     }
+
+
+_STEP_NAMES = {
+    "sync": "Read the monday projects board",
+    "vendor_sync": "Read the vendor board",
+    "checks": "Checked schedules and deadlines",
+    "held": "Released held alerts",
+    "summary": "Sent the daily summary",
+}
+
+
+def _workers(inbox: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The background loops: whether each runs, when it last worked, and its last error."""
+    from app.services.coordination.schedule import coordination_worker
+    from app.services.monday_events import monday_inbox_worker
+
+    steps = []
+    for key, name in _STEP_NAMES.items():
+        last = coordination_worker.last.get(key)
+        if last:
+            steps.append({"key": key, "name": name, "at": last.get("at"), "error": last.get("error")})
+    read = monday_inbox_worker.last_read or {}
+    return [
+        {
+            "key": "coordination",
+            "name": "Schedules, alerts and board reads",
+            "running": coordination_worker.running,
+            "last_at": max((s["at"] for s in steps if s["at"]), default=None),
+            "error": next((f"{s['name']}: {s['error']}" for s in steps if s["error"]), None),
+            "steps": steps,
+        },
+        {
+            "key": "monday_inbox",
+            "name": "monday changes and retries",
+            "running": monday_inbox_worker.running,
+            "last_at": monday_inbox_worker.last_sweep_at,
+            "error": read.get("error"),
+            "steps": [
+                {"key": "sweep", "name": "Ran waiting monday events", "at": monday_inbox_worker.last_sweep_at, "error": None},
+                {"key": "read", "name": "Read the boards for changes", "at": monday_inbox_worker.last_read_at, "error": read.get("error")},
+            ],
+        },
+        {
+            "key": "mailbox",
+            "name": "Order mailbox",
+            "running": bool(inbox.get("running")),
+            "last_at": inbox.get("last_poll_at"),
+            "error": inbox.get("last_error"),
+            "steps": [],
+            "detail": inbox.get("detail"),
+        },
+    ]
 
 
 @router.get("/outbox", summary="Mail the system has written")

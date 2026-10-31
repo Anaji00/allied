@@ -14,7 +14,7 @@ from app.models.sage import SagePurchaseOrder, SageSalesOrder
 # small Windows agent beside Sage that the bridge hands documents to; until
 # that exists, documents are numbered here and imported from the CSV batch.
 _LIVE_WRITE_UNAVAILABLE = (
-    "Direct Sage 50 writing is not implemented. Keep SAGE_SIMULATION_MODE=True: "
+    "Direct Sage 50 writing is not implemented. Keep SAGE_LIVE_CONNECTION=False: "
     "documents are numbered here and delivered through the Sage import files."
 )
 
@@ -42,7 +42,7 @@ class SageSDKWriter:
     _po_sequence: Optional[int] = None
 
     def __init__(self):
-        self.simulation_mode = settings.SAGE_SIMULATION_MODE
+        self.simulation_mode = not settings.sage_live
         self.transaction_log: List[Dict[str, Any]] = self._shared_transaction_log
 
     @classmethod

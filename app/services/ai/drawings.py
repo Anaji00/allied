@@ -109,7 +109,7 @@ def read_drawing(data: bytes, filename: str) -> Tuple[DrawingSpec, str]:
     if not provider.can_see_images:
         raise AIUnavailableError(
             f"{filename} has no readable text (it is a scan or image). Reading it needs a vision model: "
-            "run `ollama pull qwen2.5vl:7b` and set AI_VISION_MODEL=qwen2.5vl:7b."
+            "set GROQ_VISION_MODEL (Groq), or `ollama pull qwen2.5vl:7b` and AI_VISION_MODEL (Ollama)."
         )
     images = pdf_images(data) if is_pdf else [data]
     prompt = (

@@ -43,6 +43,24 @@ settings.OUTPUT_DIR = _TEST_TMP / "output"
 settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # Design-document submissions are stored under DB_DIR; keep test uploads out of data/.
 settings.DB_DIR = _TEST_TMP
+# Never call a real AI service from tests, even when .env holds a Groq key.
+settings.GROQ_API_KEY = ""
+settings.AI_FALLBACK_PROVIDER = ""
+# Tests build their own boards, so .env's board layout (Allied's real column
+# names and board ids) must not leak in. Every monday setting goes back to its
+# default, which also keeps simulation and read-only on.
+for _name, _field in type(settings).model_fields.items():
+    if _name.startswith(("MONDAY_", "PROJECT_", "MILESTONE_", "VENDOR_", "RFQ_BOARD_", "ORDERS_", "AUTOPILOT_"))             and _name != "MONDAY_API_URL":
+        setattr(settings, _name, _field.default)
+# Event reactions run inline in tests, so each test sees what its events did.
+settings.AUTOPILOT_EVENTS_ASYNC = False
+# Nothing in a test may reach a real person: mail, push, texts and chat hooks are off,
+# whatever .env holds.
+for _name in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_REDIRECT_ALL_TO", "LEADERSHIP_EMAILS",
+              "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM", "NTFY_URL", "NTFY_TOPIC", "NTFY_TOKEN",
+              "SLACK_WEBHOOK_URL", "TEAMS_WEBHOOK_URL"):
+    setattr(settings, _name, "")
+settings.EMAIL_SEND_ENABLED = False
 
 
 @pytest.fixture

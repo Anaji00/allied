@@ -15,7 +15,7 @@ class SageODBCReader:
 
     def __init__(self, entity_matcher: Optional[EntityMatcher] = None):
         self.entity_matcher = entity_matcher or get_entity_matcher()
-        self.simulation_mode = settings.SAGE_SIMULATION_MODE
+        self.simulation_mode = not settings.sage_live
 
     def test_connection(self) -> Dict[str, Any]:
         """Tests connectivity to ODBC DSN or validates simulation mode."""

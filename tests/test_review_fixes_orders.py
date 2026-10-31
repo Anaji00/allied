@@ -319,3 +319,22 @@ def test_purchase_orders_are_exported_once_and_can_be_put_back(client):
     assert resp.status_code == 200 and resp.json()["reset"] == [so]
     resp = client.get("/api/v1/sage/export/purchase-orders?only_new=true&mark_exported=true")
     assert so in resp.headers["X-Sage-Exported-Orders"].split(",")
+
+
+def test_purchase_order_rows_carry_line_counts(monkeypatch):
+    from app.services.sage_export_service import sage_export_service
+
+    order = {
+        "sales_order_number": "SO-DIST", "po_date": "2026-10-27", "customer_name": "Acme",
+        "shipping_address": "1 Rd, Austin, TX 78701",
+        "purchase_orders": {"NIBROCK": "PO-N-1", "KWS": "PO-K-1"},
+        "line_items": [
+            {"item_id": "PLATE-1", "quantity": 2, "unit_cost": 10, "preferred_vendor": "NIBROCK"},
+            {"item_id": "SCREW-1", "quantity": 1, "unit_cost": 99, "preferred_vendor": "KWS"},
+            {"item_id": "PLATE-2", "quantity": 3, "unit_cost": 12, "preferred_vendor": "NIBROCK"},
+        ],
+    }
+    monkeypatch.setattr(sage_export_service, "_get_orders", lambda facility=None, only_new=False, kind="po": [order])
+    rows = list(csv.DictReader(io.StringIO(sage_export_service.generate_purchase_orders_csv())))
+    got = [(r["PO Number"], r["Number of Distributions"], r["PO Distribution"], r["Item ID"]) for r in rows]
+    assert got == [("PO-N-1", "2", "1", "PLATE-1"), ("PO-N-1", "2", "2", "PLATE-2"), ("PO-K-1", "1", "1", "SCREW-1")]

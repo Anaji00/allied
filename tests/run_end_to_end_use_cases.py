@@ -56,6 +56,8 @@ settings.ALIAS_DICT_PATH = _RUN_DATA / "alias_dictionary.json"
 settings.OUTPUT_DIR = _RUN_TMP / "output"
 settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 settings.DB_DIR = _RUN_TMP  # design-document submissions land here, not in data/
+settings.GROQ_API_KEY = ""  # scenarios never call a real AI service
+settings.AI_FALLBACK_PROVIDER = ""
 
 from fastapi.testclient import TestClient
 

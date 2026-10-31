@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# OpenAPI schema exported by `npm run api:types`; only the generated types are kept
+openapi.json
