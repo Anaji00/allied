@@ -15,15 +15,16 @@ PO) or are entered here. Date changes made here are written back to monday.
 """
 
 import statistics
+import threading
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.core.audit import audit_log
 from app.core.database import SessionLocal
 from app.core.logging import logger
-from app.models.db_models import MondayProjectDB, VendorJobDB
+from app.models.db_models import MondayMilestoneDB, MondayProjectDB, VendorJobDB
 from app.services.coordination import notify as alerts
 from app.services.coordination import workdays
 from app.services.coordination.shipments import _date_ok, _day
@@ -126,9 +127,18 @@ def scorecard(jobs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str
 
 
 def _projects() -> Dict[str, Dict[str, Any]]:
+    """What a vendor job can be linked to on monday: a project item, or a milestone item.
+
+    On a groups-layout board (Allied's Engineering Team Board) each drawing job is a
+    milestone and the "project" is just its group, so a vendor job links to the job
+    itself and takes its date from the job's due date."""
     with SessionLocal() as db:
-        return {p.item_id: {"name": p.name, "due_date": p.due_date, "owner_emails": p.owner_emails or [], "done": p.done}
-                for p in db.query(MondayProjectDB)}
+        out = {p.item_id: {"name": p.name, "due_date": p.due_date, "owner_emails": p.owner_emails or [], "done": p.done}
+               for p in db.query(MondayProjectDB)}
+        for m in db.query(MondayMilestoneDB):
+            out.setdefault(m.item_id, {"name": m.name, "due_date": m.due_date, "owner_emails": m.owner_emails or [],
+                                       "done": m.done, "drawing": True, "status": m.status})
+        return out
 
 
 def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]], on: date) -> Dict[str, Any]:
@@ -209,11 +219,104 @@ def _all() -> List[Dict[str, Any]]:
         return [_as_dict(j) for j in db.query(VendorJobDB).order_by(VendorJobDB.id)]
 
 
+def _blocked_by(j: Dict[str, Any], p: Optional[Dict[str, Any]], on: date) -> Optional[Dict[str, Any]]:
+    """An order linked to a drawing job that isn't finished waits on that drawing. A drawing
+    already past its date makes the order late too, so it is said in the order's reasons."""
+    if not p or not p.get("drawing") or p.get("done") or j.get("state") == "shipped":
+        return None
+    due = _day(p.get("due_date"))
+    overdue = bool(due and due < on)
+    j["reasons"].append(f"waits on drawing {p['name']} ({p.get('status') or 'not started'}"
+                        + (f", {(on - due).days} days past its date {due.isoformat()})" if overdue
+                           else f", due {due.isoformat()})" if due else ")"))
+    return {"item_id": j.get("project_item_id"), "name": p["name"], "status": p.get("status"),
+            "due_date": p.get("due_date"), "overdue": overdue}
+
+
+def _local_day(at) -> str:
+    """Allied's own calendar day for a stored UTC time (an evening send is still today)."""
+    return workdays.as_utc(at).astimezone(alerts.now_local().tzinfo).date().isoformat()
+
+
+def _chasers() -> Dict[int, Dict[str, Optional[str]]]:
+    """For each vendor job, when a chaser was last sent and last drafted (from the confirm queue)."""
+    from app.models.db_models import AssistantActionDB
+
+    out: Dict[int, Dict[str, Optional[str]]] = {}
+    with SessionLocal() as db:
+        rows = (db.query(AssistantActionDB.args, AssistantActionDB.status, AssistantActionDB.created_at,
+                         AssistantActionDB.decided_at)
+                .filter(AssistantActionDB.user_role == "AUTOPILOT", AssistantActionDB.tool == "send_email",
+                        # A year covers any open PO; older drafts would only make every read slower.
+                        AssistantActionDB.created_at >= workdays.now() - timedelta(days=365)).all())
+    for args, status, created, decided in rows:
+        jid = (args or {}).get("_job_id")
+        if jid is None:
+            continue
+        seen = out.setdefault(int(jid), {"last": None, "drafted": None, "for_po": set(), "undated": []})
+        # A follow-up counts for the PO it was about, once it was sent, is waiting, or a person
+        # cancelled it. One that failed or lapsed doesn't (it is offered again). Chasers from the
+        # old weekly rule carry no _po_date: they count for the PO only if made on or after its date.
+        if status in ("DONE", "PENDING", "RUNNING", "CANCELLED"):
+            if (args or {}).get("_po_date"):
+                seen["for_po"].add(args["_po_date"])
+            else:
+                seen["undated"].append(_local_day(created))
+        if status == "DONE" and decided:
+            seen["last"] = max(filter(None, [seen["last"], _local_day(decided)]))
+        elif status == "PENDING":
+            seen["drafted"] = max(filter(None, [seen["drafted"], _local_day(created)]))
+    return out
+
+
+def follow_up_wait(j: Dict[str, Any]) -> Tuple[int, str]:
+    """Days after its PO an order may go unshipped before the vendor is followed up, and why that many."""
+    if j.get("follow_up_days"):
+        return int(j["follow_up_days"]), "set by hand"
+    if j.get("quoted_lead_days"):
+        return int(j["quoted_lead_days"]), "the vendor's quoted lead time"
+    return settings.VENDOR_FOLLOWUP_DAYS, "the usual wait; no lead time was quoted"
+
+
+def first_follow_up(j: Dict[str, Any]) -> Optional[date]:
+    """The day the vendor is first followed up: the PO date plus the wait, or the day after the
+    vendor's confirmed ship date if that is later (no point asking a question it already answered).
+    None once shipped, or with no PO date."""
+    ordered = _day(j.get("ordered_on"))
+    if not ordered or _day(j.get("shipped_on")):
+        return None
+    first = ordered + timedelta(days=follow_up_wait(j)[0])
+    promised = _day(j.get("promised_on"))
+    return max(first, promised + timedelta(days=1)) if promised else first
+
+
+def _follow_up(j: Dict[str, Any], chased: Dict[str, Any], on: date) -> Optional[Dict[str, Any]]:
+    """When this order's vendor is followed up: only once the order hasn't shipped its wait after the
+    PO (set by hand, else the quoted lead time, else VENDOR_FOLLOWUP_DAYS). The first follow-up is
+    drafted on its own; after it, staff follow up again on command from the board."""
+    first = first_follow_up(j)
+    if first is None:
+        return None
+    days, basis = follow_up_wait(j)
+    started = j["ordered_on"] in (chased.get("for_po") or set()) or any(
+        made >= j["ordered_on"] for made in chased.get("undated") or [])
+    reached = first <= on
+    if first > _day(j["ordered_on"]) + timedelta(days=days):
+        basis = f"{basis}; held until after the vendor's confirmed date {j['promised_on']}"
+    reason = (f"PO sent {j['ordered_on']}, not shipped after {(on - _day(j['ordered_on'])).days} days (wait {days} days: {basis})"
+              if reached else f"first follow-up {first.isoformat()} ({basis})")
+    return {"last": chased.get("last"), "drafted": chased.get("drafted"), "first": first.isoformat(),
+            "wait_days": days, "wait_basis": basis, "manual_days": j.get("follow_up_days"),
+            "next": None if started else first.isoformat(), "due": reached and not started,
+            "started": started, "owner": j.get("owner_email"), "reason": reason}
+
+
 def overview(on: Optional[date] = None, include_shipped: bool = False) -> Dict[str, Any]:
     on = on or alerts.today()
     jobs = _all()
     cards = scorecard(jobs)
     projects = _projects()
+    chased = _chasers()
     out = []
     counts = {"late": 0, "will_miss": 0, "at_risk": 0, "no_ack": 0, "checkin": 0}
     for j in jobs:
@@ -221,6 +324,8 @@ def overview(on: Optional[date] = None, include_shipped: bool = False) -> Dict[s
         j.update(assess(j, p, cards.get(j["vendor"]), on))
         j["project_name"] = p["name"] if p else None
         j["project_due"] = p["due_date"] if p else None
+        j["blocked_by"] = _blocked_by(j, p, on)
+        j["follow_up"] = _follow_up(j, chased.get(j["id"], {}), on)
         if j["state"] in counts:
             counts[j["state"]] += 1
         if include_shipped or j["state"] != "shipped":
@@ -255,6 +360,13 @@ def _apply(row: VendorJobDB, data: Dict[str, Any], who: str) -> List[str]:
             notes.append(f"{f.replace('_', ' ')} set")
     if data.get("mode"):
         row.mode = _mode(data["mode"])
+    if "follow_up_days" in data and data["follow_up_days"] is not None:
+        days = int(data["follow_up_days"])
+        if days < 0 or days > 365:
+            raise ValueError("Follow-up wait must be 0-365 days (0 goes back to the usual wait).")
+        if (days or None) != row.follow_up_days:
+            row.follow_up_days = days or None
+            notes.append(f"follow-up wait {'set to ' + str(days) + ' days' if days else 'back to the usual'}")
     if "quoted_lead_days" in data and data["quoted_lead_days"] not in (None, ""):
         days = int(data["quoted_lead_days"])
         if days < 0 or days > 730:
@@ -281,6 +393,12 @@ def _apply(row: VendorJobDB, data: Dict[str, Any], who: str) -> List[str]:
     return notes
 
 
+# One change to vendor orders at a time (a person's save, the board read). Each save rewrites
+# the order's history list, so two at once could lose one person's note. One process runs the
+# app, so a lock here is enough.
+_write_lock = threading.RLock()
+
+
 def create(data: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     who = user.get("email", "system")
     with SessionLocal() as db:
@@ -297,6 +415,11 @@ def create(data: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def update(job_id: int, data: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    with _write_lock:
+        return _update(job_id, data, user)
+
+
+def _update(job_id: int, data: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     who = user.get("email", "system")
     with SessionLocal() as db:
         row = db.get(VendorJobDB, job_id)
@@ -330,7 +453,8 @@ _COLUMN_FOR = {
 def _write_back(job: Dict[str, Any], changed: Dict[str, str]) -> None:
     """monday stays the record: dates changed here go onto the vendor board item."""
     values = {getattr(settings, _COLUMN_FOR[f]): {"date": v} for f, v in changed.items()
-              if f in _COLUMN_FOR and getattr(settings, _COLUMN_FOR[f])}
+              if f in _COLUMN_FOR and getattr(settings, _COLUMN_FOR[f])
+              and not getattr(settings, _COLUMN_FOR[f]).startswith("formula")}  # monday works formulas out itself
     if not values or not job.get("board_id"):
         return
     try:
@@ -376,7 +500,32 @@ def _linked_id(cv: Optional[Dict[str, Any]]) -> Optional[str]:
     return str(ids[0].get("linkedPulseId")) if ids and isinstance(ids[0], dict) else None
 
 
+def _person_promise_holds(row: VendorJobDB, from_board: Optional[str]) -> bool:
+    """A ship date a person confirmed in the app (say, from the vendor's reply) is kept while
+    monday still shows the date it showed then. monday is read only, so its VENDOR ETS can't
+    be updated from here; once someone changes it on monday, monday's date wins again.
+
+    The person's own change ("promised on OLD -> NEW") records OLD, which is what the board
+    showed at that moment."""
+    if not from_board:
+        return False
+    for h in reversed(row.history or []):
+        for change in str(h.get("change") or "").split("; "):
+            if not change.startswith("promised on ") or "->" not in change:
+                continue
+            if h.get("by") == "monday":
+                return False  # the board moved since; its date stands
+            board_then = change[len("promised on "):].split("->")[0].strip()
+            return from_board == board_then and from_board != row.promised_on
+    return False
+
+
 def sync_vendor_board(client=None) -> Dict[str, Any]:
+    with _write_lock:
+        return _sync_vendor_board(client)
+
+
+def _sync_vendor_board(client=None) -> Dict[str, Any]:
     """Refreshes vendor jobs from the monday vendor board. Reads only."""
     from app.services.coordination.projects import _client, _cols, _due, _people, _text, _user_emails
     from app.services.monday_client import fetch_projects_board
@@ -390,6 +539,10 @@ def sync_vendor_board(client=None) -> Dict[str, Any]:
     users = _user_emails(client)
     items = fetch_projects_board(client, int(board), with_subitems=False)
     last_board.update(board=board, at=time.monotonic(), items=items)
+    if items:
+        from app.services.coordination import boards
+
+        boards.remember(board, items, client, "vendors")  # every order, not only the open ones the app tracks
     done = {p.strip().casefold() for p in settings.VENDOR_DONE_LABELS.split(",") if p.strip()}
     open_groups = {g.strip().casefold() for g in settings.VENDOR_OPEN_GROUPS.split(",") if g.strip()}
     seen, added, changed = set(), 0, 0
@@ -436,6 +589,8 @@ def sync_vendor_board(client=None) -> Dict[str, Any]:
                 db.add(row)
                 added += 1
             before = row.status if row.id else None
+            if row.id and _person_promise_holds(row, data.get("promised_on")):
+                data.pop("promised_on", None)
             try:
                 notes = _apply(row, {k: v for k, v in data.items() if v is not None}, "monday")
             except ValueError as exc:
@@ -490,6 +645,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
     sent = {"vendor_late": 0, "vendor_risk": 0, "vendor_noack": 0, "vendor_checkin": 0}
     alerts.resolve_missing(ALERT_KEYS, (str(j["id"]) for j in data["jobs"] if j["state"] != "shipped"))
     projects = _projects()
+    digest: Dict[str, List[Dict[str, Any]]] = {}
     for j in data["jobs"]:
         jid, state = j["id"], j["state"]
         keep = {"late": "vendor-late:", "will_miss": "vendor-risk:", "at_risk": "vendor-risk:",
@@ -515,13 +671,19 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                 + (f"\n\n{note}" if (note := _chaser_note(j)) else ""),
                 severity="warning", to=owners + project_owners,
                 include_leadership=late >= settings.ESCALATE_AFTER_DAYS or bool(j.get("slack_days") is not None and j["slack_days"] < 0),
-                link=link, project_item_id=j.get("project_item_id"),
+                link=link, project_item_id=j.get("project_item_id"), replaces=[f"vendor-late:{jid}:"],
             )
             sent["vendor_late"] += int(bool(nid))
             if nid:
                 from app.services.coordination import events
 
                 events.emit("vendor_job.late", {"job": j}, f"{label} is {late} days late")
+        elif state in ("will_miss", "at_risk") and not p:
+            # No project linked: only the customer's date is at stake. These go in one
+            # daily list per person rather than one alert each.
+            alerts.resolve([f"vendor-risk:{jid}:"])
+            for who in owners or [""]:
+                digest.setdefault(who, []).append({**j, "label": label})
         elif state in ("will_miss", "at_risk"):
             critical = state == "will_miss"
             nid = alerts.notify(
@@ -531,6 +693,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                 "Options: expedite with the vendor, split the shipment, or move to air freight.",
                 severity="critical" if critical else "warning", to=owners + project_owners,
                 include_leadership=critical, link=link, project_item_id=j.get("project_item_id"),
+                replaces=[f"vendor-risk:{jid}:"],
             )
             sent["vendor_risk"] += int(bool(nid))
         elif state == "no_ack":
@@ -538,7 +701,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                 "vendor_noack", f"vendor-noack:{jid}:{j['ordered_on']}",
                 f"Vendor has not confirmed PO: {label}",
                 f"{why}\nAsk {j['vendor']} to confirm the PO and give a ship date.",
-                to=owners, link=link, project_item_id=j.get("project_item_id"),
+                to=owners, link=link, project_item_id=j.get("project_item_id"), replaces=[f"vendor-noack:{jid}:"],
             )
             sent["vendor_noack"] += int(bool(nid))
         elif state == "checkin":
@@ -546,9 +709,24 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                 "vendor_checkin", f"vendor-checkin:{jid}:{j['promised_on']}",
                 f"Reconfirm with vendor: {label} ships {j['promised_on']}",
                 f"{j['vendor']} is due to ship {j['promised_on']}{on_project}. Ask them to confirm it is still on.",
-                to=owners, link=link, project_item_id=j.get("project_item_id"),
+                to=owners, link=link, project_item_id=j.get("project_item_id"), replaces=[f"vendor-checkin:{jid}:"],
             )
             sent["vendor_checkin"] += int(bool(nid))
+    for who, jobs in digest.items():
+        miss = [x for x in jobs if x["state"] == "will_miss"]
+        lines = [f"- {x['label']}: {'; '.join(x['reasons']) or x['state']} (ship by {x['need_by']})"
+                 for x in sorted(jobs, key=lambda x: (x["state"] != "will_miss", x.get("need_by") or ""))]
+        nid = alerts.notify(
+            "vendor_risk", f"vendor-risk-digest:{who or 'unowned'}:{on.isoformat()}",
+            f"{len(jobs)} order(s) at risk of missing the customer's date" + (f", {len(miss)} will miss" if miss else ""),
+            "Not linked to a project, so checked against the customer's date:\n" + "\n".join(lines[:60])
+            + "\n\nOptions: expedite with the vendor, split the shipment, or move to air freight. "
+              "Link an order to its drawing job to get its own alert.",
+            severity="warning", to=[who] if who else [], include_leadership=not who, link="/vendors?state=will_miss",
+        )
+        sent["vendor_risk"] += int(bool(nid))
+    # Earlier days' lists, and lists for people with nothing at risk any more, are closed.
+    alerts.resolve_others("vendor-risk-digest:", {f"vendor-risk-digest:{who or 'unowned'}:{on.isoformat()}" for who in digest})
     return sent
 
 
@@ -564,3 +742,78 @@ def find(text: str) -> List[Dict[str, Any]]:
     t = (text or "").casefold()
     return [j for j in overview(include_shipped=True)["jobs"]
             if not t or any(t in str(j.get(k) or "").casefold() for k in ("vendor", "description", "po_number", "project_name"))]
+
+
+# ---------------------------------------------------------------------------
+# Linking orders to their drawing jobs
+# ---------------------------------------------------------------------------
+
+_STOP = {"the", "and", "for", "with", "inc", "llc", "ltd", "corp", "co", "of", "to", "a", "an", "new", "rev", "po",
+         "job", "order", "drawing", "drawings", "assy", "assembly"}
+
+
+def _tokens(text: str) -> set:
+    import re
+
+    return {t for t in re.findall(r"[a-z0-9]+", (text or "").casefold()) if len(t) >= 3 and t not in _STOP}
+
+
+def _same(name: str) -> str:
+    """A customer name reduced for comparing: "OC-Irving" and "OC - IRVING" are the same plant."""
+    import re
+
+    return re.sub(r"[^a-z0-9]", "", (name or "").casefold())
+
+
+def link_suggestions(limit: int = 3, min_score: float = 0.25) -> List[Dict[str, Any]]:
+    """For each open order with no drawing linked, the unfinished drawing jobs it most
+    likely belongs to: same customer, and words shared between the two names. Saving a
+    link is a person's call (PATCH the order with project_item_id); nothing is linked here."""
+    from app.services.coordination import boards
+
+    customers: Dict[str, str] = {}
+    if settings.MONDAY_PROJECTS_BOARD_ID:
+        try:
+            view = boards.view(settings.MONDAY_PROJECTS_BOARD_ID, hide_done=True)
+            col = next((c["id"] for c in view["columns"] if "customer" in c["title"].casefold()), None)
+            if col:
+                customers = {r["id"]: r["values"].get(col) or "" for r in view["items"]}
+        except LookupError:
+            pass
+    with SessionLocal() as db:
+        drawings = [{"item_id": m.item_id, "name": m.name, "status": m.status, "due_date": m.due_date}
+                    for m in db.query(MondayMilestoneDB).filter(MondayMilestoneDB.done.is_(False))]
+    for d in drawings:
+        d["customer"] = customers.get(d["item_id"], "")
+        d["_name"] = _tokens(d["name"])
+        d["_cust"] = _same(d["customer"])
+    out = []
+    for j in overview()["jobs"]:
+        if j.get("project_item_id"):
+            continue
+        # The orders board names an order "CUSTOMER - what it is".
+        head, _, rest = (j.get("description") or "").partition(" - ")
+        customer = _same(head) if rest else ""
+        words = _tokens(rest or head)
+        if not words:
+            continue
+        scored = []
+        for d in drawings:
+            if customer and d["_cust"] and customer != d["_cust"]:
+                continue  # a drawing for another customer (or another of its plants)
+            shared = words & d["_name"]
+            if not shared:
+                continue
+            score = len(shared) / max(1, min(len(words), len(d["_name"])))
+            if customer and customer == d["_cust"]:
+                score += 0.5
+            if score >= min_score:
+                scored.append({"item_id": d["item_id"], "name": d["name"], "customer": d["customer"] or None,
+                               "status": d["status"], "due_date": d["due_date"], "score": round(min(score, 1.5), 2),
+                               "shared": sorted(shared)})
+        if scored:
+            scored.sort(key=lambda s: -s["score"])
+            out.append({"job_id": j["id"], "vendor": j["vendor"], "po_number": j.get("po_number"),
+                        "description": j.get("description"), "state": j["state"], "suggestions": scored[:limit]})
+    out.sort(key=lambda x: -x["suggestions"][0]["score"])
+    return out

@@ -5,7 +5,7 @@ import { parseAsInteger, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2, Plus } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { Field, FilterChips, NativeSelect, PanelHeading } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -79,7 +79,7 @@ const STATUS_LABEL: Record<string, string> = {
   LOST: 'Lost',
   NO_BID: 'Not quoted',
 };
-const STATE: Record<string, { label: string; tone: Tone }> = {
+export const STATE: Record<string, { label: string; tone: Tone }> = {
   overdue: { label: 'Overdue', tone: 'bad' },
   ack_overdue: { label: 'Not acknowledged', tone: 'bad' },
   due_soon: { label: 'Due soon', tone: 'warn' },
@@ -207,6 +207,7 @@ export function RfqsView() {
               columns={columns}
               data={rows}
               getRowId={(r) => String(r.id)}
+              recordName={(r) => recordKey('rfq', r.id)}
               selectedId={id != null ? String(id) : null}
               onSelect={open}
               minWidth={900}
@@ -225,7 +226,7 @@ export function RfqsView() {
             </p>
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} title={selected ? <span className="font-mono">{selected.number}</span> : ''} description={selected?.customer ?? undefined}>
+        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} recordName={selected ? recordKey('rfq', selected.id) : undefined} title={selected ? <span className="font-mono">{selected.number}</span> : ''} description={selected?.customer ?? undefined}>
           {selected && <RfqDetail key={`${selected.id}-${selected.history?.length}`} rfq={selected} canEdit={canEdit} />}
         </DetailPanel>
       </div>

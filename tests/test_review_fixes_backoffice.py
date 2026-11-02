@@ -352,20 +352,16 @@ def test_dispute_notice_that_was_not_sent_leaves_exception_open():
     assert exception_queue_service._queue[item.exception_id].status == "OPEN"
 
 
-def test_price_override_requires_and_uses_an_explicit_price():
-    from app.services.vendor_reprice import vendor_reprice_service
-
+def test_the_old_price_override_action_no_longer_does_anything_by_itself():
+    """Vendor repricing was dropped. An older item that still offers it stays open, saying
+    plainly that nothing was done, until someone resolves it by hand."""
     item = _exc()
-    with pytest.raises(ValueError):
-        exception_queue_service.resolve_exception(
-            item.exception_id, ResolveExceptionRequest(action_type="OVERRIDE_PRICE_CHECK")
-        )
     res = exception_queue_service.resolve_exception(
         item.exception_id,
         ResolveExceptionRequest(action_type="OVERRIDE_PRICE_CHECK", new_unit_price=Decimal("112.50")),
     )
-    assert res["status"] == "success"
-    assert vendor_reprice_service._price_registry["TESTRF-SKU-77"]["unit_cost"] == 112.50
+    assert res["action_completed"] is False
+    assert exception_queue_service._queue[item.exception_id].status == "OPEN"
 
 
 def test_manual_resolution_is_always_available():

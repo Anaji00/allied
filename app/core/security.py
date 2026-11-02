@@ -11,6 +11,7 @@ Provides:
 import hashlib
 import hmac
 import threading
+from starlette.concurrency import run_in_threadpool
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -115,7 +116,7 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
     email = payload.get("sub", "")
-    role = _live_role(email)
+    role = await run_in_threadpool(_live_role, email)  # may query the database on a cache miss
 
     return {
         "email": email,

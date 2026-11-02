@@ -31,7 +31,6 @@ from app.services.packing_slips import PackingSlipGenerator
 from app.services.sage_odbc import SageODBCReader
 from app.services.sage_sdk_writer import SageSDKWriter
 from app.services.sales_service import SalesService
-from app.services.vendor_reprice import VendorRepriceHaltError, vendor_reprice_service
 from app.services.entity_matcher import EntityMatcher
 from app.core.container import get_entity_matcher, get_monday_client, get_mtr_service, get_packing_slip_generator
 
@@ -63,7 +62,6 @@ class OrderOrchestrator:
         self.sales_service = sales_service or SalesService(matcher=self.entity_matcher)
         # Shared across orchestrators so a price approved in the operations
         # console unblocks every entry point, not just the one that raised it.
-        self.vendor_reprice = vendor_reprice_service
 
     @staticmethod
     def resolve_facility_and_currency(shipping_address: str, vendors: List[str]) -> Tuple[str, str]:
@@ -89,7 +87,7 @@ class OrderOrchestrator:
         return facility, currency
 
     @staticmethod
-    def _find_existing_order(customer_po_number: str) -> Optional[Dict[str, Any]]:
+    def _find_existing_order(customer_po_number: str, customer_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Returns an already-committed order for this customer PO, if any.
 
         Deliberately queries the database only. The in-memory cache also holds
@@ -109,11 +107,10 @@ class OrderOrchestrator:
 
             with SessionLocal() as db:
                 # Normalised on both sides: " po-1 " and "PO-1" are one PO.
-                row = (
-                    db.query(OrderDB)
-                    .filter(func.upper(func.trim(OrderDB.customer_po_number)) == po)
-                    .first()
-                )
+                query = db.query(OrderDB).filter(func.upper(func.trim(OrderDB.customer_po_number)) == po)
+                if customer_id:  # two customers can use the same PO number
+                    query = query.filter(OrderDB.customer_id == str(customer_id))
+                row = query.first()
                 if row:
                     return {
                         "order_id": row.order_id,
@@ -176,12 +173,24 @@ class OrderOrchestrator:
         """
         if not request.line_items:
             raise DualSidedTransactionError("Inbound order must contain at least one line item.")
+        from app.core.keyed_lock import keyed_lock
 
+        # The same PO arriving twice at once (the email and the webhook, a double submit) waits
+        # here for the first; it then finds the order already committed and returns that.
+        # Keyed by the matched customer, as the duplicate check is, so two spellings of one
+        # customer ("Owens Corning", "Owens Corning Insulation") share the lock.
+        matched, _ = self.entity_matcher.match_customer(request.customer_name)
+        with keyed_lock("customer-po", f"{matched.get('customer_id') or request.customer_name}|{request.customer_po_number}"):
+            return self._process(request, pulse_id, actor_email, board_id)
+
+    def _process(self, request: InboundOrderRequest, pulse_id: Optional[int], actor_email: str,
+                 board_id: Optional[Any]) -> DualSidedResult:
         # Idempotency: a customer PO is committed once. The webhook redelivers,
         # the email daemon can see the same message twice, and users retry
         # submissions -- each of which previously raised a second sales order
         # and a second set of vendor POs for the same purchase.
-        existing = self._find_existing_order(request.customer_po_number)
+        matched_customer, _ = self.entity_matcher.match_customer(request.customer_name)
+        existing = self._find_existing_order(request.customer_po_number, matched_customer.get("customer_id"))
         if existing:
             logger.info(
                 f"Customer PO #{request.customer_po_number} is already committed as "
@@ -272,15 +281,6 @@ class OrderOrchestrator:
             if v not in vendor_partition:
                 vendor_partition[v] = []
             vendor_partition[v].append(resolved_line)
-
-        # 2d. Vendor Repricing Check
-        # Immediately after we figure out who the vendors are and what we're buying,
-        # we validate if the pricing in our catalog is stale.
-        try:
-            self.vendor_reprice.validate_pricing_freshness(vendor_partition, request.customer_po_number)
-        except VendorRepriceHaltError as halt_err:
-            logger.error(f"Orchestration halted for {order_id}: {halt_err}")
-            raise DualSidedTransactionError(str(halt_err))
 
         # 3. Determine Order Archetype
         if has_drawings:

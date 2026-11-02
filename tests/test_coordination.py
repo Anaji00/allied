@@ -284,6 +284,7 @@ def test_channels_follow_severity_and_quiet_hours(monkeypatch):
         db.add(StaffContactDB(email=email, name="Lead", role_tag="leadership", phone="+12055550100",
                               channels=["email", "sms", "push"], daily_summary=True, active=True))
         db.commit()
+    alerts.forget_contacts()  # added straight to the database, not through the Alerts screen
     sent = {"sms": 0, "push": 0}
     monkeypatch.setattr(alerts, "_sms", lambda *a: sent.__setitem__("sms", sent["sms"] + 1) or "sent")
     monkeypatch.setattr(alerts, "_push", lambda *a: sent.__setitem__("push", sent["push"] + 1) or "sent")

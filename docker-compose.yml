@@ -7,7 +7,7 @@
 #
 # The frontend is the one public port. It proxies /api/v1 to the backend, so
 # monday webhooks and the browser both go through http://<host>:3000/api/v1/...
-# The backend listens on this machine only (127.0.0.1:8000) for local tools.
+# The backend listens on this machine only (127.0.0.1:8000, or BACKEND_PORT) for local tools.
 #
 # data/ holds the live database, uploads and the master catalog; output/ holds
 # packing slips. Both are bind-mounted and survive rebuilds. On a Linux host the
@@ -37,15 +37,24 @@ services:
       # simulation and can never be written to while MONDAY_READ_ONLY is on.
       MONDAY_SIMULATION_MODE: ${MONDAY_SIMULATION_MODE:-True}
       MONDAY_READ_ONLY: ${MONDAY_READ_ONLY:-True}
+      # Container paths always win over .env, which may hold this machine's own (e.g. C:\...) paths.
+      DATA_DIR: /app/data/catalog
+      MASTER_ITEMS_PATH: /app/data/catalog/master_items.csv
+      MASTER_CUSTOMERS_PATH: /app/data/catalog/master_customers.csv
+      MASTER_VENDORS_PATH: /app/data/catalog/master_vendors.csv
+      ALIAS_DICT_PATH: /app/data/catalog/alias_dictionary.json
+      OUTPUT_DIR: /app/output
+      DB_DIR: /app/data
     ports:
-      - "127.0.0.1:8000:8000"
+      # BACKEND_PORT if 8000 is taken on this machine (the frontend reaches the backend inside Docker either way).
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
       - ./output:/app/output
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *logging
-    networks: [allied]
+    networks: [ allied ]
 
   frontend:
     build:
@@ -56,14 +65,40 @@ services:
         NEXT_PUBLIC_API_URL: http://backend:8000
     image: allied-frontend:latest
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      # Next.js listens on 3000 inside the container; FRONTEND_PORT is the port on this machine.
+      - "${FRONTEND_PORT:-3001}:3000"
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
     logging: *logging
-    networks: [allied]
+    networks: [ allied ]
+
+  https:
+    # HTTPS for phones on the office network (deploy/Caddyfile). Set ALLIED_HTTPS_SITES to every
+    # address people use, e.g. "https://localhost, https://192.168.12.235", and ALLIED_DEFAULT_SNI
+    # to the IP address phones open. Phones install the root certificate once (README).
+    image: caddy:2.8.4-alpine
+    environment:
+      ALLIED_HTTPS_SITES: ${ALLIED_HTTPS_SITES:-https://localhost}
+      ALLIED_DEFAULT_SNI: ${ALLIED_DEFAULT_SNI:-localhost}
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddy's certificate authority lives here: kept across rebuilds, so phones trust it only once.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+    logging: *logging
+    networks: [ allied ]
 
 networks:
   allied:
     driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

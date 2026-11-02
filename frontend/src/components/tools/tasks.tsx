@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { executeSystemAction } from '@/lib/api';
+import { ProposalCard, proposalOf, type Outcome, type Proposal } from './proposal';
 
 
 type Spec = {
@@ -24,17 +25,6 @@ type Spec = {
 // for: the old task runner filled gaps with sample values (a supplier, a part,
 // a PO number), so a blank form quietly checked the wrong thing.
 const TASKS: Spec[] = [
-  {
-    type: 'EXECUTE_VENDOR_REPRICE',
-    title: 'Is a supplier’s price still current?',
-    effect: 'Checks the price on file is under 60 days old. If it’s stale, an urgent request for a new price is written to the supplier.',
-    fields: [
-      { key: 'vendor', label: 'Supplier', placeholder: 'NIBROCK' },
-      { key: 'item_id', label: 'Part number', placeholder: 'PLATE-300XL-38' },
-      { key: 'po_number', label: 'PO it’s for' },
-    ],
-    submit: 'Check the price',
-  },
   {
     type: 'EXECUTE_INGEST_RFQ_EMAIL',
     title: 'Read a customer’s email into an order',
@@ -76,6 +66,9 @@ export function Tasks() {
 
 function TaskForm({ spec }: { spec: Spec }) {
   const [values, setValues] = useState<Record<string, string>>({});
+  // A step that changes something comes back as a proposal; a lookup answers at once.
+  const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
   const run = useMutation({
     mutationFn: async () => {
       const payload = Object.fromEntries(
@@ -85,6 +78,11 @@ function TaskForm({ spec }: { spec: Spec }) {
       );
       return (await executeSystemAction(spec.type, payload)) as any;
     },
+    onMutate: () => {
+      setProposal(null);
+      setOutcome(null);
+    },
+    onSuccess: (res) => setProposal(proposalOf(res)),
   });
   const ready = spec.fields.every((f) => f.optional || (values[f.key] ?? '').trim());
   const res = run.data;
@@ -125,7 +123,19 @@ function TaskForm({ spec }: { spec: Spec }) {
           {run.error.message}
         </p>
       )}
-      {res && <Result res={res} />}
+      {proposal ? (
+        <ProposalCard
+          proposal={proposal}
+          onOutcome={(o) => {
+            setProposal(null);
+            setOutcome(o);
+          }}
+        />
+      ) : outcome ? (
+        <Result res={{ status: outcome.status === 'DONE' ? 'success' : outcome.status.toLowerCase(), detail: outcome.text, data: outcome.data }} />
+      ) : (
+        res && !proposalOf(res) && <Result res={res} />
+      )}
     </form>
   );
 }

@@ -87,23 +87,18 @@ def test_cache_api_endpoints():
     assert vend_resp.json()["vendor_id"] == "NIBROCK"
 
 
-def test_rag_execute_vendor_reprice_action():
-    """Verify EXECUTE_VENDOR_REPRICE tool execution via Copilot."""
-    resp = client.post(
-        "/api/v1/chat/execute-action",
-        json={
-            "action_type": "EXECUTE_VENDOR_REPRICE",
-            "payload": {
-                "vendor": "NIBROCK",
-                "item_id": "PLATE-300XL-38",
-                "po_number": "PO-TEST-REPRICE",
-            },
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] in ["success", "halted_for_reprice"]
-    assert "freshness" in data
+def _confirm(proposal):
+    """Copilot changes come back as a card; confirming it carries the action out."""
+    assert proposal["status"] == "needs_confirmation"
+    done = client.post(f"/api/v1/assistant/actions/{proposal['action']['id']}", json={"confirm": True}).json()
+    assert done["status"] == "DONE", done
+    return done["result"]["data"]
+
+
+def test_vendor_repricing_is_no_longer_a_copilot_action():
+    resp = client.post("/api/v1/chat/execute-action",
+                       json={"action_type": "EXECUTE_VENDOR_REPRICE", "payload": {"vendor": "NIBROCK"}})
+    assert resp.status_code == 200 and resp.json()["status"] == "unsupported"
 
 
 def test_rag_execute_crm_form_request_action():
@@ -119,9 +114,8 @@ def test_rag_execute_crm_form_request_action():
         },
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "success"
-    assert "form_link" in data["data"]
+    data = _confirm(resp.json())
+    assert "form_link" in data
 
 
 def test_rag_execute_outreach_email_action():

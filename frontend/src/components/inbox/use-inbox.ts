@@ -7,13 +7,14 @@ import { api, ApiError, ok } from '@/lib/api/client';
 import { dateTime, money, words } from '@/lib/format';
 import type { Role } from '@/lib/nav';
 
-// The Inbox merges four queues that used to live on four pages: my alerts,
-// problems on orders (exceptions), AI results waiting for approval, and
-// monday.com board changes that failed. Design reviews arrive as alerts.
+// The Inbox merges five queues that used to live on separate pages: my alerts,
+// problems on orders (exceptions), AI results waiting for approval, messages the
+// automations drafted for me to send, and monday.com board changes that failed.
+// Design reviews arrive as alerts.
 
 export type Severity = 'critical' | 'warning' | 'info';
 export type Group = 'approvals' | 'problems' | 'schedule';
-export type Source = 'alerts' | 'problems' | 'ai' | 'monday';
+export type Source = 'alerts' | 'problems' | 'ai' | 'drafts' | 'monday';
 
 export type InboxAction = {
   id: string;
@@ -21,13 +22,11 @@ export type InboxAction = {
   /** Shown in the toast: "Approved: …". */
   verb: string;
   primary?: boolean;
-  hotkey?: 'a' | 'r';
+  hotkey?: 'a' | 'r' | 'x';
   minRole: Role;
   /** Sent after the undo window; `keepalive` when the tab is closing. */
   commit?: (keepalive: boolean) => Promise<unknown>;
   href?: string;
-  /** Needs a value typed first (the new unit price on a price check). */
-  needsPrice?: boolean;
 };
 
 export type InboxItem = {
@@ -48,6 +47,8 @@ export type InboxItem = {
   output?: unknown;
   /** The AI tool behind an approval, so its result renders in its own shape. */
   feature?: string;
+  /** Drafts: what would go out, why it was drafted, and its kind (for deciding a whole kind at once). */
+  draft?: { id: string; kind: string; email?: { to?: string; subject?: string; body?: string }; why: string[] };
 };
 
 type Alert = {
@@ -84,6 +85,16 @@ type Suggestion = {
   created_at?: string | null;
   created_by?: string | null;
 };
+/** A message or change an automation drafted for this person to send or cancel. */
+type Draft = {
+  id: string;
+  tool: string;
+  summary: string;
+  kind?: string | null;
+  args?: Record<string, unknown> | null;
+  why?: string[] | null;
+  created_at?: string | null;
+};
 type MondayEvent = {
   id: number;
   status: string;
@@ -106,7 +117,10 @@ async function post(path: string, body?: unknown, keepalive = false) {
     keepalive,
   });
   if (!res.ok) {
-    const detail = await res.json().then((j) => j?.detail).catch(() => null);
+    const detail = await res
+      .json()
+      .then((j) => j?.detail)
+      .catch(() => null);
     throw new ApiError(res.status, typeof detail === 'string' ? detail : `Request failed (${res.status}).`);
   }
   return res.json().catch(() => null);
@@ -148,18 +162,25 @@ function fromAlert(a: Alert, everyone: boolean): InboxItem {
 /** The monday event a stuck-event problem is about, as `MONDAY-EVT-<id>`. */
 const eventRef = (id: number) => `MONDAY-EVT-${id}`;
 
+const RETIRED_ACTIONS = new Set(['OVERRIDE_PRICE_CHECK', 'DISPATCH_URGENT_RFQ']);
+
 function fromProblem(p: Problem, event?: MondayEvent): InboxItem {
   const severity: Severity = p.severity === 'CRITICAL' ? 'critical' : p.severity === 'LOW' ? 'info' : 'warning';
-  const listed = p.available_actions ?? [];
+  // Vendor repricing was removed; older problems may still list its actions,
+  // which the server now ignores, so they don't become buttons.
+  const listed = (p.available_actions ?? []).filter((a) => !RETIRED_ACTIONS.has(a.action));
   const actions: InboxAction[] = listed.map((a, i) => ({
     id: a.action,
     label: a.label,
     verb: a.action === 'REPLAY_MONDAY_EVENT' ? 'Replayed' : 'Done',
     primary: i === 0,
     minRole: 'OPERATOR',
-    needsPrice: a.action === 'OVERRIDE_PRICE_CHECK',
     commit: (keepalive) =>
-      post(`/exceptions/${encodeURIComponent(p.exception_id)}/resolve`, { action_type: a.action, resolution_notes: `Resolved from the Inbox (${a.action})` }, keepalive),
+      post(
+        `/exceptions/${encodeURIComponent(p.exception_id)}/resolve`,
+        { action_type: a.action, resolution_notes: `Resolved from the Inbox (${a.action})` },
+        keepalive,
+      ),
   }));
   if (!listed.some((a) => a.action === 'MANUALLY_RESOLVED')) {
     actions.push({
@@ -169,7 +190,11 @@ function fromProblem(p: Problem, event?: MondayEvent): InboxItem {
       primary: actions.length === 0,
       minRole: 'OPERATOR',
       commit: (keepalive) =>
-        post(`/exceptions/${encodeURIComponent(p.exception_id)}/resolve`, { action_type: 'MANUALLY_RESOLVED', resolution_notes: 'Fixed outside the system (from the Inbox)' }, keepalive),
+        post(
+          `/exceptions/${encodeURIComponent(p.exception_id)}/resolve`,
+          { action_type: 'MANUALLY_RESOLVED', resolution_notes: 'Fixed outside the system (from the Inbox)' },
+          keepalive,
+        ),
     });
   }
   const facts: [string, string][] = [
@@ -226,6 +251,88 @@ function fromSuggestion(s: Suggestion): InboxItem {
   };
 }
 
+/** What each kind of draft is called in the list. */
+export const DRAFT_KIND: Record<string, string> = {
+  vendor_follow_up: 'Vendor follow-up',
+  vendor_reply_update: 'Vendor reply',
+  quote_follow_up: 'Quote follow-up',
+  rfq_ack: 'RFQ received',
+  rfq_price_ask: 'Price request',
+  rfq_vendor_chase: 'Vendor price chase',
+  recipe: 'Your rule',
+};
+
+/** The decide endpoint answers 200 even when the step itself failed; that must not read as done. */
+async function decideDraft(id: string, confirm: boolean, keepalive: boolean) {
+  const res = (await post(`/assistant/actions/${encodeURIComponent(id)}`, { confirm }, keepalive)) as {
+    status?: string;
+    result?: { error?: string };
+  } | null;
+  if (res?.status === 'FAILED') throw new Error(res.result?.error ?? 'It didn’t go through.');
+  return res;
+}
+
+/** Many drafts at once, 50 to a call. Returns the ids that didn't go through, with why. */
+export async function decideDrafts(ids: string[], confirm: boolean, keepalive = false) {
+  const failed: { id: string; error: string }[] = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const res = (await post('/assistant/actions/batch', { ids: ids.slice(i, i + 50), confirm }, keepalive)) as {
+      results?: { id: string; status: string; error?: string | null }[];
+    } | null;
+    for (const r of res?.results ?? [])
+      if (r.status === 'FAILED' || r.status === 'SKIPPED') failed.push({ id: r.id, error: r.error || words(r.status) });
+  }
+  return failed;
+}
+
+function fromDraft(d: Draft): InboxItem {
+  const args = d.args ?? {};
+  const text = (k: string) => (typeof args[k] === 'string' && args[k] ? (args[k] as string) : undefined);
+  const kind = d.kind || 'other';
+  // A vendor's answer updates the order in the app (never monday); everything else is an email.
+  const update = d.tool === 'update_vendor_job';
+  const email = update ? undefined : { to: text('to'), subject: text('subject'), body: text('body') };
+  const facts: [string, string][] = [];
+  if (email?.to) facts.push(['To', email.to]);
+  if (email?.subject) facts.push(['Subject', email.subject]);
+  if (update) {
+    if (text('promised_on')) facts.push(['New ship date', text('promised_on')!]);
+    if (text('shipped_on')) facts.push(['Shipped', text('shipped_on')!]);
+    if (text('note')) facts.push(['Note', text('note')!]);
+  }
+  facts.push(['Drafted', dateTime(d.created_at)]);
+  return {
+    key: `drafts:${d.id}`,
+    source: 'drafts',
+    group: 'approvals',
+    severity: 'info',
+    kind: DRAFT_KIND[kind] ?? words(kind),
+    title: d.summary,
+    meta: email?.to ? `To ${email.to}` : update ? 'Updates the order in the app' : '',
+    at: d.created_at ?? null,
+    facts,
+    draft: { id: d.id, kind, email, why: d.why ?? [] },
+    actions: [
+      {
+        id: 'send',
+        label: update ? 'Update the order' : 'Send it',
+        verb: update ? 'Updated' : 'Sent',
+        primary: true,
+        minRole: 'VIEWER', // the server only lists drafts this person may decide
+        commit: (keepalive) => decideDraft(d.id, true, keepalive),
+      },
+      {
+        id: 'cancel',
+        label: 'Cancel it',
+        verb: 'Cancelled',
+        hotkey: 'x',
+        minRole: 'VIEWER',
+        commit: (keepalive) => decideDraft(d.id, false, keepalive),
+      },
+    ],
+  };
+}
+
 function fromEvent(e: MondayEvent): InboxItem {
   const item = e.item_name || (e.item_id ? `Item ${e.item_id}` : 'A board item');
   const facts: [string, string][] = [
@@ -246,7 +353,14 @@ function fromEvent(e: MondayEvent): InboxItem {
     body: e.last_error ?? undefined,
     facts,
     actions: [
-      { id: 'replay', label: 'Replay', verb: 'Replayed', primary: true, minRole: 'OPERATOR', commit: (k) => post(`/webhooks/monday/events/${e.id}/replay`, undefined, k) },
+      {
+        id: 'replay',
+        label: 'Replay',
+        verb: 'Replayed',
+        primary: true,
+        minRole: 'OPERATOR',
+        commit: (k) => post(`/webhooks/monday/events/${e.id}/replay`, undefined, k),
+      },
       { id: 'log', label: 'Event log', verb: 'Opened', minRole: 'VIEWER', href: '/health?tab=monday' },
     ],
   };
@@ -266,9 +380,11 @@ export function useInbox({ everyone = false } = {}) {
   const alerts = useQuery({
     queryKey: ['inbox', 'alerts', showAll],
     queryFn: async () =>
-      ((await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: true, everyone: showAll, limit: 200 } } }))) as {
-        items: Alert[];
-      }).items,
+      (
+        (await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: true, everyone: showAll, limit: 200 } } }))) as {
+          items: Alert[];
+        }
+      ).items,
     enabled,
     ...POLL,
   });
@@ -281,18 +397,30 @@ export function useInbox({ everyone = false } = {}) {
   const ai = useQuery({
     queryKey: ['inbox', 'ai'],
     queryFn: async () =>
-      ((await ok(api.GET('/api/v1/ai/suggestions', { params: { query: { status: 'SUGGESTED', limit: 100 } } }))) as {
-        items: Suggestion[];
-      }).items,
+      (
+        (await ok(api.GET('/api/v1/ai/suggestions', { params: { query: { status: 'SUGGESTED', limit: 100 } } }))) as {
+          items: Suggestion[];
+        }
+      ).items,
+    enabled,
+    ...POLL,
+  });
+  const drafts = useQuery({
+    queryKey: ['inbox', 'drafts'],
+    queryFn: async () =>
+      // A chat proposal is confirmed in the chat it came from, within minutes; the Inbox holds the drafts.
+      ((await ok(api.GET('/api/v1/assistant/actions'))) as { actions: Draft[] }).actions.filter((d) => d.kind !== 'assistant'),
     enabled,
     ...POLL,
   });
   const monday = useQuery({
     queryKey: ['inbox', 'monday'],
     queryFn: async () =>
-      ((await ok(api.GET('/api/v1/webhooks/monday/events', { params: { query: { limit: 200 } } }))) as {
-        events: MondayEvent[];
-      }).events.filter((e) => e.status === 'FAILED' || e.status === 'DEAD'),
+      (
+        (await ok(api.GET('/api/v1/webhooks/monday/events', { params: { query: { limit: 200 } } }))) as {
+          events: MondayEvent[];
+        }
+      ).events.filter((e) => e.status === 'FAILED' || e.status === 'DEAD'),
     enabled,
     ...POLL,
   });
@@ -303,22 +431,25 @@ export function useInbox({ everyone = false } = {}) {
   const raised = new Set((problems.data ?? []).filter((p) => p.exception_type === 'MONDAY_EVENT_FAILED').map((p) => p.reference_id));
   const items: InboxItem[] = [
     ...(alerts.data ?? []).map((a) => fromAlert(a, showAll)),
-    ...(problems.data ?? []).map((p) => fromProblem(p, p.exception_type === 'MONDAY_EVENT_FAILED' ? events.get(p.reference_id) : undefined)),
+    ...(problems.data ?? []).map((p) =>
+      fromProblem(p, p.exception_type === 'MONDAY_EVENT_FAILED' ? events.get(p.reference_id) : undefined),
+    ),
     ...(ai.data ?? []).map(fromSuggestion),
+    ...(drafts.data ?? []).map(fromDraft),
     ...(monday.data ?? []).filter((e) => !raised.has(eventRef(e.id))).map(fromEvent),
   ].sort((x, y) => RANK[x.severity] - RANK[y.severity] || (y.at ?? '').localeCompare(x.at ?? ''));
 
-  const sources = { alerts, problems, ai, monday };
+  const sources = { alerts, problems, ai, drafts, monday };
   const failed = (Object.entries(sources) as [Source, typeof alerts][])
     .filter(([, q]) => q.isError)
     .map(([name, q]) => ({ name, error: q.error }));
 
   return {
     items,
-    isPending: [alerts, problems, ai, monday].some((q) => q.isPending),
+    isPending: Object.values(sources).some((q) => q.isPending),
     failed,
     canSeeAll,
-    refetch: () => Promise.all([alerts.refetch(), problems.refetch(), ai.refetch(), monday.refetch()]),
+    refetch: () => Promise.all(Object.values(sources).map((q) => q.refetch())),
   };
 }
 
@@ -329,9 +460,9 @@ export function useRefreshSource() {
 }
 
 export async function explainProblem(exceptionId: string) {
-  const res = (await ok(
-    api.POST('/api/v1/ai/exceptions/{exception_id}/explain', { params: { path: { exception_id: exceptionId } } }),
-  )) as { result?: { explanation?: string; suggested_fix?: string } };
+  const res = (await ok(api.POST('/api/v1/ai/exceptions/{exception_id}/explain', { params: { path: { exception_id: exceptionId } } }))) as {
+    result?: { explanation?: string; suggested_fix?: string };
+  };
   return res.result ?? {};
 }
 

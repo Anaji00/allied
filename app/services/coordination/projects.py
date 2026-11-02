@@ -94,7 +94,8 @@ def _due(cv: Optional[Dict[str, Any]]) -> Optional[str]:
     for key in ("to", "date"):
         if isinstance(value, dict) and value.get(key) and _DATE.match(str(value[key])):
             return str(value[key])[:10]
-    found = _DATE.findall(_text(cv))
+    # Formula columns (VENDOR ETS, Target Date) have no text; their result is display_value.
+    found = _DATE.findall(_text(cv) or str((cv or {}).get("display_value") or ""))
     return found[-1] if found else None
 
 
@@ -139,6 +140,10 @@ def sync_projects(client=None) -> Dict[str, Any]:
     users = _user_emails(client)
     layout = (settings.MONDAY_PROJECTS_LAYOUT or "subitems").lower()
     items = fetch_projects_board(client, int(board), with_subitems=(layout == "subitems"))
+    if items:
+        from app.services.coordination import boards
+
+        boards.remember(board, items, client, "projects")  # the board as monday shows it, for the screens
     if not items:
         with SessionLocal() as db:
             mirrored = db.query(MondayProjectDB.item_id).filter(MondayProjectDB.board_id == board).count()
@@ -181,6 +186,9 @@ def sync_projects(client=None) -> Dict[str, Any]:
                 owner_emails=[], status=None, due_date=None, done=False, synced_at=now,
             ))
             milestone(item, pid, board)
+            # The group is done once every job in it is; it has no date of its own (each job
+            # is checked against its own due date), so it never raises "project past due".
+            projects[pid]["done"] = all(m["done"] for m in milestones.values() if m["project_item_id"] == pid)
             owners = projects[pid]["owner_emails"]
             for e in milestones[str(item["id"])]["owner_emails"]:
                 if e not in owners:
@@ -259,6 +267,8 @@ def milestone_state(m: Dict[str, Any], latest: Optional[Dict[str, Any]], on: dat
         state = "done"
     elif latest and latest["status"] == "SUBMITTED":
         state = "waiting_review"
+    elif (m.get("status") or "").strip().casefold() in _labels(settings.MILESTONE_HOLD_LABELS):
+        state = "on_hold"  # paused, or with the customer for review: nobody here can move it
     elif days is None:
         state = "no_date"
     elif days < 0:

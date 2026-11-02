@@ -7,6 +7,7 @@ import { ChevronRight, Download, Loader2 } from 'lucide-react';
 import { Facts } from '@/components/data/detail-panel';
 import { Field, PanelHeading } from '@/components/data/filters';
 import { ToneBadge } from '@/components/data/tone-badge';
+import { DictateButton, addDictation } from '@/components/data/voice';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,8 +17,7 @@ import { day, dateTime, person } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { SUBMISSION, fileSize, milestoneState, type Milestone, type Project, type Submission } from './use-projects';
 
-const names = (emails: string[] | undefined, me: string, empty = 'Not set') =>
-  (emails ?? []).map((e) => person(e, me)).join(', ') || empty;
+const names = (emails: string[] | undefined, me: string, empty = 'Not set') => (emails ?? []).map((e) => person(e, me)).join(', ') || empty;
 
 export function ProjectDetail({
   project: p,
@@ -71,6 +71,23 @@ export function ProjectDetail({
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+/** One job on a board laid out by group: its own facts and design documents, without the group around it. */
+export function JobDetail({ milestone: m, project, leadership }: { milestone: Milestone; project: Project; leadership: string[] }) {
+  const { employeeEmail } = useAuth();
+  const me = (employeeEmail ?? '').trim().toLowerCase();
+  const state = milestoneState(m);
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap gap-1.5">
+        <ToneBadge tone={state.tone}>{state.label}</ToneBadge>
+        {m.missing_docs && <ToneBadge tone="warn">Design docs needed</ToneBadge>}
+      </div>
+      {/* Owner, reviewers, due date and monday status are in the body; the group is under the title. */}
+      <MilestoneBody milestone={m} project={project} me={me} leadership={leadership} />
     </div>
   );
 }
@@ -130,7 +147,17 @@ function MilestoneItem({
   );
 }
 
-function MilestoneBody({ milestone: m, project, me, leadership }: { milestone: Milestone; project: Project; me: string; leadership: string[] }) {
+function MilestoneBody({
+  milestone: m,
+  project,
+  me,
+  leadership,
+}: {
+  milestone: Milestone;
+  project: Project;
+  me: string;
+  leadership: string[];
+}) {
   const { hasRole } = useAuth();
   const canOperate = hasRole('OPERATOR');
   const latest = m.latest_submission;
@@ -255,6 +282,13 @@ function ReviewForm({ submission }: { submission: Submission }) {
             setNeedNote(false);
           }}
         />
+        <DictateButton
+          className="justify-self-start"
+          onText={(t) => {
+            setNote((cur) => addDictation(cur, t));
+            setNeedNote(false);
+          }}
+        />
       </Field>
       {needNote && (
         <p role="alert" className="text-xs text-bad">
@@ -313,6 +347,7 @@ function SubmitForm({ milestone }: { milestone: Milestone }) {
       </Field>
       <Field label="Note (optional)">
         <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Anything the reviewer should know" />
+        <DictateButton className="justify-self-start" onText={(t) => setNote((cur) => addDictation(cur, t))} />
       </Field>
       <Button type="submit" size="sm" className="justify-self-start" disabled={!files.length || send.isPending}>
         {send.isPending && <Loader2 className="animate-spin" />}

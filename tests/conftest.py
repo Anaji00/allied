@@ -61,6 +61,10 @@ for _name in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_REDIRECT_ALL
               "SLACK_WEBHOOK_URL", "TEAMS_WEBHOOK_URL"):
     setattr(settings, _name, "")
 settings.EMAIL_SEND_ENABLED = False
+for _name in ("IMAP_HOST", "IMAP_USERNAME", "IMAP_PASSWORD"):
+    setattr(settings, _name, "")
+settings.IMAP_POLL_ENABLED = False
+settings.AI_EMAIL_TRIAGE_ENABLED = False
 
 
 @pytest.fixture

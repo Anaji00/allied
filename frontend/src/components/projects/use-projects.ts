@@ -28,7 +28,8 @@ export type Milestone = {
   status?: string | null;
   done?: boolean;
   needs_submission?: boolean;
-  state: 'done' | 'waiting_review' | 'overdue' | 'due_soon' | 'on_track' | 'no_date';
+  // on_hold: open but waiting on someone else (Paused or Sent for Review on monday); never chased.
+  state: 'done' | 'waiting_review' | 'overdue' | 'due_soon' | 'on_track' | 'on_hold' | 'no_date';
   days: number | null;
   missing_docs: boolean;
   latest_submission: Submission | null;
@@ -72,8 +73,11 @@ export function useLeadership() {
   return useQuery({
     queryKey: ['alerts', 'channels'],
     queryFn: async () =>
-      ((await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: true, limit: 1 } } }))) as { channels?: { leadership?: string[] } })
-        .channels?.leadership ?? [],
+      (
+        (await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: true, limit: 1 } } }))) as {
+          channels?: { leadership?: string[] };
+        }
+      ).channels?.leadership ?? [],
     staleTime: 10 * 60_000,
   });
 }
@@ -94,6 +98,8 @@ export function milestoneState(m: Milestone): { label: string; tone: Tone } {
       return { label: 'Done', tone: 'ok' };
     case 'waiting_review':
       return { label: 'Waiting for review', tone: 'info' };
+    case 'on_hold':
+      return { label: 'On hold', tone: 'neutral' };
     case 'overdue':
       return { label: m.days == null ? 'Late' : m.days >= 0 ? dueIn(m.days) : `${plural(-m.days, 'day')} late`, tone: 'bad' };
     case 'due_soon':
@@ -121,6 +127,13 @@ export function waitingForMe(m: Milestone, p: Project, me: string, leadership: s
 }
 
 export const isBehind = (p: Project) => p.overdue || p.behind > 0;
+
+/**
+ * A board laid out by group (Allied's Engineering Team Board) has no project items: each
+ * monday group stands in for a project and its items are the jobs. The backend gives such a
+ * project the id "g{board}-{group}"; a real monday item id is a number.
+ */
+export const isGroup = (p: Project) => p.item_id.startsWith('g');
 
 /** The first milestone still to do, which is what the project is waiting on. */
 export const nextMilestone = (p: Project) => p.milestones.find((m) => m.state !== 'done');

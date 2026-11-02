@@ -76,7 +76,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
             mid, name, state, days = m["item_id"], m["name"], m["state"], m["days"]
             mlink = f"/projects?milestone={mid}"
             who = m.get("owner_emails") or owners
-            if state == "done":
+            if state in ("done", "on_hold"):  # finished, or waiting on someone else: nothing to chase
                 alerts.resolve([f"{k}{mid}:" for k in milestone_keys])
                 continue
             if state != "due_soon":
@@ -90,7 +90,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                     "milestone_due_soon", f"ms-due-soon:{mid}:{m['due_date']}",
                     f"Due {_when(days)}: {name} ({p['name']})",
                     f"'{name}' on project {p['name']} is due {m['due_date']}.{docs}",
-                    to=who, link=mlink, project_item_id=p["item_id"],
+                    to=who, link=mlink, project_item_id=p["item_id"], replaces=[f"ms-due-soon:{mid}:", f"ms-overdue:{mid}:", f"ms-escalate:{mid}:"],
                 ))
             elif state == "overdue":
                 late = -days
@@ -103,7 +103,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                         f"Escalated: {name} ({p['name']}) is {_late(late)}",
                         f"'{name}' on project {p['name']} was due {m['due_date']} and is still not done.{docs}\n{owner_line}",
                         severity="warning", to=list(who) + list(owners), include_leadership=True,
-                        link=mlink, project_item_id=p["item_id"],
+                        link=mlink, project_item_id=p["item_id"], replaces=[f"ms-due-soon:{mid}:", f"ms-overdue:{mid}:", f"ms-escalate:{mid}:"],
                     ))
                 else:
                     count("overdue", alerts.notify(
@@ -111,6 +111,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                         f"Behind schedule: {name} ({p['name']}) is {_late(late)}",
                         f"'{name}' on project {p['name']} was due {m['due_date']} and is not done.{docs}\n{owner_line}",
                         severity="warning", to=list(who) + list(owners), link=mlink, project_item_id=p["item_id"],
+                        replaces=[f"ms-due-soon:{mid}:", f"ms-overdue:{mid}:", f"ms-escalate:{mid}:"],
                     ))
             if state == "waiting_review" and m.get("latest_submission"):
                 sub = m["latest_submission"]
@@ -130,6 +131,7 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                 f"Project past due: {p['name']}",
                 f"Project {p['name']} was due {p['due_date']}. Still open: {', '.join(open_ms) or 'none listed'}.",
                 severity="critical", to=owners, include_leadership=True, link=link, project_item_id=p["item_id"],
+                replaces=[f"proj-overdue:{p['item_id']}:"],
             ))
 
     for s in shipments.list_shipments(include_finished=False):
@@ -140,27 +142,31 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
                 nid = alerts.notify("shipment_late", f"ship-late:{s['id']}:{s['eta_current']}",
                                     f"Shipment late: {label}", f"It was due {s['eta_current']} and has not arrived. "
                                     f"Last status: {s['status']}.", severity="warning", to=owner,
-                                    include_leadership=True, link=link, project_item_id=s.get("project_item_id"))
+                                    include_leadership=True, link=link, project_item_id=s.get("project_item_id"),
+                                    replaces=[f"ship-late:{s['id']}:"])
             elif flag.startswith("slipped"):
                 nid = alerts.notify("shipment_slipped", f"ship-slip:{s['id']}:{s['eta_current']}",
                                     f"Shipment {flag}: {label}", f"ETA was {s['eta_original']}, now {s['eta_current']}.",
-                                    severity="warning", to=owner, link=link, project_item_id=s.get("project_item_id"))
+                                    severity="warning", to=owner, link=link, project_item_id=s.get("project_item_id"),
+                                    replaces=[f"ship-slip:{s['id']}:"])
             elif flag == "missed departure":
                 nid = alerts.notify("shipment_rolled", f"ship-rolled:{s['id']}:{s['etd']}",
                                     f"Missed departure: {label}", f"It was meant to leave {s['etd']} and is still "
                                     f"'{s['status']}'. It may have been rolled to a later sailing; ask the forwarder.",
-                                    severity="warning", to=owner, link=link, project_item_id=s.get("project_item_id"))
+                                    severity="warning", to=owner, link=link, project_item_id=s.get("project_item_id"),
+                                    replaces=[f"ship-rolled:{s['id']}:"])
             elif flag.startswith("no update"):
                 nid = alerts.notify("shipment_silent", f"ship-silent:{s['id']}:{s['last_update_at'][:10]}",
                                     f"Forwarder silent: {label}", f"{flag.capitalize()} (status {s['status']}). "
                                     "Ask the forwarder for an update.", to=owner, link=link,
-                                    project_item_id=s.get("project_item_id"))
+                                    project_item_id=s.get("project_item_id"), replaces=[f"ship-silent:{s['id']}:"])
             else:  # port free time ending
                 nid = alerts.notify("shipment_free_time", f"ship-free-time:{s['id']}:{s['free_time_ends']}",
                                     f"Port free time ends {s['free_time_ends']}: {label}",
                                     "After that, the port charges demurrage every day (often $75-300). "
                                     "Arrange pickup now.", severity="critical", to=owner, include_leadership=True,
-                                    link=link, project_item_id=s.get("project_item_id"))
+                                    link=link, project_item_id=s.get("project_item_id"),
+                                    replaces=[f"ship-free-time:{s['id']}:"])
             count("shipments", nid)
     sent["unplanned"] = _unplanned_checks(data, on)
     for name, check in (("vendors", vendors.run_checks), ("rfqs", rfqs.run_checks)):
@@ -178,7 +184,7 @@ def unplanned(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if p.get("done"):
             continue
         for m in p["milestones"]:
-            if m["state"] in ("done", "waiting_review"):
+            if m["state"] in ("done", "waiting_review", "on_hold"):
                 continue
             missing = [w for w, gap in (("no due date", not m.get("due_date")), ("no owner", not m.get("owner_emails"))) if gap]
             if missing:
@@ -241,6 +247,9 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
     from app.services.coordination import autopilot
 
     drafts = autopilot.drafts_waiting()
+    from app.services import mail_log
+
+    mail_waiting = mail_log.for_summary()
     no_plan = [f"{m['project_name']}: {m['name']} ({', '.join(m['missing'])})" for m in gaps[:10]]
     if len(gaps) > 10:
         no_plan.append(f"and {len(gaps) - 10} more on the Projects screen")
@@ -250,6 +259,7 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
         ("Waiting for review", review), ("Due in the next 7 days", due_week),
         ("Open with no due date or owner", no_plan),
         ("Messages drafted, waiting for approval in the assistant", drafts),
+        ("Emails waiting on a person", mail_waiting),
     ]
     lines = [f"Allied operations summary for {on:%A %d %B %Y}", ""]
     if not any(items for _, items in sections):
@@ -263,7 +273,7 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
         lines.append(f"{len(open_alerts)} urgent alert(s) are not yet acknowledged in the app.")
     return {"behind": behind, "vendors": vendor_risks, "rfqs": late_quotes, "shipments": ships,
             "review": review, "due_week": due_week, "unplanned": len(gaps), "drafts": len(drafts),
-            "urgent_open": len(open_alerts), "text": "\n".join(lines).strip()}
+            "urgent_open": len(open_alerts), "mail": len(mail_waiting), "text": "\n".join(lines).strip()}
 
 
 def send_summary(on: Optional[date] = None, force: bool = False) -> Optional[int]:
@@ -314,7 +324,7 @@ class CoordinationWorker:
             self.last[name] = {"at": alerts.now_local().isoformat(), "result": fn()}
         except Exception as exc:  # noqa: BLE001 - the loop outlives any single failure
             self.last[name] = {"at": alerts.now_local().isoformat(), "error": f"{type(exc).__name__}: {exc}"}
-            logger.error(f"Coordination {name} failed: {exc}")
+            logger.exception(f"Coordination {name} failed: {exc}")
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -334,6 +344,10 @@ class CoordinationWorker:
                     from app.services.coordination import autopilot
 
                     self._step("rfq_board", lambda: autopilot.run("rfq_board"))
+                if settings.MONDAY_REFERENCE_BOARD_IDS or settings.MONDAY_DOC_IDS:
+                    from app.services.coordination import boards
+
+                    self._step("reference_boards", boards.read_all_reference)
             elif settings.MONDAY_CHANGE_CHECK_SECONDS > 0 and now >= self._next_change_check:
                 from app.services.coordination import changes
 
@@ -347,12 +361,16 @@ class CoordinationWorker:
 
                 self._next_autopilot = now + max(300, settings.AUTOPILOT_SECONDS)
                 self._step("autopilot", lambda: {k: len(v["did"]) for k, v in autopilot.run()["plays"].items()})
+                from app.services.coordination import recipes
+
+                self._step("date_recipes", lambda: {"did": len(recipes.run_dates())})
             self._step("held", alerts.release_held)
             local = alerts.now_local()
             if local.weekday() < 5 and local.hour >= settings.DIGEST_HOUR and self._summary_date != local.date():
                 # The key per date also makes this once a day across restarts.
-                self._summary_date = local.date()
                 self._step("summary", send_summary)
+                if "error" not in self.last.get("summary", {}):  # retried next loop if it failed
+                    self._summary_date = local.date()
             self._stop.wait(30)
 
 

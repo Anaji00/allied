@@ -127,6 +127,8 @@ def test_redirect_overrides_every_recipient(monkeypatch):
     sent = {}
 
     monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test", raising=False)
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "ops@example.test", raising=False)
+    monkeypatch.setattr(settings, "SMTP_PASSWORD", "test-app-password", raising=False)
     monkeypatch.setattr(settings, "EMAIL_SEND_ENABLED", True, raising=False)
     monkeypatch.setattr(settings, "EMAIL_REDIRECT_ALL_TO", "pilot@alliedweldingsystems.com", raising=False)
 
@@ -146,6 +148,8 @@ def test_redirect_overrides_every_recipient(monkeypatch):
 def test_a_mail_failure_never_raises(monkeypatch):
     """An order that is otherwise complete must not roll back over a mail error."""
     monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test", raising=False)
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "ops@example.test", raising=False)
+    monkeypatch.setattr(settings, "SMTP_PASSWORD", "test-app-password", raising=False)
     monkeypatch.setattr(settings, "EMAIL_SEND_ENABLED", True, raising=False)
     monkeypatch.setattr(settings, "EMAIL_REDIRECT_ALL_TO", "", raising=False)
 
@@ -171,80 +175,8 @@ def test_mailbox_polling_is_off_unless_configured():
     assert poller.start() is False, "polling must not start without a configured mailbox"
 
 
-def test_poller_marks_a_message_seen_only_after_it_is_processed(monkeypatch):
-    """A crash mid-ingest must re-read the message rather than lose it."""
-    from app.services import mailbox_poller as mp
-
-    monkeypatch.setattr(settings, "IMAP_HOST", "imap.example.test", raising=False)
-    monkeypatch.setattr(settings, "IMAP_POLL_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "IMAP_MARK_SEEN", True, raising=False)
-
-    stored = []
-
-    class FakeConn:
-        def select(self, folder): return ("OK", [b"1"])
-        def search(self, charset, criteria): return ("OK", [b"1"])
-        def fetch(self, num, spec):
-            raw = (
-                b"From: Mark <purchasing@owenscorning.com>\r\n"
-                b"Subject: PO-9921\r\n"
-                b"Message-ID: <abc@owenscorning.com>\r\n\r\n"
-                b"Please supply 2x Hammermill Screens.\r\n"
-            )
-            return ("OK", [(b"1 (BODY[])", raw)])
-        def store(self, num, flags, value): stored.append((num, value))
-        def close(self): pass
-        def logout(self): pass
-
-    class ExplodingDaemon:
-        def process_inbound_email(self, message):
-            raise RuntimeError("downstream failure")
-
-    poller = mp.MailboxPoller(daemon=ExplodingDaemon())
-    poller._connect = lambda: FakeConn()
-    result = poller.poll_once()
-
-    assert result["ingested"] == 0
-    assert stored == [], "a message that failed to process must stay unseen"
-
-
-def test_poller_ingests_and_marks_seen_on_success(monkeypatch):
-    from app.services import mailbox_poller as mp
-
-    monkeypatch.setattr(settings, "IMAP_HOST", "imap.example.test", raising=False)
-    monkeypatch.setattr(settings, "IMAP_POLL_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "IMAP_MARK_SEEN", True, raising=False)
-
-    stored = []
-    seen_subjects = []
-
-    class FakeConn:
-        def select(self, folder): return ("OK", [b"1"])
-        def search(self, charset, criteria): return ("OK", [b"1"])
-        def fetch(self, num, spec):
-            raw = (
-                b"From: Mark <purchasing@owenscorning.com>\r\n"
-                b"Subject: PO-9921 Hammermill Screens\r\n\r\n"
-                b"Please supply 2x Hammermill Screens.\r\n"
-            )
-            return ("OK", [(b"1 (BODY[])", raw)])
-        def store(self, num, flags, value): stored.append(value)
-        def close(self): pass
-        def logout(self): pass
-
-    class Daemon:
-        def process_inbound_email(self, message):
-            seen_subjects.append(message.subject)
-            return type("R", (), {"sales_order_number": "12345"})()
-
-    poller = mp.MailboxPoller(daemon=Daemon())
-    poller._connect = lambda: FakeConn()
-    result = poller.poll_once()
-
-    assert result["ingested"] == 1
-    assert result["orders_created"] == 1
-    assert seen_subjects == ["PO-9921 Hammermill Screens"]
-    assert stored == ["\\Seen"]
+# The mailbox reader's own behaviour (every folder, each message once, nothing marked read)
+# is tested in tests/test_mail_reader.py.
 
 
 # ------------------------------------------------------------- cad drawings
@@ -358,3 +290,27 @@ def test_restocking_is_not_mistaken_for_a_wear_cycle():
     for (_, item_id), summary in summaries.items():
         for gap in summary.get("gaps", []):
             assert gap > 0, f"{item_id} produced a non-positive interval"
+
+
+def test_a_mail_server_with_no_login_stays_draft_only(monkeypatch):
+    """Gmail with the app password not filled in yet: nothing is tried, the screen says what is missing."""
+    from app.services.outbound_email_service import outbound_email_service
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.gmail.com", raising=False)
+    monkeypatch.setattr(settings, "EMAIL_SEND_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "", raising=False)
+    monkeypatch.setattr(settings, "SMTP_PASSWORD", "", raising=False)
+    assert not outbound_email_service.send_enabled
+    assert "SMTP_PASSWORD" in outbound_email_service.status()["detail"]
+
+
+def test_an_office_relay_with_no_login_still_sends(monkeypatch):
+    """A relay that accepts mail by address (no username) is used as it is; only hosted services need a login."""
+    from app.services.outbound_email_service import outbound_email_service
+
+    monkeypatch.setattr(settings, "EMAIL_SEND_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "", raising=False)
+    monkeypatch.setattr(settings, "SMTP_HOST", "postfix", raising=False)
+    assert outbound_email_service.send_enabled
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.office365.com", raising=False)
+    assert not outbound_email_service.send_enabled

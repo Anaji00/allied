@@ -1,3 +1,4 @@
+import uuid
 """Tests for Inbound Autonomous Email Daemon and REST Ingestion."""
 
 from fastapi.testclient import TestClient
@@ -26,62 +27,27 @@ def test_inbound_email_processing_service():
     assert "Owens Corning" in result.customer_acknowledgment_email
 
 
-def test_inbound_email_stale_pricing_flagged_for_review():
-    """Verify orders with stale pricing get flagged for review and queued in exceptions.
-
-    The stale quote is registered explicitly. It used to come from a demo
-    fixture that re-dated itself to 74 days old on every construction, which
-    made PLATE-300XL-38 permanently unorderable in production.
-    """
-    from datetime import date, timedelta
-
-    from app.config import settings
-    from app.services.vendor_reprice import vendor_reprice_service
-
-    vendor_reprice_service.register_price(
-        item_id="PLATE-300XL-38",
-        vendor="NIBROCK",
-        unit_cost=110.0,
-        quoted_date=date.today() - timedelta(days=settings.VENDOR_PRICE_STALENESS_DAYS + 14),
+def test_an_old_vendor_price_never_holds_an_order():
+    """Vendor repricing was dropped: Allied can't renegotiate much with its vendors, so an
+    order is never held because a catalog price is old."""
+    po = f"PO-OLDPRICE-{uuid.uuid4().hex[:5].upper()}"
+    msg = InboundEmailMessage(
+        sender_email="purchasing@owenscorning.com",
+        sender_name="Mark Richardson (Owens Corning)",
+        subject=f"{po}: Heavy Wear Plate",
+        body_text=f"Please send 4x PLATE-300XL-38 to Edmonton under {po}.",
     )
-    try:
-        msg = InboundEmailMessage(
-            sender_email="purchasing@owenscorning.com",
-            sender_name="Mark Richardson (Owens Corning)",
-            subject="PO-STALE-88: Heavy Wear Plate",
-            body_text="Please send 4x PLATE-300XL-38 to Edmonton under PO-STALE-88.",
-        )
-        result = inbound_email_daemon.process_inbound_email(msg)
-        assert result.status == "FLAGGED_FOR_REVIEW"
-        assert "SO-PENDING" in result.sales_order_number
-        assert "Under Review" in result.customer_acknowledgment_email
-    finally:
-        # A fresh quote clears the halt, which is the operational escape hatch
-        # the registry previously had no caller for.
-        vendor_reprice_service.register_price(
-            item_id="PLATE-300XL-38", vendor="NIBROCK", unit_cost=110.0
-        )
+    result = inbound_email_daemon.process_inbound_email(msg)
+    assert result.status == "PROCESSED_ORDER_CREATED"
+    assert not result.sales_order_number.startswith("SO-PENDING")
 
 
-def test_registering_a_fresh_price_clears_the_halt():
-    """A re-quoted price must let the same order through on the next attempt."""
-    from app.models.orders import OrderLineItem
-    from app.services.vendor_reprice import vendor_reprice_service
-
-    line = OrderLineItem(
-        item_id="PLATE-300XL-38",
-        raw_item_text="PLATE-300XL-38",
-        quantity=1,
-        unit_price=500,
-        preferred_vendor="NIBROCK",
-    )
-    vendor_reprice_service.register_price("PLATE-300XL-38", "NIBROCK", 110.0)
-    # Does not raise.
-    vendor_reprice_service.validate_pricing_freshness({"NIBROCK": [line]}, "PO-FRESH-1")
-
-
-def test_inbound_email_simulate_api():
+def test_inbound_email_simulate_api(monkeypatch):
     """Verify REST API endpoint for simulating customer email ingestion."""
+    from app.config import settings
+
+    # Knauf's buyers write from knaufinsulation.com; the record only has its knauf.com AP address.
+    monkeypatch.setattr(settings, "ORDER_TRUSTED_SENDER_DOMAINS", "knaufinsulation.com=10148")
     payload = {
         "sender_email": "procurement@knaufinsulation.com",
         "sender_name": "Sarah Jenkins (Knauf)",

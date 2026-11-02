@@ -93,6 +93,17 @@ app.add_middleware(
 )
 
 
+# Body size limit: refuse an oversized request on its Content-Length, before any form
+# parsing or login check reads it to disk.
+@app.middleware("http")
+async def body_size_limit(request: Request, call_next):
+    limit = settings.MAX_REQUEST_MB * 1024 * 1024
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > limit:
+        return JSONResponse(status_code=413, content={"detail": f"Request is larger than {settings.MAX_REQUEST_MB} MB."})
+    return await call_next(request)
+
+
 # Correlation ID Middleware — injects X-Correlation-ID into every request/response
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):

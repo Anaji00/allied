@@ -72,11 +72,16 @@ export function day(value?: string | null, { weekday = false } = {}) {
   });
 }
 
+/** A date as YYYY-MM-DD in local time (toISOString would give the UTC day). */
+export function localIso(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /** Today as YYYY-MM-DD in local time, plus `days`. */
 export function isoDay(days = 0) {
   const d = new Date();
   d.setDate(d.getDate() + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return localIso(d);
 }
 
 /** "jane.doe@allied.com" as "Jane Doe"; the signed-in person as "You". */

@@ -5,7 +5,7 @@ import { parseAsBoolean, parseAsInteger, parseAsStringLiteral, useQueryState } f
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2, Plus, RefreshCw } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -79,7 +79,7 @@ type Overview = {
   last_sync?: { at?: string } | null;
 };
 
-const STATE: Record<string, { label: string; tone: Tone }> = {
+export const STATE: Record<string, { label: string; tone: Tone }> = {
   late: { label: 'Vendor late', tone: 'bad' },
   will_miss: { label: 'Will make project late', tone: 'bad' },
   at_risk: { label: 'At risk', tone: 'warn' },
@@ -252,6 +252,7 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
             columns={columns}
             data={rows}
             getRowId={(j) => String(j.id)}
+            recordName={(j) => recordKey('job', j.id)}
             selectedId={id != null ? String(id) : null}
             onSelect={open}
             minWidth={860}
@@ -273,7 +274,7 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
             </p>
           )}
         </div>
-        <DetailPanel open={Boolean(linked)} onClose={() => open(undefined)} title={linked?.vendor ?? ''} description={linked ? linked.description || linked.po_number || undefined : undefined}>
+        <DetailPanel open={Boolean(linked)} onClose={() => open(undefined)} recordName={linked ? recordKey('job', linked.id) : undefined} title={linked?.vendor ?? ''} description={linked ? linked.description || linked.po_number || undefined : undefined}>
           {linked && <JobDetail key={`${linked.id}-${linked.history?.length}`} job={linked} canEdit={canEdit} />}
         </DetailPanel>
       </div>

@@ -27,6 +27,39 @@ from app.core.container import get_monday_client, get_packing_slip_generator
 _MAX_DISPATCH_LOG = 500
 
 
+class AlreadyDispatchedError(ValueError):
+    """The order was dispatched before; dispatching it again would ship it twice."""
+
+
+def _order_rows(db, so_num: str):
+    from app.models.db_models import OrderDB
+
+    return db.query(OrderDB).filter(OrderDB.sales_order_number.in_([so_num, f"SO-{so_num}"]))
+
+
+def _order_status(so_num: str) -> Optional[str]:
+    try:
+        from app.core.database import SessionLocal
+
+        with SessionLocal() as db:
+            row = _order_rows(db, so_num).first()
+            return row.status if row else None
+    except Exception as exc:  # noqa: BLE001 - no database: nothing recorded to check against
+        logger.warning(f"Could not read the status of SO-{so_num}: {exc}")
+        return None
+
+
+def _mark_dispatched(so_num: str) -> None:
+    try:
+        from app.core.database import SessionLocal
+
+        with SessionLocal() as db:
+            _order_rows(db, so_num).update({"status": "DISPATCHED"}, synchronize_session=False)
+            db.commit()
+    except Exception as exc:  # noqa: BLE001 - the dispatch happened; the status is bookkeeping
+        logger.warning(f"SO-{so_num} was dispatched but its status could not be saved: {exc}")
+
+
 def _order_from_db(so_num: str) -> Optional[Dict[str, Any]]:
     """Loads a committed order by sales order number and re-caches it."""
     try:
@@ -327,7 +360,17 @@ class LogisticsDispatcher:
         generates Canada Customs Invoice (CCI) if cross-border, evaluates carrier quotes,
         composes carrier dispatch email, and updates Monday.com board.
         """
+        from app.core.keyed_lock import keyed_lock
+
         so_num = request.sales_order_number.replace("SO-", "")
+        # Two screens dispatching the same order at once: the second waits, then finds it shipped.
+        with keyed_lock("dispatch", so_num):
+            return self._dispatch(request, so_num)
+
+    def _dispatch(self, request: "LogisticsDispatchRequest", so_num: str) -> "LogisticsDispatchResult":
+        if _order_status(so_num) == "DISPATCHED":
+            # The monday board, the old chat screen and the API all reach this; none may ship twice.
+            raise AlreadyDispatchedError(f"SO-{so_num} was already dispatched; nothing was sent again.")
         logger.info(f"Generating packing list, customs docs, and dispatching Order #{so_num}")
 
         # Retrieve order from cache or fallback. `or` rather than a bare `get`
@@ -455,6 +498,7 @@ class LogisticsDispatcher:
 
         self._dispatch_log.insert(0, result.model_dump())
         del self._dispatch_log[_MAX_DISPATCH_LOG:]
+        _mark_dispatched(so_num)
         return result
 
     def _generate_dispatch_email(

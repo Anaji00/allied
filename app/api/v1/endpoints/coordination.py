@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,7 @@ alerts_router = APIRouter()
 vendors_router = APIRouter()
 rfqs_router = APIRouter()
 autopilot_router = APIRouter()
+boards_router = APIRouter()
 
 
 def _fail(exc: Exception):
@@ -201,6 +202,8 @@ class VendorJobIn(BaseModel):
     requested_on: Optional[str] = Field(None, description="Ship date Allied asked for")
     acknowledged_on: Optional[str] = Field(None, description="Vendor confirmed the PO")
     quoted_lead_days: Optional[int] = Field(None, ge=0, le=730)
+    follow_up_days: Optional[int] = Field(None, ge=0, le=365,
+                                          description="Days after the PO before the vendor is followed up; 0 = the usual wait")
     promised_on: Optional[str] = Field(None, description="Vendor's promised ship date")
     shipped_on: Optional[str] = Field(None, description="Actually shipped")
     need_by: Optional[str] = Field(None, description="Override the ship-by date worked out from the project")
@@ -215,6 +218,11 @@ def add_vendor_job(body: VendorJobIn, user: dict = Depends(require_operator)):
         return vendors.create(body.model_dump(exclude_none=True), user)
     except Exception as exc:  # noqa: BLE001
         _fail(exc)
+
+
+@vendors_router.get("/link-suggestions", summary="Orders with no drawing linked, and the drawing jobs each likely belongs to")
+def vendor_link_suggestions(_user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    return vendors.link_suggestions()
 
 
 @vendors_router.patch("/{job_id}", summary="Record a vendor date or detail")
@@ -236,6 +244,90 @@ def rfq_list(open_only: bool = True, mine: bool = False, user: dict = Depends(re
             "metrics": rfqs.metrics(), "statuses": rfqs.STATUSES,
             "targets": {"ack_hours": settings.RFQ_ACK_BUSINESS_HOURS, "simple_days": settings.RFQ_QUOTE_DAYS_SIMPLE,
                         "standard_days": settings.RFQ_QUOTE_DAYS_STANDARD, "complex_days": settings.RFQ_QUOTE_DAYS_COMPLEX}}
+
+
+# The customer's own request form. It needs no login (a customer has none), so it is
+# held to a shared token, a honeypot field and a per-address hourly limit.
+_form_hits: Dict[str, List[float]] = {}
+
+
+class RfqForm(BaseModel):
+    company: str = Field(..., min_length=1, max_length=200)
+    name: str = Field("", max_length=120)
+    email: str = Field(..., min_length=3, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    phone: str = Field("", max_length=40)
+    subject: str = Field(..., min_length=1, max_length=300)
+    details: str = Field("", max_length=8000)
+    quantity: str = Field("", max_length=100)
+    needed_by: Optional[str] = Field(None, max_length=40)
+    website: str = Field("", max_length=200, description="Leave empty (a trap for bots)")
+
+
+def _form_open(token: Optional[str]) -> None:
+    import hmac
+
+    if not settings.RFQ_FORM_TOKEN:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The request form is switched off.")
+    if not token or not hmac.compare_digest(token.encode(), settings.RFQ_FORM_TOKEN.encode()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This form link is not valid.")
+
+
+def _client(request: Request) -> str:
+    """The customer's address. Requests come through the app's own proxies (Caddy for https,
+    then the frontend), each adding the address it saw to the end of X-Forwarded-For. Reading
+    from the end and stepping past our proxies (Docker's private network, loopback) gives the
+    first address a proxy of ours saw; anything further left was written by the sender and
+    could be faked."""
+    import ipaddress
+
+    hops = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
+    for hop in reversed(hops):
+        try:
+            ip = ipaddress.ip_address(hop)
+        except ValueError:
+            return hop[:64]
+        if not (ip.is_loopback or ip in ipaddress.ip_network("172.16.0.0/12")):
+            return hop[:64]
+    return (hops[0] if hops else (request.client.host if request.client else "unknown"))[:64]
+
+
+@rfqs_router.get("/form", summary="The customer request form's fields (send the form token as X-Form-Token)")
+def rfq_form_fields(request: Request) -> Dict[str, Any]:
+    _form_open(request.headers.get("x-form-token"))
+    return {"fields": [{"name": n, "required": f.is_required(), "max_length": next(
+        (m.max_length for m in f.metadata if hasattr(m, "max_length")), None)}
+        for n, f in RfqForm.model_fields.items() if n != "website"]}
+
+
+@rfqs_router.post("/form", summary="A customer sends a request for quote", status_code=status.HTTP_201_CREATED)
+def rfq_form_submit(body: RfqForm, request: Request) -> Dict[str, Any]:
+    import time as _time
+
+    # The token comes in a header only: a ?token= in the URL would be written to every access log.
+    _form_open(request.headers.get("x-form-token"))
+    if body.website:  # a person never fills the hidden field; answer as if it worked
+        return {"received": True, "reference": None}
+    who = _client(request)
+    now = _time.monotonic()
+    for key in [k for k, v in _form_hits.items() if not v or now - v[-1] >= 3600]:
+        del _form_hits[key]  # an address quiet for an hour is forgotten
+    for key, cap in ((who, settings.RFQ_FORM_PER_HOUR), ("*", settings.RFQ_FORM_PER_HOUR * 10)):
+        hits = [t for t in _form_hits.get(key, []) if now - t < 3600]
+        if len(hits) >= cap:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many requests; please email us instead.")
+        _form_hits[key] = hits
+    for key in (who, "*"):
+        _form_hits[key].append(now)
+    contact = " ".join(x for x in (body.name, body.phone) if x)
+    lines = [body.details.strip(), f"Quantity: {body.quantity}" if body.quantity else "",
+             f"Needed by: {body.needed_by}" if body.needed_by else "", f"Contact: {contact}" if contact else ""]
+    try:
+        out = rfqs.create({"customer": body.company, "contact_email": body.email, "subject": body.subject,
+                           "summary": "\n".join(x for x in lines if x)[:4000]},
+                          {"email": "rfq-form@allied", "role": "SYSTEM"}, source="form")
+    except ValueError as exc:
+        _fail(exc)
+    return {"received": True, "reference": out["number"]}
 
 
 @rfqs_router.get("/{rfq_id}", summary="One RFQ with its history")
@@ -339,6 +431,7 @@ def save_contact(body: ContactIn, _user: dict = Depends(require_admin)):
         row.email = email
         db.merge(row)
         db.commit()
+    alerts.forget_contacts()  # the change applies to the next alert, not 30 seconds later
     return alerts.contacts().get(email)
 
 
@@ -375,6 +468,105 @@ def check_now(_user: dict = Depends(require_operator)):
 # ---------------------------------------------------------------------------
 
 
+@boards_router.get("", summary="The monday boards the app reads, and when each was last read")
+def board_list(_user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    from app.services.coordination import boards
+
+    return boards.boards()
+
+
+@boards_router.get("/{board_id}", summary="A monday board exactly as monday shows it, with the app's view of each row")
+def board_view(board_id: str, hide_done: bool = Query(False, description="Leave out finished items"),
+               _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import boards
+
+    try:
+        return boards.view(board_id, hide_done)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/activity", summary="What changed on a board (monday's activity log), newest first")
+def board_activity(board_id: str, days: int = Query(7, ge=1, le=90), item_id: Optional[str] = None,
+                   _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import activity
+
+    try:
+        return activity.feed(board_id, days, item_id)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/status-times", summary="How long items spend in each status, and who is sitting longest")
+def board_status_times(board_id: str, _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import activity, boards
+
+    try:
+        view = boards.view(board_id)
+        return activity.status_times(board_id, view["status_column"], boards._done_labels(view["role"]))
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/dashboard", summary="monday's battery, workload and calendar for a board")
+def board_dashboard(board_id: str, days_ahead: int = Query(30, ge=1, le=365), _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import activity
+
+    try:
+        return activity.dashboard(board_id, days_ahead)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/timeline", summary="The board as Kanban lanes, Gantt bars and a calendar")
+def board_timeline(board_id: str, hide_done: bool = True, start: Optional[str] = Query(None, max_length=10),
+                   end: Optional[str] = Query(None, max_length=10), _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import activity
+
+    try:
+        return activity.timeline(board_id, hide_done, start, end)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/items/{item_id}/updates", summary="An item's comments and files, read live from monday")
+def item_updates(board_id: str, item_id: str, _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import activity
+    from app.services.coordination.projects import _client
+
+    client = _client()
+    if not client.live:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="monday is in simulation; nothing is read.")
+    try:
+        return activity.updates(item_id, client)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/automations", summary="What runs on its own for this board, and the drafts each item is waiting on")
+def board_automations(board_id: str, user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import board_automations as automations
+
+    try:
+        return automations.for_board(board_id, user)
+    except LookupError as exc:
+        _fail(exc)
+
+
+class DraftNow(BaseModel):
+    key: str = Field(..., max_length=200, description="The `key` of one of the item's `due` drafts")
+
+
+@boards_router.post("/{board_id}/items/{item_id}/drafts", summary="Draft one item's message now, for a person to send or cancel")
+def board_draft_now(board_id: str, item_id: str, body: DraftNow, _user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services.coordination import board_automations as automations
+
+    try:
+        return automations.draft_now(board_id, item_id, body.key)
+    except LookupError as exc:
+        _fail(exc)
+
+
 class AutopilotRun(BaseModel):
     play: Optional[str] = None
     dry_run: bool = True  # say what would happen; a real run must ask for it
@@ -402,3 +594,116 @@ def autopilot_run(body: AutopilotRun, _user: dict = Depends(require_admin)) -> D
         return autopilot.run(body.play, dry_run=body.dry_run)
     except LookupError as exc:
         _fail(exc)
+
+
+# ---------------------------------------------------------------------------
+# Automation recipes ("when this happens, then do that"), people's own
+# ---------------------------------------------------------------------------
+
+
+class RecipeIn(BaseModel):
+    name: Optional[str] = Field(None, max_length=120)
+    board_role: Optional[Literal["projects", "vendors", "rfqs"]] = None
+    trigger: Optional[Literal["status_is", "status_for", "date_within"]] = None
+    column: Optional[str] = Field(None, max_length=120,
+                                  description="date_within: the date column's id or title; status_for: the status label")
+    value: Optional[str] = Field(None, max_length=120, description="status_is: the label; date_within: days")
+    action: Optional[Literal["notify", "draft_email"]] = None
+    recipients: Optional[str] = Field(None, max_length=500, description="owner, leadership, reviewers, or emails")
+    email_to: Optional[str] = Field(None, max_length=200, description="draft_email: vendor, customer, or an address")
+    subject: Optional[str] = Field(None, max_length=200)
+    body: Optional[str] = Field(None, max_length=4000)
+    mode: Optional[Literal["suggest", "auto"]] = None
+    enabled: Optional[bool] = None
+
+
+@autopilot_router.get("/recipes", summary="People's own automation recipes (each with board_role and board_id)")
+def recipe_list(board_role: Optional[str] = None, _user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    from app.services.coordination import recipes
+
+    return recipes.list_recipes(board_role)
+
+
+@autopilot_router.get("/recipes/options", summary="Everything the rule form needs as choices: labels, dates, people, fields")
+def recipe_options(board_role: str = Query(..., max_length=16), _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import recipes
+
+    try:
+        return recipes.options(board_role)
+    except ValueError as exc:
+        _fail(exc)
+
+
+@autopilot_router.post("/recipes/preview", summary="What a rule (saved or not) would act on today; nothing is saved or sent")
+def recipe_preview(body: RecipeIn, _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import recipes
+
+    data = {"mode": "suggest", "name": "Preview", **body.model_dump(exclude_none=True)}
+    try:
+        clean = recipes._check(data)
+    except ValueError as exc:
+        _fail(exc)
+    return {"description": recipes.describe(clean), "today": recipes.preview(clean)}
+
+
+@autopilot_router.get("/recipes/starters", summary="Allied's ready-made recipes, from what the boards show, each with why")
+def recipe_starters(preview: bool = False, _user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    """preview=true adds `today`: the items each would act on now (nothing is saved or sent)."""
+    from app.services.coordination import recipes
+
+    return recipes.starters(with_preview=preview)
+
+
+@autopilot_router.post("/recipes/starters/{slug}", summary="Add a ready-made recipe (recipients, mode etc. may be changed)",
+                       status_code=status.HTTP_201_CREATED)
+def recipe_add_starter(slug: str, body: RecipeIn, user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import recipes
+
+    try:
+        return recipes.add_starter(slug, body.model_dump(exclude_none=True), user)
+    except (LookupError, ValueError) as exc:
+        _fail(exc)
+
+
+@autopilot_router.post("/recipes", summary="Add a recipe", status_code=status.HTTP_201_CREATED)
+def recipe_add(body: RecipeIn, user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import recipes
+
+    try:
+        return recipes.create(body.model_dump(exclude_none=True), user)
+    except ValueError as exc:
+        _fail(exc)
+
+
+@autopilot_router.patch("/recipes/{recipe_id}", summary="Change a recipe, or switch it on or off")
+def recipe_update(recipe_id: int, body: RecipeIn, user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import recipes
+
+    try:
+        return recipes.update(recipe_id, body.model_dump(exclude_none=True), user)
+    except (LookupError, ValueError) as exc:
+        _fail(exc)
+
+
+@autopilot_router.delete("/recipes/{recipe_id}", summary="Remove a recipe", status_code=status.HTTP_204_NO_CONTENT)
+def recipe_delete(recipe_id: int, _user: dict = Depends(require_manager)) -> None:
+    from app.services.coordination import recipes
+
+    try:
+        recipes.delete(recipe_id)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@autopilot_router.post("/recipes/run-dates", summary="Check the date recipes now (a dry run unless dry_run is false)")
+def recipe_run_dates(dry_run: bool = True, _user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import recipes
+
+    return {"dry_run": dry_run, "did": recipes.run_dates(dry_run=dry_run)}
+
+
+@autopilot_router.get("/scorecard", summary="How often people send or cancel each automation's drafts, with advice")
+def autopilot_scorecard(days: int = Query(90, ge=7, le=365), _user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import autopilot
+
+    return autopilot.scorecard(days)

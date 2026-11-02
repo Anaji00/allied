@@ -17,8 +17,10 @@ from app.core.database import Base, _get_db_url
 import app.models.db_models  # noqa: F401
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# When the app runs migrations at start-up, its logging is already set up; fileConfig
+# would otherwise disable every existing logger (app and uvicorn) for the rest of the run.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", _get_db_url().replace("%", "%%"))
 

@@ -12,6 +12,13 @@ from app.config import settings
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _head(cfg):
+    """The one head every database ends on (later migrations build on c3d9e5a1f7b2)."""
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(cfg).get_current_head()
+
+
 @pytest.fixture
 def scratch_db(tmp_path, monkeypatch):
     """A throwaway SQLite file; migrations/env.py reads the URL from settings."""
@@ -40,7 +47,7 @@ def test_fresh_database_upgrades_cleanly(scratch_db):
     columns, indexes, version = _rfq_schema(engine)
     assert "monday_item_id" in columns
     assert indexes["ix_rfqs_monday_item_id"]["unique"]
-    assert version == "c3d9e5a1f7b2"
+    assert version == _head(cfg)
 
 
 def test_database_stamped_by_the_first_version_gets_the_column(scratch_db):
@@ -62,6 +69,6 @@ def test_database_stamped_by_the_first_version_gets_the_column(scratch_db):
     columns, indexes, version = _rfq_schema(engine)
     assert "monday_item_id" in columns
     assert indexes["ix_rfqs_monday_item_id"]["unique"]
-    assert version == "c3d9e5a1f7b2"
+    assert version == _head(cfg)
     with engine.connect() as conn:
         assert conn.execute(sa.text("select number, monday_item_id from rfqs")).all() == [("RFQ-KEEP-1", None)]

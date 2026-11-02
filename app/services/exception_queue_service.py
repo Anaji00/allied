@@ -24,7 +24,7 @@ from app.core.container import get_monday_client
 class ExceptionItem(BaseModel):
     """Single operational discrepancy requiring one-click resolution."""
     exception_id: str = Field(default_factory=lambda: f"EXC-{uuid.uuid4().hex[:6].upper()}")
-    exception_type: str  # STALE_VENDOR_PRICE, INVOICE_COST_VARIANCE, UNMATCHED_SKU, EXPEDITED_FREIGHT
+    exception_type: str  # INVOICE_COST_VARIANCE, UNMATCHED_SKU, EXPEDITED_FREIGHT, ORDER_EXCEPTION, ...
     severity: str = "MEDIUM"  # LOW, MEDIUM, HIGH, CRITICAL
     title: str
     description: str
@@ -41,8 +41,8 @@ class ResolveExceptionRequest(BaseModel):
     """Payload to resolve an exception."""
     action_type: str
     resolution_notes: Optional[str] = "Resolved via Operations Console"
-    # Required by OVERRIDE_PRICE_CHECK. The override previously registered the
-    # exception's variance amount (often 0.00) as the new unit cost.
+    # No longer used: vendor repricing was dropped. Kept so older screens that still
+    # send it are not rejected.
     new_unit_price: Optional[Decimal] = Field(None, gt=0)
 
 
@@ -72,20 +72,6 @@ class ExceptionQueueService:
     def _seed_default_exceptions(self) -> None:
         """Seeds representative realistic exceptions."""
         seed_items = [
-            ExceptionItem(
-                exception_id="EXC-NIB-01",
-                exception_type="STALE_VENDOR_PRICE",
-                severity="HIGH",
-                title="Stale Quote Detected: Nibrock Mining & Wear Solutions",
-                description="Pricing for PLATE-300XL-38 ($110.00/unit) on PO-NIBROCK-9921 is 74 days old (>60d limit).",
-                reference_id="PO-NIBROCK-9921",
-                vendor_or_customer="NIBROCK",
-                variance_amount=0.0,
-                available_actions=[
-                    {"action": "DISPATCH_URGENT_RFQ", "label": "Send Urgent RFQ Email to Nibrock"},
-                    {"action": "OVERRIDE_PRICE_CHECK", "label": "Approve Current Price ($110.00)"},
-                ],
-            ),
             ExceptionItem(
                 exception_id="EXC-INV-02",
                 exception_type="INVOICE_COST_VARIANCE",
@@ -286,8 +272,6 @@ class ExceptionQueueService:
                 f"Action '{request.action_type}' is not available for exception {exception_id}. "
                 f"Choose one of: {sorted(allowed | {MANUAL_RESOLUTION_ACTION})}"
             )
-        if action == "OVERRIDE_PRICE_CHECK" and request.new_unit_price is None:
-            raise ValueError("OVERRIDE_PRICE_CHECK requires new_unit_price, the price being approved.")
 
         # The status check and the status write are one atomic step: two
         # operators clicking resolve on the same exception must not both get
@@ -404,41 +388,6 @@ class ExceptionQueueService:
         if action == MANUAL_RESOLUTION_ACTION:
             return "Resolved manually; the operator attests the work was done outside the system.", True
 
-        if action == "OVERRIDE_PRICE_CHECK":
-            from app.services.vendor_reprice import vendor_reprice_service
-
-            sku = self._extract_sku(item)
-            if not sku:
-                return "No SKU identified on the exception; price override not applied.", False
-            new_price = Decimal(str(request.new_unit_price))
-            vendor_reprice_service.register_price(
-                item_id=sku,
-                vendor=item.vendor_or_customer,
-                unit_cost=float(new_price),
-            )
-            return (
-                f"Registered {item.vendor_or_customer} price ${new_price:,.2f} for {sku} "
-                f"(re-dated today); orders may proceed.",
-                True,
-            )
-
-        if action == "DISPATCH_URGENT_RFQ":
-            from app.services.outbound_email_service import outbound_email_service
-            from app.services.vendor_reprice import vendor_reprice_service
-
-            sku = self._extract_sku(item)
-            vendor_reprice_service.dispatch_reprice_request(
-                vendor=item.vendor_or_customer,
-                items=[sku] if sku else [],
-                po_number=item.reference_id,
-            )
-            entry = next(
-                (m for m in outbound_email_service.get_outbox(limit=20)
-                 if m.get("category") == "REPRICE_RFQ" and m.get("reference") == item.reference_id),
-                None,
-            )
-            return self._mail_outcome(entry, f"Urgent RFQ to {item.vendor_or_customer}")
-
         if action == "DISPATCH_DISPUTE_NOTICE":
             from app.services.reconciliation_service import reconciliation_service
 
@@ -479,6 +428,9 @@ class ExceptionQueueService:
             )
             return f"monday event #{event_id} is queued to run again.", True
 
+        if action in ("APPROVE_AND_STAGE", "REQUEST_CUSTOMER_CLARIFICATION"):
+            return self._held_order_action(item, action, actor_email)
+
         if action == "ACCEPT_PRICE_SURCHARGE":
             # A decision, and recording it is the action. Releasing the payment
             # itself happens in Sage; nothing here claims it was released.
@@ -492,6 +444,65 @@ class ExceptionQueueService:
             # An exception with no listed actions can only ever be closed by hand.
             not item.available_actions,
         )
+
+    def _held_order_action(self, item: ExceptionItem, action: str, actor_email: str) -> Tuple[str, bool]:
+        """An order email the AI was unsure of: raise it as read once a person approves,
+        or ask the customer to confirm. The AI's read is the email_triage record."""
+        from app.models.db_models import AiSuggestionDB
+
+        match = re.search(r"Email ref: (\S+?)\.?$", item.description or "")
+        ref = match.group(1) if match else item.reference_id
+        with SessionLocal() as db:
+            row = (db.query(AiSuggestionDB).filter(AiSuggestionDB.feature == "email_triage",
+                                                   AiSuggestionDB.reference == ref)
+                   .order_by(AiSuggestionDB.id.desc()).first())
+            read = dict(row.output or {}) if row else None
+            source = dict(row.input or {}) if row else {}
+            suggestion_id = row.id if row else None
+        if read is None:
+            return "The AI's reading of this email is no longer on file; enter the order by hand.", False
+        sender = source.get("sender") or ""
+
+        if action == "REQUEST_CUSTOMER_CLARIFICATION":
+            from app.services.outbound_email_service import outbound_email_service
+
+            if "@" not in sender:
+                return "No sender address on file to ask.", False
+            entry = outbound_email_service.send(
+                to=sender, subject=f"Re: {source.get('subject') or 'your order'}",
+                body=("Thank you for your order. Before we enter it, could you confirm the PO number, "
+                      "the quantities and the prices? We want to be sure we ship exactly what you need."
+                      "\n\nAllied Welding Systems"),
+                category="CUSTOMER_CLARIFICATION", reference=item.exception_id,
+            )
+            return self._mail_outcome(entry, f"Clarification request to {sender}")
+
+        if not read.get("po_number") or not read.get("lines"):
+            return "The AI found no PO number or no lines; ask the customer, or enter the order by hand.", False
+        from app.models.orders import InboundOrderRequest, OrderLineItem
+        from app.services.entity_matcher import EntityMatcher
+        from app.services.order_orchestrator import OrderOrchestrator
+
+        customer, _ = EntityMatcher().match_customer(read.get("customer_name") or sender)
+        request = InboundOrderRequest(
+            customer_name=customer["customer_name"], customer_po_number=read["po_number"],
+            shipping_address=customer.get("shipping_address", "Customer Master Destination"),
+            line_items=[OrderLineItem(raw_item_text=line.get("description") or "",
+                                      quantity=Decimal(str(line.get("quantity") or 1)),
+                                      unit_price=Decimal(str(line.get("unit_price") or 0)))
+                        for line in read["lines"]],
+            notes=f"Approved by {actor_email} from a held order email ({ref}).",
+            payment_terms=customer.get("payment_terms", "Net 30 Days"),
+        )
+        result = OrderOrchestrator().process_inbound_order(request)
+        if suggestion_id:
+            from app.services.ai import store
+
+            try:
+                store.review(suggestion_id, approve=True, actor={"email": actor_email}, note=f"Raised SO #{result.sales_order_number}")
+            except Exception as exc:  # noqa: BLE001 - the order stands; the review mark is bookkeeping
+                logger.info(f"Could not mark AI suggestion {suggestion_id} approved: {exc}")
+        return f"Raised SO #{result.sales_order_number} for {customer['customer_name']} (PO {read['po_number']}).", True
 
     @staticmethod
     def _mail_outcome(entry: Optional[Dict[str, Any]], what: str) -> Tuple[str, bool]:

@@ -257,7 +257,7 @@ async def receive_call_audio(request: Request):
 @router.get("/order-status", summary="Read-only order lookup for callers")
 async def order_status(number: str = Query(..., min_length=2), request: Request = None):
     await _caller(request)
-    orders = features.find_orders([number])
+    orders = await run_in_threadpool(features.find_orders, [number])
     # Status only: never prices, never other customers' details.
     return {
         "found": bool(orders),

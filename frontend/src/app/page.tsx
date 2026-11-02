@@ -1,12 +1,12 @@
 import { Suspense } from 'react';
+import { BoardsView } from '@/components/boards/boards-view';
 import { RowsSkeleton } from '@/components/data/states';
-import { InboxView } from '@/components/inbox/inbox-view';
 
-// Home is the Inbox: everything waiting on the signed-in person.
-export default function InboxPage() {
+// Home is the boards: monday's boards as monday shows them, with the app's automations on each row.
+export default function BoardsPage() {
   return (
-    <Suspense fallback={<RowsSkeleton />}>
-      <InboxView />
+    <Suspense fallback={<RowsSkeleton rows={8} />}>
+      <BoardsView />
     </Suspense>
   );
 }

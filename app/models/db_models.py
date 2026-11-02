@@ -254,6 +254,7 @@ class VendorJobDB(Base):
     requested_on = Column(String(10), nullable=True)
     acknowledged_on = Column(String(10), nullable=True)
     quoted_lead_days = Column(Integer, nullable=True)
+    follow_up_days = Column(Integer, nullable=True)  # set by hand: days after the PO before the vendor is followed up
     promised_original = Column(String(10), nullable=True)
     promised_on = Column(String(10), nullable=True)
     shipped_on = Column(String(10), nullable=True)
@@ -300,6 +301,75 @@ class RfqDB(Base):
     history = Column(JSON, nullable=False, default=list)
     source = Column(String(16), nullable=False, default="manual")  # manual, email, assistant
     created_by = Column(String(256), nullable=True)
+
+
+class EngineeringNoteDB(Base):
+    """A note from management to the engineers on one engineering job."""
+
+    __tablename__ = "engineering_notes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    board_id = Column(String(32), nullable=True, index=True)
+    item_id = Column(String(32), nullable=False, index=True)      # the monday item (drawing job)
+    item_name = Column(String(512), nullable=True)
+    author_email = Column(String(256), nullable=False)
+    text = Column(Text, nullable=False)                           # the English note, as written
+    translations = Column(JSON, nullable=False, default=dict)     # {"zh": {...}, "vi": {...}}
+    recipients = Column(JSON, nullable=False, default=list)
+    urgent = Column(Boolean, nullable=False, default=False)       # also sent as a text and push
+    read_by = Column(JSON, nullable=False, default=dict)          # {email: when read}
+    audio = Column(JSON, nullable=True)                           # {file, mime, size, seconds} of a voice note
+    transcript = Column(Text, nullable=True)                      # what the voice note says, as heard
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class MailLogDB(Base):
+    """Every email the mailbox reader has seen, once, and what was done with it."""
+
+    __tablename__ = "mail_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(String(512), nullable=False, unique=True, index=True)
+    folder = Column(String(128), nullable=False)
+    sender = Column(String(320), nullable=False)
+    sender_name = Column(String(320), nullable=True)
+    recipients = Column(String(2000), nullable=True)
+    subject = Column(String(500), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    direction = Column(String(16), nullable=False)       # in (from outside), internal (staff), out (sent by us)
+    category = Column(String(32), nullable=False, index=True)
+    tags = Column(String(300), nullable=True)             # comma-separated: rfq, invoice, urgent, newsletter, ...
+    thread_key = Column(String(200), nullable=True, index=True)   # the conversation's first Message-ID
+    summary = Column(Text, nullable=True)
+    outcome = Column(String(64), nullable=False)          # what the system did (RFQ_LOGGED, VENDOR_REPLY, LOGGED_ONLY, ...)
+    needs_action = Column(Boolean, nullable=False, default=False, index=True)
+    handled_by = Column(String(256), nullable=True)
+    handled_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class AutomationRecipeDB(Base):
+    """A person's own rule: when an item's status becomes a label, or a date is N days
+    away, tell someone or draft an email. Recipes only ever act inside Allied's system."""
+
+    __tablename__ = "automation_recipes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False)
+    board_role = Column(String(16), nullable=False)        # projects, vendors, rfqs
+    trigger = Column(String(16), nullable=False)           # status_is, date_within
+    column = Column(String(128), nullable=True)            # column id or title; blank = the status column
+    value = Column(String(128), nullable=True)             # the label, or the number of days
+    action = Column(String(16), nullable=False)            # notify, draft_email
+    recipients = Column(String(512), nullable=True)        # emails, or owner / leadership / reviewers
+    email_to = Column(String(256), nullable=True)          # draft_email: an address, or vendor / customer
+    subject = Column(String(256), nullable=True)
+    body = Column(Text, nullable=True)                     # {item} {status} {date} {board} and column titles
+    mode = Column(String(8), nullable=False, default="suggest")   # suggest: a person sends; auto
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(256), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 class AssistantActionDB(Base):

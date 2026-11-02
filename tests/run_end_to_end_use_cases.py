@@ -57,6 +57,8 @@ settings.OUTPUT_DIR = _RUN_TMP / "output"
 settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 settings.DB_DIR = _RUN_TMP  # design-document submissions land here, not in data/
 settings.GROQ_API_KEY = ""  # scenarios never call a real AI service
+# Knauf's buyers order from knaufinsulation.com; the customer record has only its knauf.com AP address.
+settings.ORDER_TRUSTED_SENDER_DOMAINS = "knaufinsulation.com=10148"
 settings.AI_FALLBACK_PROVIDER = ""
 
 from fastapi.testclient import TestClient
@@ -224,44 +226,17 @@ def run_use_case_3():
 # USE CASE 4: Vendor Reprice Staleness Check & Profit Margin Protection
 # ==============================================================================
 def run_use_case_4():
-    print_banner("Use Case 4: Vendor Reprice Staleness Check & Profit Margin Protection")
-
-    # Register the stale quote explicitly. This used to come from a demo fixture
-    # baked into VendorRepriceService, which re-dated itself to 74 days old on
-    # every construction and so made PLATE-300XL-38 permanently unorderable.
-    from datetime import timedelta
-    from app.services.vendor_reprice import vendor_reprice_service
-    vendor_reprice_service.register_price(
-        item_id="PLATE-300XL-38",
-        vendor="NIBROCK",
-        unit_cost=110.0,
-        quoted_date=date.today() - timedelta(days=settings.VENDOR_PRICE_STALENESS_DAYS + 14),
-    )
-
-    stale_email = InboundEmailMessage(
+    print_banner("Use Case 4: An Old Vendor Price Never Holds An Order")
+    # Vendor repricing was dropped: Allied can't renegotiate much with its vendors.
+    email = InboundEmailMessage(
         sender_email="purchasing@owenscorning.com",
         sender_name="Mark Richardson (Owens Corning)",
-        subject="PO-STALE-CHECK: Heavy 300XL Wear Plate",
-        body_text="Please supply 6 units of PLATE-300XL-38 to Edmonton plant under PO-STALE-CHECK.",
+        subject="PO-OLD-PRICE: Heavy 300XL Wear Plate",
+        body_text="Please supply 6 units of PLATE-300XL-38 to Edmonton plant under PO-OLD-PRICE.",
     )
-    result = inbound_email_daemon.process_inbound_email(stale_email)
-    
-    assert result.status == "FLAGGED_FOR_REVIEW"
-    assert "SO-PENDING" in result.sales_order_number
-    assert "Under Review" in result.customer_acknowledgment_email
-    
-    # Check that exception was recorded in queue
-    exceptions = exception_queue_service.list_exceptions(status_filter="OPEN")
-    stale_exc = next((e for e in exceptions if "PO-STALE-CHECK" in e.reference_id or "PO-STALE-CHECK" in e.title), None)
-    assert stale_exc is not None, "Stale pricing exception was not queued"
-    
-    print_result("Order Execution Halting", "SUCCESS", "Halted before Sage commitment")
-    print_result("Exception Queue Flagging", "SUCCESS", f"Logged as {stale_exc.exception_id}: {stale_exc.title}")
-    print_result("Client Review Notice", "SUCCESS", "Sent 'Order Received - Under Review' response")
-
-    # Re-quoting clears the halt, so later use cases can order this SKU again.
-    vendor_reprice_service.register_price("PLATE-300XL-38", "NIBROCK", 110.0)
-    print_result("Reprice Clears The Halt", "SUCCESS", "Fresh quote registered; SKU orderable again")
+    result = inbound_email_daemon.process_inbound_email(email)
+    assert result.status == "PROCESSED_ORDER_CREATED"
+    print_result("Order Raised", "SUCCESS", f"SO #{result.sales_order_number}; no repricing hold")
 
 
 # ==============================================================================
@@ -269,6 +244,18 @@ def run_use_case_4():
 # ==============================================================================
 def run_use_case_5():
     print_banner("Use Case 5: Exception Queue Multi-Action Triage & Resolution")
+    # The queue used to start with seeded repricing holds; repricing was dropped, so the
+    # scenario raises its own: an order email the system could not read with certainty.
+    from app.services.exception_queue_service import ExceptionItem
+
+    exception_queue_service.add_exception(ExceptionItem(
+        exception_type="ORDER_EXCEPTION", severity="MEDIUM", title="Check order email: PO 77120 liners",
+        description="Quantity unclear in the customer's email.", reference_id="PO-77120",
+        vendor_or_customer="Owens Corning",
+        available_actions=[{"action": "APPROVE_AND_STAGE", "label": "Approve & Stage Order"},
+                           {"action": "REQUEST_CUSTOMER_CLARIFICATION", "label": "Email Customer"},
+                           {"action": "MANUALLY_RESOLVED", "label": "Resolved by hand"}],
+    ))
     exceptions = exception_queue_service.list_exceptions(status_filter="OPEN")
     print(f"  Active open exceptions in queue: {len(exceptions)}")
     assert len(exceptions) >= 1
@@ -292,16 +279,6 @@ def run_use_case_5():
     assert exception_queue_service._queue[target1.exception_id].status == "RESOLVED"
     print_result("Manual Resolution", "SUCCESS", f"Item {target1.exception_id} marked RESOLVED")
 
-    # An urgent RFQ only closes the item once the mail actually went out.
-    if len(exceptions) > 1 and "DISPATCH_URGENT_RFQ" in (exceptions[1].available_actions or []):
-        target2 = exceptions[1]
-        res2 = exception_queue_service.resolve_exception(target2.exception_id, ResolveExceptionRequest(
-            action_type="DISPATCH_URGENT_RFQ",
-            resolution_notes="Urgent price request to mill supplier.",
-        ))
-        expected = "RESOLVED" if res2["status"] == "success" else "OPEN"
-        assert exception_queue_service._queue[target2.exception_id].status == expected
-        print_result("Urgent RFQ", "SUCCESS", f"Item {target2.exception_id} {expected} ({res2['status']})")
 
 
 # ==============================================================================
@@ -1250,14 +1227,15 @@ def run_use_case_38():
         tracking_number="ODFL-8899210-FT",
         recipient_email="receiving@owenscorning.com",
     )
-    disp_res = logistics_dispatcher.dispatch_shipment(disp_req)
-    assert disp_res.dispatch_status == "DISPATCHED_PACKING_LIST_GENERATED"
-    assert disp_res.tracking_number == "ODFL-8899210-FT"
-    assert "Old Dominion" in disp_res.customer_notification_email
+    # SO-12930 already shipped in Use Case 12: a second dispatch is refused, so the customer
+    # never gets two manifests and the order is never marked shipped twice.
+    from app.services.logistics_dispatcher import AlreadyDispatchedError
 
-    print_result("Flatbed Carrier Dispatch", "SUCCESS", f"Carrier: {disp_res.carrier_name}")
-    print_result("Tracking PRO Allocated", "SUCCESS", f"PRO: {disp_res.tracking_number}")
-    print_result("Formal Shipping Manifest Email", "SUCCESS", "Dispatched to plant receiving dock")
+    try:
+        logistics_dispatcher.dispatch_shipment(disp_req)
+        raise AssertionError("a second dispatch of the same order went through")
+    except AlreadyDispatchedError:
+        print_result("Second Dispatch Refused", "SUCCESS", "SO-12930 shipped once; nothing sent again")
 
 
 # ==============================================================================

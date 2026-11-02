@@ -9,6 +9,7 @@ plain text sized for Groq's free-tier token limits.
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
@@ -28,6 +29,7 @@ class Tool:
     connector: str = "allied"
     summarize: Optional[Callable[[Dict[str, Any]], str]] = None
     required: List[str] = field(default_factory=list)
+    offered: bool = True  # False: never shown to the model; only screens propose it (it still needs a click)
 
     def spec(self) -> Dict[str, Any]:
         return {"type": "function", "function": {
@@ -196,6 +198,30 @@ def run_autopilot(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
             "link": "/automation"}
 
 
+def _chat_action(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    from app.api.v1.endpoints.rag_chat import run_action
+
+    out = run_action(args["action_type"], dict(args.get("payload") or {}), user)
+    return {"done": f"{args['action_type'].replace('_', ' ').title()}: done.", "data": out.get("data", out)}
+
+
+_CHAT_ACTION_WORDS = {
+    "EXECUTE_END_TO_END_ORDER": "Raise a Sage sales order and its vendor POs",
+    "EXECUTE_PACKING_LIST_DISPATCH": "Dispatch an order (packing list, carrier booking)",
+    "RESOLVE_EXCEPTION": "Resolve a review-queue item",
+    "EXECUTE_INGEST_RFQ_EMAIL": "Process an email as an incoming order or RFQ",
+    "EXECUTE_CSV_IMPORT": "Import a CSV into the master data",
+    "EXECUTE_CRM_FORM_REQUEST": "Email a lead a form request",
+    "EXECUTE_THREE_WAY_MATCH": "Match a vendor invoice against its PO and receipt",
+    "EXECUTE_WEAR_SCAN": "Scan customer equipment for wear and send alerts",
+}
+
+
+def _chat_action_summary(a: Dict[str, Any]) -> str:
+    payload = json.dumps(a.get("payload") or {}, indent=1, default=str)
+    return f"{_CHAT_ACTION_WORDS.get(a.get('action_type'), a.get('action_type'))}\n{payload[:4000]}"
+
+
 def find_orders(args: Dict[str, Any], user: Dict[str, Any]) -> str:
     from app.core.database import SessionLocal
     from app.services.database_service import DatabaseService
@@ -320,8 +346,10 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
           "complexity": _s("SIMPLE (repeat part), STANDARD, or COMPLEX (new design / vendor pricing)",
                            enum=["SIMPLE", "STANDARD", "COMPLEX"])},
          log_rfq, write=True, min_role="OPERATOR", required=["customer", "subject"],
-         summarize=lambda a: f"Log an RFQ for {a.get('customer')}: {a.get('subject')} ({(a.get('complexity') or 'STANDARD').upper()})"
-         + (f", owner {a['owner_email']}" if a.get("owner_email") else "")),
+         summarize=lambda a: (f"Log an RFQ for {a.get('customer')}: {a.get('subject')} ({(a.get('complexity') or 'STANDARD').upper()})"
+                              + (f", owner {a['owner_email']}" if a.get("owner_email") else "")
+                              + (f"\nContact: {a['contact_email']}" if a.get("contact_email") else "")
+                              + (f"\nDetails: {a['summary']}" if a.get("summary") else ""))),
     Tool("update_rfq", "Change an RFQ: status, owner, vendor asked for pricing, quote number/amount, or a note. "
          "LOST and NO_BID need a reason; QUOTE_SENT needs a quote number or amount.",
          {"rfq": _s("RFQ number"), "status": _s("New status", enum=["ACKNOWLEDGED", "CLARIFYING", "WAITING_VENDOR", "PRICING",
@@ -346,6 +374,9 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
          "rfq_vendor_chaser, quote_followup). Messages it makes still wait for a person unless the play is on auto.",
          {"play": _s("One play's name; blank for all")}, run_autopilot, write=True, min_role="ADMIN",
          summarize=lambda a: f"Run the autopilot now ({a.get('play') or 'every play'})"),
+    Tool("chat_action", "A change asked for on the Copilot chat screen.", {}, lambda args, user: _chat_action(args, user),
+         write=True, min_role="OPERATOR", offered=False,
+         summarize=lambda a: _chat_action_summary(a)),
     Tool("post_monday_update", "Post a comment on a monday item.",
          {"item_id": {"type": "integer", "description": "monday item id"}, "text": _s("Comment text")},
          post_monday_update, write=True, min_role="OPERATOR", connector="monday", required=["item_id", "text"],
@@ -362,4 +393,5 @@ def all_tools() -> Dict[str, Tool]:
 
 
 def for_user(user: Dict[str, Any]) -> Dict[str, Tool]:
-    return {n: t for n, t in all_tools().items() if t.allowed(user)}
+    """What the model may call for this user (screen-only tools are left out)."""
+    return {n: t for n, t in all_tools().items() if t.allowed(user) and t.offered}

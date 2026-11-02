@@ -32,7 +32,7 @@ class RAGSourceCitation(BaseModel):
 
 class ActionPayload(BaseModel):
     """Interactive button payload enabling 1-click execution in Sage 50, CSV import, or order form."""
-    action_type: str = Field(..., description="'STAGE_SAGE_ORDER' | 'STAGE_OPERATIONS' | 'VIEW_MTR' | 'COPY_PROPOSAL' | 'RUN_DRY_RUN' | 'EXECUTE_LEAD_SCRAPE' | 'EXECUTE_OEM_UPGRADE' | 'EXECUTE_VENDOR_REPRICE' | 'EXECUTE_CRM_FORM_REQUEST' | 'EXECUTE_OUTREACH_EMAIL' | 'EXECUTE_END_TO_END_ORDER' | 'SCAN_INTERNAL_DOCUMENT' | 'EXECUTE_CSV_IMPORT'")
+    action_type: str = Field(..., description="'STAGE_SAGE_ORDER' | 'STAGE_OPERATIONS' | 'VIEW_MTR' | 'COPY_PROPOSAL' | 'RUN_DRY_RUN' | 'EXECUTE_LEAD_SCRAPE' | 'EXECUTE_OEM_UPGRADE' | 'EXECUTE_CRM_FORM_REQUEST' | 'EXECUTE_OUTREACH_EMAIL' | 'EXECUTE_END_TO_END_ORDER' | 'SCAN_INTERNAL_DOCUMENT' | 'EXECUTE_CSV_IMPORT'")
     button_label: str = Field(..., description="Display text for the button")
     prefill_data: Dict[str, Any] = Field(default_factory=dict, description="Pre-filled order form or MTR payload")
 

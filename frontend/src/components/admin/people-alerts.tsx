@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Bell, Loader2, Plus, ScanSearch } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -25,6 +25,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { api, ok } from '@/lib/api/client';
 import { dateTime, since, words } from '@/lib/format';
+import { optimistic } from '@/lib/optimistic';
 import { cn } from '@/lib/utils';
 
 const TABS = ['history', 'summary', 'contacts', 'accounts'] as const;
@@ -121,14 +122,20 @@ function History() {
     queryFn: async () =>
       (await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: show === 'open', everyone: everyone && isManager, limit: 200 } } }))) as { items: Alert[]; open: number },
   });
+  const ackSave = optimistic<number>(client, ['alerts', 'history'], (old: { items: Alert[]; open: number }, id) => ({
+    ...old,
+    open: Math.max(0, old.open - 1),
+    items: old.items.map((a) => (a.id === id && !a.acknowledged_at ? { ...a, acknowledged_at: new Date().toISOString() } : a)),
+  }));
   const ack = useMutation({
     mutationFn: async (id: number) => ok(api.POST('/api/v1/alerts/{notification_id}/acknowledge', { params: { path: { notification_id: id } } })),
-    onSuccess: () => {
-      toast.success('Marked handled');
-      void client.invalidateQueries({ queryKey: ['alerts'] });
-      void client.invalidateQueries({ queryKey: ['inbox'] });
+    onMutate: ackSave.onMutate,
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['inbox'] }),
+    onError: (e, _id, context) => {
+      ackSave.rollback(context);
+      toast.error('It wasn’t marked handled', { description: e.message });
     },
-    onError: (e) => toast.error('It wasn’t marked handled', { description: e.message }),
+    onSettled: ackSave.onSettled,
   });
   const check = useMutation({
     mutationFn: async () => (await ok(api.POST('/api/v1/alerts/check-now'))) as Record<string, number>,
@@ -193,7 +200,7 @@ function History() {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">
-        Open alerts are also in the <Link className="underline underline-offset-2" href="/">Inbox</Link>, where you can work through them with the keyboard.
+        Open alerts are also in the <Link className="underline underline-offset-2" href="/inbox">Inbox</Link>, where you can work through them with the keyboard.
       </p>
 
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_26rem]')}>
@@ -642,10 +649,10 @@ function Accounts() {
           ) : users.error ? (
             <ErrorState error={users.error} onRetry={() => void users.refetch()} />
           ) : (
-            <DataTable label="User accounts" columns={userColumns} data={rows} getRowId={(u) => u.email} selectedId={open} onSelect={(u) => setOpen(open === u.email ? null : u.email)} minWidth={640} />
+            <DataTable label="User accounts" columns={userColumns} data={rows} getRowId={(u) => u.email} recordName={(u) => recordKey('user', u.email)} selectedId={open} onSelect={(u) => setOpen(open === u.email ? null : u.email)} minWidth={640} />
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => setOpen(null)} title={selected?.full_name ?? ''} description={selected?.email}>
+        <DetailPanel open={Boolean(selected)} onClose={() => setOpen(null)} recordName={selected ? recordKey('user', selected.email) : undefined} title={selected?.full_name ?? ''} description={selected?.email}>
           {selected && <UserForm key={`${selected.email}-${selected.role}-${selected.facility}-${selected.is_active}`} user={selected} />}
         </DetailPanel>
       </div>
@@ -664,16 +671,24 @@ function UserForm({ user }: { user: User }) {
   const [password, setPassword] = useState('');
   const [confirmDisable, setConfirmDisable] = useState(false);
 
+  type Change = { full_name?: string; role?: string; facility?: string; is_active?: boolean; new_password?: string };
+  // The password never goes into the cached list.
+  const userSave = optimistic<Change>(client, ['users'], (old: User[], { new_password: _secret, ...change }) =>
+    old.map((u) => (u.email === user.email ? { ...u, ...change } : u)),
+  );
   const save = useMutation({
-    mutationFn: async (body: { full_name?: string; role?: string; facility?: string; is_active?: boolean; new_password?: string }) =>
-      ok(api.PATCH('/api/v1/auth/users/{email}', { params: { path: { email: user.email } }, body })),
+    mutationFn: async (body: Change) => ok(api.PATCH('/api/v1/auth/users/{email}', { params: { path: { email: user.email } }, body })),
+    onMutate: userSave.onMutate,
     onSuccess: (_r, body) => {
       toast.success(body.is_active === false ? `${user.full_name} can no longer sign in` : body.is_active ? `${user.full_name} can sign in again` : 'Saved');
       setPassword('');
       setConfirmDisable(false);
-      void client.invalidateQueries({ queryKey: ['users'] });
     },
-    onError: (e) => toast.error('Not saved', { description: e.message }),
+    onError: (e, _body, context) => {
+      userSave.rollback(context);
+      toast.error('Not saved', { description: e.message });
+    },
+    onSettled: userSave.onSettled,
   });
   const changed = name.trim() !== user.full_name || role !== user.role || site !== user.facility;
 

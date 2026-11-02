@@ -136,6 +136,11 @@ def decide(event: Dict[str, Any]) -> Tuple[Optional[str], str]:
     """Maps an event to an action, or (None, reason) when it is not ours to act on."""
     boards = _allowed_boards()
     board_id = str(event.get("boardId") or "")
+    if not boards and not settings.MONDAY_SIMULATION_MODE:
+        # Live monday with no order board named: order automation is off. Acting on any
+        # board's status (e.g. SHIPPED on 2026 Orders, read for vendor tracking) would
+        # dispatch orders nobody asked to dispatch.
+        return None, "no order board is configured (MONDAY_BOARD_ID), so order automation is off"
     if boards and board_id not in boards:
         return None, f"board {board_id or '?'} is not a configured order board"
 
@@ -387,12 +392,17 @@ def sweep(limit: int = 25) -> int:
         )
         exhausted = []
         for r in expired:
+            # Conditional updates: an event that finished between the read above and now
+            # (another thread set it DONE) must not be handed back and run a second time.
+            still = (MondayEventDB.id == r.id, MondayEventDB.status == "PROCESSING", MondayEventDB.next_attempt_at < now)
             if r.attempts >= settings.WEBHOOK_MAX_ATTEMPTS:
-                r.status, r.processed_at, r.next_attempt_at = "DEAD", now, None
-                r.last_error = "Processing was interrupted on every attempt."
-                exhausted.append((r.id, dict(r.payload or {}), r.action or "UNKNOWN"))
+                changed = db.query(MondayEventDB).filter(*still).update(
+                    {MondayEventDB.status: "DEAD", MondayEventDB.processed_at: now, MondayEventDB.next_attempt_at: None,
+                     MondayEventDB.last_error: "Processing was interrupted on every attempt."}, synchronize_session=False)
+                if changed:
+                    exhausted.append((r.id, dict(r.payload or {}), r.action or "UNKNOWN"))
             else:
-                r.status = "RETRY"
+                db.query(MondayEventDB).filter(*still).update({MondayEventDB.status: "RETRY"}, synchronize_session=False)
         db.commit()
         if expired:
             logger.warning(f"Recovered {len(expired)} monday event(s) abandoned mid-processing.")
@@ -515,6 +525,22 @@ def _column_text(item: Optional[Dict[str, Any]], column_id: str) -> str:
     if not (item and column_id):
         return ""
     return str(((item.get("columns") or {}).get(column_id) or {}).get("text") or "").strip()
+
+
+def _pos_sent(item_id: Optional[int]) -> set:
+    """PO numbers earlier "Send PO" runs for this item really sent (not drafted, not held)."""
+    if not item_id:
+        return set()
+    with SessionLocal() as db:
+        rows = db.query(MondayEventDB.result).filter(MondayEventDB.item_id == str(item_id),
+                                                     MondayEventDB.action == RELEASE_PO,
+                                                     MondayEventDB.status == "DONE").all()
+    out = set()
+    for (result,) in rows:
+        for o in ((result or {}).get("purchase_orders") or {}).values():
+            if str(o.get("status", "")).lower() in ("sent", "sent earlier"):
+                out.add(str(o.get("po")))
+    return out
 
 
 def _already_done(item_id: Optional[int], action: str) -> Optional[Dict[str, Any]]:
@@ -659,26 +685,26 @@ def handle_release_po(event: Dict[str, Any]) -> Dict[str, Any]:
     from app.services.outbound_email_service import outbound_email_service
 
     item_id = _item_int(event)
-    previous = _already_done(item_id, RELEASE_PO)
-    if previous:
-        return {"skipped": "purchase orders were already released for this item", "previous": previous}
-
     order = find_order_for_item(item_id, event.get("pulseName") or "")
     if not order:
         raise PermanentEventError("No Allied sales order is linked to this board item, so there are no POs to release.")
 
-    vendors = _orchestrator().entity_matcher.vendors_cache
-    # A retry after a partial failure must not re-email suppliers that
-    # already have their PO.
-    already = {
-        str(m.get("reference")): m.get("status")
-        for m in outbound_email_service.get_outbox(limit=500)
-        if m.get("category") == "PURCHASE_ORDER" and m.get("status") in ("SENT", "DRAFTED")
+    # Only a PO that really went out counts as released. One drafted while mail was off,
+    # or held for a missing supplier email, is sent the next time "Send PO" fires.
+    # Earlier runs are read from the database, so a restart can't email a supplier twice.
+    sent = _pos_sent(item_id) | {
+        str(m.get("reference")) for m in outbound_email_service.get_outbox(limit=500)
+        if m.get("category") == "PURCHASE_ORDER" and m.get("status") == "SENT"
     }
+    wanted = {str(po) for po in (order["purchase_orders"] or {}).values()}
+    if wanted and wanted <= sent:
+        return {"skipped": "every purchase order for this item was already sent", "sent": sorted(wanted)}
+
+    vendors = _orchestrator().entity_matcher.vendors_cache
     outcomes = {}
     for vendor_code, po_number in (order["purchase_orders"] or {}).items():
-        if str(po_number) in already:
-            outcomes[vendor_code] = {"po": po_number, "status": f"{already[str(po_number)].lower()} earlier"}
+        if str(po_number) in sent:
+            outcomes[vendor_code] = {"po": po_number, "status": "sent earlier"}
             continue
         vendor = vendors.get(vendor_code, {})
         email = vendor.get("email") or vendor.get("vendor_email")

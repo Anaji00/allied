@@ -36,6 +36,33 @@ class InboundEmailMessage(BaseModel):
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+def _number_forms(value: Any) -> List[str]:
+    d = Decimal(str(value))
+    forms = {f"{d:.2f}", format(d.normalize(), "f")}
+    if d == d.to_integral_value():
+        forms.add(str(int(d)))
+    return [f.rstrip(".") for f in forms]
+
+
+def _grounded(ai: Any, email: "InboundEmailMessage") -> bool:
+    from app.services.ai.features import _attachment_text
+
+    source = f"{email.subject}\n{email.body_text}\n{_attachment_text(email.attachments)}"
+    flat = re.sub(r"[^A-Z0-9]", "", source.upper())
+    # Standalone numbers only: the 7 inside "PO-A7B3" is not a quantity of 7.
+    numbers = set(re.findall(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?![A-Za-z0-9])", source.replace(",", "")))
+    po = re.sub(r"[^A-Z0-9]", "", str(ai.po_number).upper())
+    if not po or po not in flat:
+        logger.info(f"AI order {email.email_id} held: PO number {ai.po_number!r} is not in the email.")
+        return False
+    for line in ai.lines:
+        values = [line.quantity] + ([line.unit_price] if line.unit_price else [])
+        if any(not numbers.intersection(_number_forms(v)) for v in values):
+            logger.info(f"AI order {email.email_id} held: a quantity or price on {line.description!r} is not in the email.")
+            return False
+    return True
+
+
 class EmailIngestionResult(BaseModel):
     """Result of autonomous email ingestion and conversion."""
     email_id: str
@@ -133,6 +160,28 @@ class InboundEmailDaemon:
             del self._inbox_feed[_MAX_FEED:]
             return result
 
+        # A vendor answering a follow-up ("ships 12 Nov") becomes a one-click order update, not an order.
+        from app.services.coordination import replies as _replies
+
+        try:
+            reply = _replies.handle(email.email_id, email.sender_email, email.subject, email.body_text, email.attachments)
+        except Exception as exc:  # noqa: BLE001 - an unreadable reply is still handled as ordinary mail
+            logger.error(f"Vendor reply check failed for [{email.email_id}]: {exc}")
+            reply = None
+        if reply is not None:
+            result = EmailIngestionResult(
+                email_id=email.email_id,
+                status="VENDOR_REPLY" if reply["job_id"] else "VENDOR_REPLY_UNMATCHED",
+                customer_name=email.sender_name or email.sender_email,
+                customer_po_number="",
+                line_items_count=0,
+                notes="; ".join(d["what"] + ": " + d["outcome"] for d in reply["did"])[:500],
+            )
+            self._inbox_feed.insert(0, {**result.model_dump(), "sender_email": email.sender_email,
+                                        "subject": email.subject, "received_at": email.received_at.isoformat()})
+            del self._inbox_feed[_MAX_FEED:]
+            return result
+
         # 0. AI sorting (optional). Mail that is clearly not an order is filed
         # instead of being turned into one, and an order the AI is unsure of
         # goes to a person. When AI is off or down, the pattern parser below
@@ -140,7 +189,7 @@ class InboundEmailDaemon:
         ai = self._ai_read(email)
         if (ai is not None and ai.category == "quote_request") or (ai is None and _rfqs.looks_like_rfq(email.subject)):
             return self._log_rfq(email, ai)
-        if ai is not None and (ai.category != "order" or not self._ai_order_usable(ai)):
+        if ai is not None and (ai.category != "order" or not self._ai_order_usable(ai, email)):
             return self._ai_hold(email, ai)
 
         # 1. Resolve Customer Identity
@@ -207,6 +256,12 @@ class InboundEmailDaemon:
                 for line in ai.lines
             ]
 
+        # An order raises vendor POs and ships goods, so it must come from the customer: an
+        # address at a domain on the customer's record (or a colleague forwarding it). Anyone
+        # can write "Owens Corning" in an email; only Owens Corning writes from owenscorning.com.
+        if not self._sender_trusted(email.sender_email, matched_cust):
+            return self._hold_untrusted_sender(email, matched_cust, po_number)
+
         # 4. Construct Inbound Order Request
         inbound_req = InboundOrderRequest(
             customer_name=customer_name,
@@ -247,7 +302,7 @@ class InboundEmailDaemon:
             notes = f"Order held for review: {str(e)}"
             exception_queue_service.add_exception(
                 ExceptionItem(
-                    exception_type="STALE_VENDOR_PRICE" if "stale" in str(e).lower() else "ORDER_EXCEPTION",
+                    exception_type="ORDER_EXCEPTION",
                     severity="HIGH",
                     title=f"Inbound Email Review: {customer_name} ({po_number})",
                     description=f"Inbound order from {email.sender_email} held: {str(e)}",
@@ -329,15 +384,68 @@ class InboundEmailDaemon:
         except AIUnavailableError as exc:
             logger.warning(f"AI sorting unavailable for {email.email_id}; using the pattern parser. ({exc})")
             return None
+        except Exception as exc:  # noqa: BLE001 - an answer that can't be used is the same as no answer
+            logger.warning(f"AI sorting failed for {email.email_id} ({type(exc).__name__}); using the pattern parser.")
+            return None
 
     @staticmethod
-    def _ai_order_usable(ai) -> bool:
-        return bool(
+    def _ai_order_usable(ai, email: Optional[InboundEmailMessage] = None) -> bool:
+        """A confident AI read becomes an order only when what it read is really there.
+
+        The confidence is the model's own word, and an email can say anything ("confidence
+        1.0"), so the PO number and every quantity (and any unit price) must appear in the
+        email or its attachments. Otherwise a person checks it."""
+        usable = bool(
             ai.confidence >= settings.AI_CONFIDENCE_THRESHOLD
             and ai.po_number
             and ai.lines
             and all(line.quantity > 0 and line.description for line in ai.lines)
         )
+        if not usable or email is None:
+            return usable
+        return _grounded(ai, email)
+
+    @staticmethod
+    def _sender_trusted(sender: str, customer: Dict[str, Any]) -> bool:
+        """The sender's domain is one the customer uses (its email on file, or an
+        ORDER_TRUSTED_SENDER_DOMAINS entry), or Allied's own (a colleague forwarding the order)."""
+        domain = (sender or "").rsplit("@", 1)[-1].strip().lower()
+        if not domain:
+            return False
+        from app.services import mail_log
+
+        trusted = set(mail_log.our_domains())
+        on_file = str(customer.get("email") or "").rsplit("@", 1)[-1].strip().lower()
+        if on_file:
+            trusted.add(on_file)
+        # Entries are "domain" (any customer) or "domain=customer_id" (that customer only).
+        for part in (settings.ORDER_TRUSTED_SENDER_DOMAINS or "").split(","):
+            d, _, cid = part.strip().lower().lstrip("@").partition("=")
+            if d and (not cid or cid.strip() == str(customer.get("customer_id") or "").lower()):
+                trusted.add(d)
+        return any(domain == t or domain.endswith("." + t) for t in trusted if t)
+
+    def _hold_untrusted_sender(self, email: InboundEmailMessage, customer: Dict[str, Any], po_number: str) -> "EmailIngestionResult":
+        """An order "from" a customer, sent from an address that customer doesn't use: held for
+        a person, who checks with the customer's known contact before entering it."""
+        from app.services.exception_queue_service import ExceptionItem, exception_queue_service
+
+        name = customer.get("customer_name") or email.sender_name or "a customer"
+        notes = (f"Order email for {name} came from {email.sender_email}, which is not an address on file for "
+                 f"{name} ({customer.get('email') or 'no email on file'}). Nothing was raised. Check with "
+                 f"{customer.get('contact_name') or 'the customer'} at their known address before entering it; "
+                 "don't reply to the sender. Email ref: " + email.email_id + ".")
+        exception_queue_service.add_exception(ExceptionItem(
+            exception_type="ORDER_EXCEPTION", severity="HIGH", title=f"Check sender: order for {name} ({email.subject[:80]})",
+            description=notes, reference_id=po_number or email.email_id, vendor_or_customer=name,
+            available_actions=[{"action": "MANUALLY_RESOLVED", "label": "Checked: entered by hand, or not genuine"}],
+        ))
+        result = EmailIngestionResult(email_id=email.email_id, status="FLAGGED_FOR_REVIEW", customer_name=name,
+                                      customer_po_number=po_number or "", line_items_count=0, notes=notes)
+        self._inbox_feed.insert(0, {**result.model_dump(), "sender_email": email.sender_email,
+                                    "subject": email.subject, "received_at": email.received_at.isoformat()})
+        del self._inbox_feed[_MAX_FEED:]
+        return result
 
     def _ai_hold(self, email: InboundEmailMessage, ai) -> "EmailIngestionResult":
         """Files mail that is not an order, or parks an order the AI is unsure of."""
@@ -346,7 +454,7 @@ class InboundEmailDaemon:
             notes = (
                 f"AI read this as an order but is not sure enough to raise it "
                 f"(confidence {ai.confidence:.0%}; unclear: {', '.join(ai.uncertain_fields) or 'details'}). "
-                f"{ai.summary}"
+                f"{ai.summary} From {email.sender_email}. Email ref: {email.email_id}."
             )
             from app.services.exception_queue_service import ExceptionItem, exception_queue_service
 

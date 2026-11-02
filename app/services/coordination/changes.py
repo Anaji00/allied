@@ -37,6 +37,12 @@ def watched() -> Dict[str, Callable[[], object]]:
         board = (board or "").strip()
         if board and board not in out:
             out[board] = sync
+    from app.services.coordination import boards
+
+    for board in boards._ids(settings.MONDAY_REFERENCE_BOARD_IDS):
+        out.setdefault(board, lambda b=board: boards.read_reference(b))
+    for doc in boards._ids(settings.MONDAY_DOC_IDS):
+        out.setdefault(doc, lambda d=doc: boards.read_doc(d))
     return out
 
 

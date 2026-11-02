@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery } from '@tanstack/react-query';
 import type { Tone } from '@/components/data/tone-badge';
 import { ApiError, api, ok } from '@/lib/api/client';
 
@@ -67,13 +67,15 @@ export function useNCRs() {
   });
 }
 
-export function useNCR(id: string | null) {
-  return useQuery({
+/** One hold in full; shared by the panel and the hover prefetch. */
+export const ncrQuery = (id: string) =>
+  queryOptions({
     queryKey: ['ncrs', id],
-    enabled: Boolean(id),
-    queryFn: async () =>
-      (await ok(api.GET('/api/v1/compliance/ncr/{ncr_id}', { params: { path: { ncr_id: id! } } }))) as NCR,
+    queryFn: async () => (await ok(api.GET('/api/v1/compliance/ncr/{ncr_id}', { params: { path: { ncr_id: id } } }))) as NCR,
   });
+
+export function useNCR(id: string | null) {
+  return useQuery({ ...ncrQuery(id ?? ''), enabled: Boolean(id) });
 }
 
 /** The certificate on file for a heat; null when there isn't one. */

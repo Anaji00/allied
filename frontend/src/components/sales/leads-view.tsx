@@ -5,7 +5,7 @@ import { parseAsStringLiteral, useQueryState } from 'nuqs';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Copy, ExternalLink, Loader2 } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -137,6 +137,7 @@ function Accounts() {
               columns={columns}
               data={rows}
               getRowId={(a) => a.account_id}
+              recordName={(a) => recordKey('account', a.account_id)}
               selectedId={id}
               onSelect={open}
               minWidth={820}
@@ -144,7 +145,7 @@ function Accounts() {
             />
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} title={selected?.company ?? ''} description={selected ? `${selected.plant_name} · ${selected.location}` : undefined}>
+        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} recordName={selected ? recordKey('account', selected.account_id) : undefined} title={selected?.company ?? ''} description={selected ? `${selected.plant_name} · ${selected.location}` : undefined}>
           {selected && <AccountDetail key={selected.account_id} account={selected} />}
         </DetailPanel>
       </div>

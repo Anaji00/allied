@@ -1,0 +1,32 @@
+# HTTPS in front of the app, so phones on the office network get a secure page.
+# Browsers only give the microphone (voice notes, dictation) and the install-as-app
+# features to https pages, and the app itself only speaks plain http inside Docker.
+#
+# Caddy is its own certificate authority here (local_certs). Each phone trusts it
+# once by installing allied-root.crt, served below (see README, "Phones over https").
+# After that, every address in ALLIED_HTTPS_SITES is an ordinary https site.
+{
+	local_certs
+	# A phone that opens the bare IP address sends no server name; it gets this address's certificate.
+	default_sni {$ALLIED_DEFAULT_SNI:localhost}
+	# Nothing outside the container needs Caddy's admin API.
+	admin off
+	# HTTP/1.1 and HTTP/2 only: HTTP/3 would be advertised on 443, which isn't the port on the host.
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$ALLIED_HTTPS_SITES:https://localhost} {
+	# The root certificate, for installing on a phone once. It is public by nature.
+	handle /allied-root.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		file_server
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

@@ -69,8 +69,9 @@ def add_days(at: datetime, days: int) -> datetime:
     """The end of the working day `days` working days after `at` (a day received counts from tomorrow)."""
     local = _local(at)
     d, n = local.date(), 0
-    while n < days:
-        d += timedelta(days=1)
+    step = 1 if days >= 0 else -1   # a negative count goes back that many working days
+    while n < abs(days):
+        d += timedelta(days=step)
         if is_workday(d):
             n += 1
     if days == 0 and not is_workday(d):

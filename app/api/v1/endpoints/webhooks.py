@@ -11,6 +11,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.core.audit import audit_log
@@ -48,7 +49,7 @@ async def monday_webhook_ingress(
     if not isinstance(event, dict) or not (event.get("pulseId") or event.get("boardId")):
         return {"status": "ignored"}
 
-    event_id, duplicate = monday_events.record_event(event, raw)
+    event_id, duplicate = await run_in_threadpool(monday_events.record_event, event, raw)
     if duplicate:
         # monday retries anything it thinks failed; acknowledging the repeat
         # stops the retries without doing the work twice.

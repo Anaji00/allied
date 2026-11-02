@@ -9,6 +9,7 @@ Missing a real difference is worse than flagging a false one, so anything the
 reader could not read is reported as "unreadable", which counts as a difference.
 """
 
+import threading
 import json
 import re
 from collections import Counter
@@ -74,10 +75,15 @@ def _clean(spec: "DrawingSpec") -> "DrawingSpec":
     return spec.model_copy(update={"welds": welds, "dimensions": dims})
 
 
+# PyMuPDF is not thread-safe, and PDFs are read from request threads and the mailbox
+# poller at once; every use in the app goes through this lock.
+PDF_LOCK = threading.Lock()
+
+
 def pdf_text(data: bytes) -> List[str]:
     import pymupdf
 
-    with pymupdf.open(stream=data, filetype="pdf") as doc:
+    with PDF_LOCK, pymupdf.open(stream=data, filetype="pdf") as doc:
         return [page.get_text() for page in list(doc)[:_MAX_PAGES]]
 
 
@@ -94,7 +100,7 @@ def _page_dpi(page, dpi: int = 150) -> int:
 def pdf_images(data: bytes) -> List[bytes]:
     import pymupdf
 
-    with pymupdf.open(stream=data, filetype="pdf") as doc:
+    with PDF_LOCK, pymupdf.open(stream=data, filetype="pdf") as doc:
         return [page.get_pixmap(dpi=_page_dpi(page)).tobytes("png") for page in list(doc)[:_MAX_PAGES]]
 
 
@@ -103,9 +109,14 @@ def read_drawing(data: bytes, filename: str) -> Tuple[DrawingSpec, str]:
     provider = get_provider()
     is_pdf = filename.lower().endswith(".pdf")
     text = "\n".join(pdf_text(data)) if is_pdf else ""
+    pages = _page_count(data) if is_pdf else 1
     if len(text.strip()) >= _MIN_TEXT_CHARS:
-        prompt = f"Drawing file: {filename}\nText extracted from the drawing:\n{text[:30000]}"
-        return _clean(provider.structured(_READ_SYSTEM, prompt, DrawingSpec)), "text"
+        from app.services.ai.features import fence
+
+        fenced, rule = fence(text[:30000])
+        prompt = f"Drawing file: {filename}\nText extracted from the drawing:\n{fenced}"
+        spec = _clean(provider.structured(_READ_SYSTEM + rule, prompt, DrawingSpec))
+        return _unread_pages(spec, pages, _MAX_PAGES), "text"
     if not provider.can_see_images:
         raise AIUnavailableError(
             f"{filename} has no readable text (it is a scan or image). Reading it needs a vision model: "
@@ -121,7 +132,29 @@ def read_drawing(data: bytes, filename: str) -> Tuple[DrawingSpec, str]:
         "4. Every note, translated to English (notes may be in Chinese).\n"
         "Anything blurred or unclear goes in unreadable; never guess a number."
     )
-    return _clean(provider.structured(_READ_SYSTEM, prompt, DrawingSpec, images=images)), "image"
+    spec = _clean(provider.structured(_READ_SYSTEM, prompt, DrawingSpec, images=images[:_VISION_PAGES]))
+    return _unread_pages(spec, pages, _VISION_PAGES), "image"
+
+
+_VISION_PAGES = 3  # Groq's vision model takes at most 3 images per request
+
+
+def _page_count(data: bytes) -> int:
+    try:
+        import pymupdf
+
+        with PDF_LOCK, pymupdf.open(stream=data, filetype="pdf") as doc:
+            return doc.page_count
+    except Exception:  # noqa: BLE001 - unknown count: nothing extra to report
+        return 1
+
+
+def _unread_pages(spec: "DrawingSpec", pages: int, read: int) -> "DrawingSpec":
+    """A page not read is a page not checked, which must count as a difference, not silence."""
+    if pages <= read:
+        return spec
+    note = f"Pages {read + 1} to {pages} were not read (only {read} at a time); check them by eye."
+    return spec.model_copy(update={"unreadable": list(spec.unreadable) + [note]})
 
 
 # ---------------------------------------------------------------------------

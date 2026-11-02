@@ -12,10 +12,12 @@ from app.api.v1.endpoints import (
     coordination,
     csv_import,
     documents,
+    eng_notes,
     exceptions,
     health,
     inbound_email,
     leads,
+    mail,
     orders,
     rag_chat,
     reconciliation,
@@ -45,11 +47,14 @@ api_v1_router.include_router(sales.router, prefix="/sales", tags=["Sales Pipelin
 api_v1_router.include_router(webhooks.router, prefix="/webhooks", tags=["Monday.com Webhooks"])
 api_v1_router.include_router(ai.router, prefix="/ai", tags=["AI Tools"])
 api_v1_router.include_router(assistant.router, prefix="/assistant", tags=["Assistant"])
+api_v1_router.include_router(mail.router, prefix="/mail", tags=["Mail"])
+api_v1_router.include_router(eng_notes.router, prefix="/engineering-notes", tags=["Engineering Notes"])
 api_v1_router.include_router(coordination.projects_router, prefix="/projects", tags=["Projects & Milestones"])
 api_v1_router.include_router(coordination.shipments_router, prefix="/shipments", tags=["Shipments"])
 api_v1_router.include_router(coordination.alerts_router, prefix="/alerts", tags=["Staff Alerts"])
 api_v1_router.include_router(coordination.vendors_router, prefix="/vendors", tags=["Vendor Lead Times"])
 api_v1_router.include_router(coordination.rfqs_router, prefix="/rfqs", tags=["Customer RFQs"])
 api_v1_router.include_router(coordination.autopilot_router, prefix="/autopilot", tags=["Autopilot"])
+api_v1_router.include_router(coordination.boards_router, prefix="/boards", tags=["monday Boards"])
 
 __all__ = ["api_v1_router"]

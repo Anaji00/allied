@@ -1,10 +1,10 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useMemo, useRef, useState } from 'react';
 import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { ArrowRight, Mail, Plus, Search } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel } from '@/components/data/detail-panel';
 import { FilterChips } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -77,7 +77,8 @@ export function ShipmentsView() {
   const current: View =
     view ?? (linked && !groups[fallback].includes(linked) ? (isFinished(linked) ? 'finished' : 'active') : fallback);
 
-  const needle = q.trim().toLowerCase();
+  // Filtering trails the typing slightly, so letters appear at once on a slow PC.
+  const needle = useDeferredValue(q).trim().toLowerCase();
   const rows = groups[current].filter(
     (s) =>
       !needle ||
@@ -193,6 +194,7 @@ export function ShipmentsView() {
               columns={columns}
               data={rows}
               getRowId={(s) => String(s.id)}
+              recordName={(s) => recordKey('shipment', s.id)}
               selectedId={id != null ? String(id) : null}
               onSelect={open}
               minWidth={900}
@@ -223,6 +225,7 @@ export function ShipmentsView() {
         <DetailPanel
           open={Boolean(selected)}
           onClose={() => open(undefined)}
+          recordName={selected ? recordKey('shipment', selected.id) : undefined}
           title={selected ? <span className="font-mono">{identifier(selected)}</span> : ''}
           description={selected ? `${selected.origin || '?'} to ${selected.destination || '?'}` : undefined}
         >

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useDeferredValue, useState, type ReactNode } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeftRight, Loader2, Mic, Square } from 'lucide-react';
 import { DataTable, columnHelper } from '@/components/data/data-table';
@@ -412,7 +412,8 @@ export function GlossaryTool() {
     queryFn: async () => ((await ok(api.GET('/api/v1/ai/glossary'))) as { terms: Term[] }).terms,
     staleTime: 10 * 60_000,
   });
-  const needle = q.trim().toLowerCase();
+  // Filtering trails the typing slightly, so letters appear at once on a slow PC.
+  const needle = useDeferredValue(q).trim().toLowerCase();
   const rows = (data ?? []).filter((t) => !needle || [t.en, t.vi, t.zh].some((v) => v?.toLowerCase().includes(needle)));
 
   return (

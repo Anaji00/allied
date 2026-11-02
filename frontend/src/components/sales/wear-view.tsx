@@ -6,7 +6,7 @@ import { parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2, ScanSearch } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { Field, FilterChips, PanelHeading } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -175,6 +175,7 @@ export function WearView() {
               columns={columns}
               data={rows}
               getRowId={(e) => e.equipment_tag}
+              recordName={(e) => recordKey('part', e.equipment_tag)}
               selectedId={tag}
               onSelect={open}
               minWidth={760}
@@ -195,6 +196,7 @@ export function WearView() {
         <DetailPanel
           open={Boolean(selected)}
           onClose={() => open(undefined)}
+          recordName={selected ? recordKey('part', selected.equipment_tag) : undefined}
           title={selected?.component_name ?? ''}
           description={selected ? `${selected.customer_name} · ${selected.plant_location}` : undefined}
         >

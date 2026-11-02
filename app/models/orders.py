@@ -1,6 +1,6 @@
 """Strict Pydantic V2 models for orders, webhooks, and dual-sided transactions."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -185,6 +185,6 @@ class DualSidedResult(BaseModel):
     currency: str = "USD"
     status: OrderStatus
     messages: List[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(extra="ignore", from_attributes=True)

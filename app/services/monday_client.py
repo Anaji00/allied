@@ -365,8 +365,10 @@ class MondayClient:
 
 
 def _projects_query(subitems: bool) -> tuple:
-    sub = "subitems { id name board { id } column_values { id text value column { title } } }" if subitems else ""
-    fields = f"id name created_at group {{ id title }} column_values {{ id text value column {{ title }} }} {sub}"
+    # Formula columns have no `text`; their result comes as display_value (API 2025-04 and later).
+    values = "column_values { id text value column { title } ... on FormulaValue { display_value } }"
+    sub = f"subitems {{ id name board {{ id }} {values} }}" if subitems else ""
+    fields = f"id name created_at group {{ id title }} {values} {sub}"
     return (
         "query ($boardId: [ID!], $limit: Int!) { boards(ids: $boardId) { id name "
         f"items_page(limit: $limit) {{ cursor items {{ {fields} }} }} }} }}",

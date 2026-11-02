@@ -149,6 +149,8 @@ class Settings(BaseSettings):
     MILESTONE_SUBMISSION_COLUMN_ID: str = ""
     MILESTONE_SUBMISSION_KEYWORDS: str = "drawing,model,calc,submission,design package,design doc"
     MILESTONE_DONE_LABELS: str = "Done,Approved,Complete,Completed"
+    # Open, but waiting on someone else (the customer reviewing, work paused): shown, never chased.
+    MILESTONE_HOLD_LABELS: str = "Paused,On Hold"
     # Tell owners (and leadership for unowned work) about open milestones with no due date or owner.
     MILESTONE_UNPLANNED_ALERTS: bool = True
     # Written back to the milestone's status column as submissions move.
@@ -156,6 +158,7 @@ class Settings(BaseSettings):
     MILESTONE_APPROVED_LABEL: str = "Approved"
     MILESTONE_CHANGES_LABEL: str = "Changes requested"
     SUBMISSION_MAX_MB: int = 50
+    MAX_REQUEST_MB: int = 60  # any request body over this is refused before it is read
     SUBMISSION_EXTENSIONS: str = "pdf,dwg,dxf,step,stp,igs,iges,sldprt,sldasm,slddrw,xlsx,xls,docx,doc,png,jpg,jpeg,zip"
 
     # Schedule rules (days are calendar days in BUSINESS_TZ).
@@ -213,6 +216,7 @@ class Settings(BaseSettings):
     VENDOR_BUFFER_DAYS: int = 7            # safety margin before the need date
     VENDOR_ACK_BUSINESS_DAYS: int = 2      # PO not confirmed after this: chase
     VENDOR_CHECKIN_DAYS: int = 7           # ask the vendor to reconfirm this long before the ship date
+    VENDOR_FOLLOWUP_DAYS: int = 30         # not shipped this long after its PO (no quoted lead time): follow the vendor up
     VENDOR_HISTORY_MIN_JOBS: int = 5       # fewer shipped jobs: plan on quote + 20%
     VENDOR_OTD_TARGET: float = 0.95
 
@@ -228,6 +232,14 @@ class Settings(BaseSettings):
     AUTOPILOT_REACTIONS: str = ("rfq_acknowledge=suggest,rfq_ask_vendors=suggest,rfq_won=auto,"
                                 "order_shipped=auto,order_photos=auto,vendor_late_chase=suggest")
     AUTOPILOT_EVENTS_ASYNC: bool = True      # reactions run in the background, never slowing the request
+    # Drafts people must have sent or cancelled before the scorecard gives advice on an automation.
+    AUTOPILOT_SCORECARD_MIN: int = 5
+    # Each new draft is pushed to the ntfy topic with Send / Review buttons (when push is set up).
+    # The buttons need APP_BASE_URL to be an address the phone can reach (not localhost).
+    AUTOPILOT_PUSH_DRAFTS: bool = True
+    # Customer RFQ form (/api/v1/rfqs/form): a shared token the form page sends; empty switches the form off.
+    RFQ_FORM_TOKEN: str = ""
+    RFQ_FORM_PER_HOUR: int = 10
     # Who confirms drafts: "management" (the reviewers below) or "owner" (the job's owner when
     # it has one, else the reviewers).
     AUTOPILOT_REVIEW_BY: str = "management"
@@ -235,6 +247,13 @@ class Settings(BaseSettings):
     # Vendor contacts, as name=email pairs, for names on the boards ("HELEN=helen@...").
     # Names are also matched against the vendor master (id, name, or the part before @).
     VENDOR_EMAILS: str = ""
+    # Contact names used on the boards in place of the vendor, as NAME=VENDOR pairs
+    # (Open RFQs lists "KWS (Max)" and "Eutectic (Vicki)"; 2026 Orders writes MAX).
+    VENDOR_ALIASES: str = ""
+    # Boards shown in the app as they are, with no tracking logic (history, logs), and
+    # monday Docs whose tables are shown the same way. Read only, like every board.
+    MONDAY_REFERENCE_BOARD_IDS: str = ""
+    MONDAY_DOC_IDS: str = ""
     # The monday Open RFQs board, read into the RFQ tracker. Columns by id or title.
     MONDAY_RFQ_BOARD_ID: str = ""
     RFQ_BOARD_CUSTOMER_COLUMN_ID: str = "Customer"
@@ -343,7 +362,6 @@ class Settings(BaseSettings):
     DEFAULT_BLIND_SHIPPING: bool = True
     DEFAULT_KERF_WIDTH: float = 0.125  # 1/8" saw kerf
     SIMULATION_LATENCY_MS: int = 15
-    VENDOR_PRICE_STALENESS_DAYS: int = 60  # Days before vendor price is stale
 
     # Multi-Facility Configuration
     FACILITIES: dict = {
@@ -389,6 +407,24 @@ class Settings(BaseSettings):
     IMAP_PASSWORD: str = ""
     IMAP_USE_SSL: bool = True
     IMAP_FOLDER: str = "INBOX"
+    # Every folder to read, comma-separated (e.g. "INBOX,[Gmail]/Sent Mail"); blank = IMAP_FOLDER.
+    IMAP_FOLDERS: str = ""
+    # How far back each read looks, and how new a message must be to be acted on. Older ones
+    # (the backlog on first start) are only logged, so they can't raise orders or RFQs today.
+    IMAP_LOOKBACK_DAYS: int = 3
+    IMAP_ACT_ON_HOURS: int = 24
+    # Allied's own domains: mail from them is "internal". Blank = the domain of EMAIL_FROM.
+    MAIL_OUR_DOMAINS: str = ""
+    # Domains customers order from, besides the one on their record: "domain=customer_id" for one
+    # customer (knaufinsulation.com=10148), or a bare domain for any. An order email from any other
+    # domain is held for a person instead of raised.
+    ORDER_TRUSTED_SENDER_DOMAINS: str = ""
+    # Extra or replacement topic tags, JSON {"tag": ["keyword", ...]} (a "re:" prefix makes it a regex).
+    MAIL_TAG_RULES: str = ""
+    # Senders or domains whose mail is logged quietly as noise (e.g. "monday.com,linkedin.com").
+    MAIL_QUIET_SENDERS: str = ""
+    # Sorted mail that alerts at once; the rest that needs a person goes in the daily summary.
+    MAIL_ALERT_NOW: str = "complaint,delivery_question,urgent"
     IMAP_POLL_ENABLED: bool = False
     IMAP_POLL_SECONDS: int = 120
     # Messages are marked seen once ingested so a restart does not re-process
@@ -428,6 +464,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_ignore_empty=True,  # KEY= in .env means "use the default", not an empty value
         extra="ignore",
         case_sensitive=False,
     )

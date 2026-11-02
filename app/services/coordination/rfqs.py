@@ -34,6 +34,9 @@ COMPLEXITY = ("SIMPLE", "STANDARD", "COMPLEX")
 ALERT_KEYS = ("rfq-new:", "rfq-ack:", "rfq-due:", "rfq-overdue:", "rfq-vendor:")
 _SUBJECT = re.compile(r"\b(rfq|r\.f\.q|request for (a )?quot(e|ation)|quote request|please quote|pricing request)\b", re.I)
 _number_lock = threading.Lock()
+# One change to an RFQ at a time: each save rewrites its history list, so two at once (a
+# person and the board read, or two people) could lose a note or a status move.
+_write_lock = threading.RLock()
 
 
 def _quote_days(complexity: str) -> int:
@@ -275,6 +278,11 @@ def create(data: Dict[str, Any], user: Dict[str, Any], source: str = "manual", a
 
 
 def update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    with _write_lock:
+        return _update(rfq, changes, user)
+
+
+def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     who = user.get("email", "system")
     now = workdays.now()
     moved = None
@@ -417,13 +425,14 @@ def run_checks() -> Dict[str, int]:
                 f"Owner: {r['owner_email'] or 'nobody'}.\n" + "\n".join(f"- {x}" for x in r["reasons"]),
                 severity="critical" if late_days >= 1 else "warning", to=owner + team(),
                 include_leadership=late_days >= 1 or not owner, link=link,
+                replaces=[f"rfq-overdue:{rid}:", f"rfq-due:{rid}:"],
             )))
         elif r["state"] == "due_soon":
             sent["rfq_due"] += int(bool(alerts.notify(
                 "rfq_due", f"rfq-due:{rid}:{r['effective_due_at'][:10]}",
                 f"Quote due {due:%a %H:%M}: {label}",
                 f"{r['hours_left']:.0f} working hours left. Status: {r['status'].replace('_', ' ').lower()}.",
-                to=owner or team(), link=link,
+                to=owner or team(), link=link, replaces=[f"rfq-due:{rid}:"],
             )))
         wait = r.get("vendor_wait_days") or 0
         if r["status"] == "WAITING_VENDOR" and wait >= settings.RFQ_VENDOR_CHASE_DAYS:
@@ -435,6 +444,7 @@ def run_checks() -> Dict[str, int]:
                 + ("Escalate with the vendor or price it another way." if escalate else "Send the vendor a reminder.")
                 + _contacts_note(r.get("vendor")),
                 severity="warning" if escalate else "info", to=owner or team(), include_leadership=escalate, link=link,
+                replaces=[f"rfq-vendor:{rid}:"],
             )))
     return sent
 

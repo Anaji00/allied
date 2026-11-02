@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from 'react';
 import { parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus, Search } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel } from '@/components/data/detail-panel';
 import { FilterChips, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -17,7 +18,7 @@ import { useListNav } from '@/hooks/use-list-nav';
 import { date } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { MtrCard, NcrDetail, RegisterCertDialog } from './quality-parts';
-import { NCR_STATUS, useMTR, useNCRs, type NCR } from './use-quality';
+import { NCR_STATUS, ncrQuery, useMTR, useNCRs, type NCR } from './use-quality';
 
 const TABS = ['holds', 'certificates'] as const;
 const STATUSES = ['QUARANTINED', 'REJECTED', 'CONCESSION_APPROVED', 'ALL'] as const;
@@ -48,6 +49,7 @@ export function QualityView() {
 const col = columnHelper<NCR>();
 
 function Holds({ onLookUp }: { onLookUp: (heat: string) => void }) {
+  const client = useQueryClient();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [status, setStatus] = useQueryState('status', parseAsStringLiteral(STATUSES).withDefault('QUARANTINED'));
   const [id, setId] = useQueryState('ncr');
@@ -112,6 +114,8 @@ function Holds({ onLookUp }: { onLookUp: (heat: string) => void }) {
               columns={columns}
               data={rows}
               getRowId={(n) => n.ncr_id}
+              recordName={(n) => recordKey('hold', n.ncr_id)}
+              onPrefetch={(n) => void client.prefetchQuery(ncrQuery(n.ncr_id))}
               selectedId={id}
               onSelect={open}
               minWidth={760}
@@ -132,6 +136,7 @@ function Holds({ onLookUp }: { onLookUp: (heat: string) => void }) {
         <DetailPanel
           open={Boolean(id)}
           onClose={() => open(undefined)}
+          recordName={id ? recordKey('hold', id) : undefined}
           title={selected ? `Heat ${selected.heat_number}` : (id ?? '')}
           description={id ?? undefined}
         >

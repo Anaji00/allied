@@ -113,10 +113,11 @@ def test_a_vendor_order_turning_late_is_chased_once_not_again_by_the_timer(monke
     vendors.create({"vendor": f"LATE{tag}", "description": "Chute", "po_number": f"L{tag}",
                     "ordered_on": (date.today() - timedelta(days=30)).isoformat(), "quoted_lead_days": 10}, USER)
     vendors.run_checks()
-    assert len(_actions(to=f"late@{tag}.test")) == 1                  # drafted the moment it turned late
+    assert len(_actions(to=f"late@{tag}.test")) == 1                  # drafted the moment it turned late (PO 30 days ago, 10-day wait)
     outcomes = [d["outcome"] for d in autopilot.run("vendor_chaser")["plays"]["vendor_chaser"]["did"]
                 if f"L{tag}" in d["what"]]
-    assert outcomes == ["already"]
+    assert outcomes == []                                              # followed up already: the timer leaves it to staff
+    assert len(_actions(to=f"late@{tag}.test")) == 1
 
 
 def test_milestone_changes_are_recorded_and_everything_shows_in_the_assistant_and_api(client, monkeypatch):

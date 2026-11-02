@@ -5,7 +5,7 @@ import { parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2, RefreshCw } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel } from '@/components/data/detail-panel';
 import { FilterChips } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -18,10 +18,11 @@ import { useListNav } from '@/hooks/use-list-nav';
 import { api, ok } from '@/lib/api/client';
 import { day, person, plural, since } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { ProjectDetail } from './project-detail';
+import { JobDetail, ProjectDetail } from './project-detail';
 import {
   hasEmail,
   isBehind,
+  isGroup,
   milestoneState,
   nextMilestone,
   syncText,
@@ -32,7 +33,8 @@ import {
   type Project,
 } from './use-projects';
 
-const VIEWS = ['behind', 'all', 'review', 'mine'] as const;
+// `done` is only offered when the page lists jobs (a board laid out by group).
+const VIEWS = ['behind', 'all', 'done', 'review', 'mine'] as const;
 type View = (typeof VIEWS)[number];
 type MilestoneRow = { m: Milestone; p: Project };
 
@@ -66,16 +68,23 @@ export function ProjectsView() {
   });
 
   const projects = useMemo(() => data?.projects ?? [], [data]);
+  // When every "project" is only a monday group, the jobs are what people track: one row each.
+  const byJob = projects.length > 0 && projects.every(isGroup);
+  const groups = projects.length;
   const lists = useMemo(() => {
     const milestones = (keep: (m: Milestone, p: Project) => boolean) =>
-      projects.flatMap((p) => p.milestones.filter((m) => keep(m, p)).map((m) => ({ m, p })));
+      projects
+        .flatMap((p) => p.milestones.filter((m) => keep(m, p)).map((m) => ({ m, p })))
+        // Jobs in date order, undated last; a project's milestones keep the board's order.
+        .sort((a, b) => (byJob ? (a.m.due_date ?? '9999').localeCompare(b.m.due_date ?? '9999') : 0));
     return {
-      behind: projects.filter(isBehind),
-      all: projects,
+      behind: byJob ? milestones((m) => m.state === 'overdue') : projects.filter(isBehind),
+      all: byJob ? milestones((m) => m.state !== 'done') : projects,
+      done: byJob ? milestones((m) => m.state === 'done') : [],
       review: milestones((m, p) => waitingForMe(m, p, me, leadership)),
       mine: milestones((m) => hasEmail(m.owner_emails, me) && m.state !== 'done'),
     };
-  }, [projects, me, leadership]);
+  }, [projects, me, leadership, byJob]);
 
   // An alert links to a milestone; its project is the one to open.
   const project =
@@ -84,11 +93,15 @@ export function ProjectsView() {
   const linkedMissing = Boolean(data && (projectId || milestoneId) && !project);
 
   const fallback: View = lists.behind.length || !data ? 'behind' : 'all';
-  const current: View = view ?? (project && fallback === 'behind' && !isBehind(project) ? 'all' : fallback);
-  const byMilestone = current === 'review' || current === 'mine';
+  const current: View =
+    view === 'done' && !byJob ? 'all' : (view ?? (project && fallback === 'behind' && !isBehind(project) ? 'all' : fallback));
+  const byMilestone = byJob || current === 'review' || current === 'mine';
 
-  const projectRows = byMilestone ? [] : lists[current as 'behind' | 'all'];
-  const milestoneRows = byMilestone ? lists[current as 'review' | 'mine'] : [];
+  const projectRows = byMilestone ? [] : (lists[current as 'behind' | 'all'] as Project[]);
+  const milestoneRows = byMilestone ? (lists[current] as MilestoneRow[]) : [];
+  // The open job, found in any view (an alert can link to one that isn't in the current list).
+  const jobProject = byJob && milestoneId ? projects.find((p) => p.milestones.some((m) => m.item_id === milestoneId)) : undefined;
+  const job = jobProject ? { p: jobProject, m: jobProject.milestones.find((m) => m.item_id === milestoneId)! } : undefined;
 
   const openProject = (p?: Project) => {
     void setProjectId(p ? p.item_id : null);
@@ -101,10 +114,8 @@ export function ProjectsView() {
 
   const projectIndex = projectRows.findIndex((p) => p.item_id === project?.item_id);
   const milestoneIndex = milestoneRows.findIndex((r) => r.m.item_id === milestoneId);
-  useListNav<Project | MilestoneRow>(
-    byMilestone ? milestoneRows : projectRows,
-    byMilestone ? milestoneIndex : projectIndex,
-    (row) => (byMilestone ? openMilestone(row as MilestoneRow | undefined) : openProject(row as Project | undefined)),
+  useListNav<Project | MilestoneRow>(byMilestone ? milestoneRows : projectRows, byMilestone ? milestoneIndex : projectIndex, (row) =>
+    byMilestone ? openMilestone(row as MilestoneRow | undefined) : openProject(row as Project | undefined),
   );
 
   const projectColumns = pcol.columns([
@@ -144,8 +155,26 @@ export function ProjectsView() {
   ]);
 
   const milestoneColumns = mcol.columns([
-    mcol.display({ id: 'milestone', header: 'Milestone', meta: { className: 'max-w-72 truncate font-medium' }, cell: (c) => c.row.original.m.name }),
-    mcol.display({ id: 'project', header: 'Project', meta: { className: 'max-w-64 truncate' }, cell: (c) => c.row.original.p.name }),
+    mcol.display({
+      id: 'milestone',
+      header: byJob ? 'Job' : 'Milestone',
+      meta: { className: 'max-w-72 truncate font-medium' },
+      cell: (c) => c.row.original.m.name,
+    }),
+    ...(byJob
+      ? [
+          mcol.display({ id: 'status', header: 'monday status', cell: (c) => c.row.original.m.status || '–' }),
+          mcol.display({
+            id: 'owner',
+            header: 'Owner',
+            meta: { className: 'max-w-56 truncate' },
+            cell: (c) => (c.row.original.m.owner_emails ?? []).map((e) => person(e, me)).join(', ') || '–',
+          }),
+          ...(groups > 1
+            ? [mcol.display({ id: 'group', header: 'Group', meta: { className: 'max-w-48 truncate' }, cell: (c) => c.row.original.p.name })]
+            : []),
+        ]
+      : [mcol.display({ id: 'project', header: 'Project', meta: { className: 'max-w-64 truncate' }, cell: (c) => c.row.original.p.name })]),
     mcol.display({ id: 'due', header: 'Due', cell: (c) => day(c.row.original.m.due_date) }),
     mcol.display({
       id: 'state',
@@ -179,9 +208,10 @@ export function ProjectsView() {
           }}
           options={[
             { value: 'behind', label: 'Behind', count: data ? lists.behind.length : undefined, tone: 'bad' },
-            { value: 'all', label: 'All projects', count: data ? lists.all.length : undefined },
+            { value: 'all', label: byJob ? 'Open jobs' : 'All projects', count: data ? lists.all.length : undefined },
+            ...(byJob ? [{ value: 'done' as const, label: 'Finished', count: data ? lists.done.length : undefined }] : []),
             { value: 'review', label: 'Waiting for my review', count: data ? lists.review.length : undefined, tone: 'warn' },
-            { value: 'mine', label: 'My milestones', count: data ? lists.mine.length : undefined },
+            { value: 'mine', label: byJob ? 'My jobs' : 'My milestones', count: data ? lists.mine.length : undefined },
           ]}
         />
         <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
@@ -211,25 +241,19 @@ export function ProjectsView() {
             <ErrorState error={error} onRetry={() => void refetch()} />
           ) : projects.length === 0 ? (
             <EmptyState title="No projects yet">
-              Projects and their milestones come from the monday projects board. It’s read every 10 minutes, so new projects show
-              up here shortly after they’re added on monday.
+              Projects and their milestones come from the monday projects board. It’s read every 10 minutes, so new projects show up here
+              shortly after they’re added on monday.
             </EmptyState>
           ) : byMilestone ? (
             <DataTable
-              label={current === 'review' ? 'Milestones waiting for my review' : 'My milestones'}
+              label={byJob ? 'Jobs' : current === 'review' ? 'Milestones waiting for my review' : 'My milestones'}
               columns={milestoneColumns}
               data={milestoneRows}
               getRowId={(r) => r.m.item_id}
               selectedId={milestoneId}
               onSelect={openMilestone}
               minWidth={760}
-              empty={
-                <EmptyState title={current === 'review' ? 'Nothing is waiting for your review' : 'You have no open milestones'}>
-                  {current === 'review'
-                    ? 'Design documents you’re asked to review show up here.'
-                    : 'Milestones you own on the monday projects board show up here.'}
-                </EmptyState>
-              }
+              empty={<EmptyState title={EMPTY[current][0]}>{EMPTY[current][1]}</EmptyState>}
             />
           ) : (
             <DataTable
@@ -237,6 +261,7 @@ export function ProjectsView() {
               columns={projectColumns}
               data={projectRows}
               getRowId={(p) => p.item_id}
+              recordName={(p) => recordKey('project', p.item_id)}
               selectedId={project?.item_id}
               onSelect={openProject}
               minWidth={820}
@@ -252,25 +277,36 @@ export function ProjectsView() {
         </div>
 
         <DetailPanel
-          open={Boolean(project)}
+          open={byJob ? Boolean(job) : Boolean(project)}
           onClose={() => openProject(undefined)}
-          title={project?.name ?? ''}
-          description={project?.group_title || undefined}
+          recordName={project && !byMilestone ? recordKey('project', project.item_id) : undefined}
+          title={(byJob ? job?.m.name : project?.name) ?? ''}
+          description={(byJob ? job?.p.group_title : project?.group_title) || undefined}
         >
-          {project && (
-            <ProjectDetail
-              key={project.item_id}
-              project={project}
-              leadership={leadership}
-              openMilestone={milestoneId}
-              onToggleMilestone={(id) => void setMilestoneId(id === milestoneId ? null : id)}
-            />
-          )}
+          {byJob
+            ? job && <JobDetail key={job.m.item_id} milestone={job.m} project={job.p} leadership={leadership} />
+            : project && (
+                <ProjectDetail
+                  key={project.item_id}
+                  project={project}
+                  leadership={leadership}
+                  openMilestone={milestoneId}
+                  onToggleMilestone={(id) => void setMilestoneId(id === milestoneId ? null : id)}
+                />
+              )}
         </DetailPanel>
       </div>
     </div>
   );
 }
+
+const EMPTY: Record<View, [string, string]> = {
+  behind: ['Nothing is behind schedule', 'Jobs past their due date show up here.'],
+  all: ['No open jobs', 'Jobs on the monday projects board that aren’t finished show up here.'],
+  done: ['Nothing finished yet', 'Jobs marked finished on monday show up here.'],
+  review: ['Nothing is waiting for your review', 'Design documents you’re asked to review show up here.'],
+  mine: ['Nothing open is yours', 'Jobs you own on the monday projects board show up here.'],
+};
 
 function Progress({ done, total }: { done: number; total: number }) {
   return (

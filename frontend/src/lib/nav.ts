@@ -8,6 +8,7 @@ import {
   FolderKanban,
   Gauge,
   Inbox,
+  LayoutGrid,
   ReceiptText,
   ScrollText,
   Ship,
@@ -35,7 +36,8 @@ export const NAV: NavGroup[] = [
   {
     section: 'Daily work',
     items: [
-      { href: '/', label: 'Inbox', description: 'Everything waiting on you: approvals, problems and schedule warnings', icon: Inbox },
+      { href: '/', label: 'Boards', description: 'Each monday board as monday shows it, with the automations that act on it', icon: LayoutGrid },
+      { href: '/inbox', label: 'Inbox', description: 'Everything waiting on you: approvals, problems and schedule warnings', icon: Inbox },
       { href: '/orders', label: 'Orders', description: 'Every order with its lines, margin, mill certs and Sage status; emails, bills and suppliers', icon: ReceiptText },
       { href: '/projects', label: 'Projects', description: 'Milestones from monday, design documents to submit and review, and what is behind', icon: FolderKanban },
       { href: '/shipments', label: 'Shipments', description: 'Freight on the way: on time, slipping, or waiting on the forwarder', icon: Ship },
@@ -71,7 +73,7 @@ export const NAV: NavGroup[] = [
 const FLAT = NAV.flatMap((group) => group.items);
 
 /** The phone tab bar; every other page sits behind its "More" button. */
-export const PHONE_TABS: NavItem[] = ['/', '/orders', '/projects', '/shipments'].map(
+export const PHONE_TABS: NavItem[] = ['/', '/inbox', '/orders', '/projects'].map(
   (href) => FLAT.find((item) => item.href === href)!,
 );
 

@@ -57,15 +57,32 @@ def _quiet(at: Optional[datetime] = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
+_contacts_cache: Dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def forget_contacts() -> None:
+    """Drops the cached contact list, so a change on the Alerts screen applies at once."""
+    _contacts_cache["value"] = None
+
+
 def contacts() -> Dict[str, Dict[str, Any]]:
+    """Who gets told, and how. Read at most every 30 seconds: one check pass can raise hundreds
+    of alerts, and each needs the list."""
+    import time as _time
+
+    hit = _contacts_cache["value"]
+    if hit is not None and _time.monotonic() - _contacts_cache["at"] < 30:
+        return hit
     with SessionLocal() as db:
-        return {
+        value = {
             c.email.lower(): {
                 "email": c.email, "name": c.name, "role_tag": c.role_tag, "phone": c.phone,
                 "channels": list(c.channels or ["email"]), "daily_summary": c.daily_summary, "active": c.active,
             }
             for c in db.query(StaffContactDB).all()
         }
+    _contacts_cache.update(at=_time.monotonic(), value=value)
+    return value
 
 
 def leadership() -> List[str]:
@@ -106,8 +123,14 @@ def notify(
     link: Optional[str] = None,
     project_item_id: Optional[str] = None,
     wait: bool = False,
+    replaces: Iterable[str] = (),
 ) -> Optional[int]:
-    """Stores and delivers an alert. Returns its id, or None if it was a repeat."""
+    """Stores and delivers an alert. Returns its id, or None if it was a repeat.
+
+    replaces: key prefixes of earlier alerts about the same problem (the same drawing on an
+    older due date, the same order on an older promise). Raising this one closes them, so a
+    moving deadline leaves one live alert, not a pile. If the problem moves back to a date
+    already alerted, that alert simply reopens; nobody is told twice."""
     severity = severity if severity in SEVERITIES else "info"
     recipients = _unique(list(to) + (leadership() if include_leadership else []))
     if not recipients:
@@ -117,7 +140,7 @@ def notify(
     with _lock, SessionLocal() as db:
         # Still open, handled by a person, or recent: all count as already said.
         repeat = (
-            db.query(NotificationDB.id)
+            db.query(NotificationDB.id, NotificationDB.acknowledged_at, NotificationDB.acknowledged_by)
             .filter(
                 NotificationDB.dedup_key == key[:200],
                 or_(
@@ -128,8 +151,21 @@ def notify(
             )
             .first()
         )
+        family = [p for p in replaces if p]
         if repeat:
+            if family:
+                changed = 0
+                if repeat[1] is not None and repeat[2] == RESOLVED_BY:
+                    changed += db.query(NotificationDB).filter(NotificationDB.id == repeat[0]).update(
+                        {NotificationDB.acknowledged_at: None, NotificationDB.acknowledged_by: None},
+                        synchronize_session=False)                   # the date came back: live again
+                # Older siblings still open (left from before, or a race) are closed too; the usual
+                # repeat finds none, and then nothing is written.
+                changed += _close_family(db, family, key)
+                if changed:
+                    db.commit()
             return None
+        _close_family(db, family, key)
         row = NotificationDB(
             dedup_key=key[:200], kind=kind, severity=severity, title=title[:300], body=body,
             link=link, project_item_id=project_item_id, recipients=recipients, deliveries={},
@@ -138,9 +174,27 @@ def notify(
         db.commit()
         nid = row.id
     future = _pool.submit(_deliver, nid)
+    future.add_done_callback(_log_failure)
     if wait:
         future.result(timeout=60)
     return nid
+
+
+def _close_family(db, prefixes: List[str], keep: str) -> int:
+    """Closes the open alerts under these prefixes, except `keep` (the one being raised)."""
+    if not prefixes:
+        return 0
+    return (db.query(NotificationDB)
+            .filter(NotificationDB.acknowledged_at.is_(None), NotificationDB.dedup_key != keep[:200],
+                    or_(*[NotificationDB.dedup_key.like(f"{p}%") for p in prefixes]))
+            .update({NotificationDB.acknowledged_at: datetime.now(timezone.utc),
+                     NotificationDB.acknowledged_by: RESOLVED_BY}, synchronize_session=False))
+
+
+def _log_failure(future) -> None:
+    exc = future.exception()
+    if exc is not None:
+        logger.error("Alert delivery failed", exc_info=exc)
 
 
 def _deliver(nid: int) -> None:
@@ -252,19 +306,18 @@ def _email(address: str, n: Dict[str, Any], url: str) -> str:
 def _push(n: Dict[str, Any], url: str) -> str:
     if not (settings.NTFY_URL and settings.NTFY_TOPIC):
         return "off"
-    headers = {
-        "Title": n["title"].encode("utf-8").decode("latin-1", "ignore")[:200],
-        "Priority": "urgent" if n["severity"] == "critical" else "high",
-        "Click": url,
-        "Tags": "rotating_light" if n["severity"] == "critical" else "warning",
+    # Published as JSON: HTTP headers must be ASCII, so a title with an accent or a
+    # dash (common in project names) used to raise before anything was sent.
+    payload = {
+        "topic": settings.NTFY_TOPIC, "title": n["title"][:200], "message": n["body"][:3500],
+        "priority": 5 if n["severity"] == "critical" else 4, "click": url,
+        "tags": ["rotating_light" if n["severity"] == "critical" else "warning"],
     }
-    if settings.NTFY_TOKEN:
-        headers["Authorization"] = f"Bearer {settings.NTFY_TOKEN}"
+    headers = {"Authorization": f"Bearer {settings.NTFY_TOKEN}"} if settings.NTFY_TOKEN else {}
     try:
-        r = httpx.post(f"{settings.NTFY_URL.rstrip('/')}/{settings.NTFY_TOPIC}",
-                       content=n["body"].encode("utf-8"), headers=headers, timeout=10)
+        r = httpx.post(settings.NTFY_URL.rstrip("/"), json=payload, headers=headers, timeout=10)
         return "sent" if r.status_code < 300 else f"error {r.status_code}"
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # noqa: BLE001 - a failed push is recorded, never raised
         return f"failed: {type(exc).__name__}"
 
 
@@ -280,7 +333,7 @@ def _sms(phone: str, n: Dict[str, Any], url: str) -> str:
             timeout=15,
         )
         return "sent" if r.status_code < 300 else f"error {r.status_code}"
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # noqa: BLE001 - a failed text is recorded, never raised
         return f"failed: {type(exc).__name__}"
 
 
@@ -345,7 +398,8 @@ def resolve(key_prefixes: Iterable[str]) -> int:
             .update({NotificationDB.acknowledged_at: datetime.now(timezone.utc),
                      NotificationDB.acknowledged_by: RESOLVED_BY}, synchronize_session=False)
         )
-        db.commit()
+        if n:  # most calls close nothing; a commit that writes nothing still waits on the disk
+            db.commit()
     return n
 
 
@@ -363,6 +417,21 @@ def resolve_missing(prefixes: Iterable[str], keep: Iterable[str]) -> int:
                 if item not in keep:
                     stale.append(f"{prefix}{item}:")
     return resolve(stale)
+
+
+def resolve_others(prefix: str, keep_keys: Iterable[str]) -> int:
+    """Closes open alerts starting with `prefix` except the exact keys in keep_keys (yesterday's
+    daily list once today's is out, or a list for someone with nothing left on it)."""
+    keep = set(keep_keys)
+    with SessionLocal() as db:
+        stale = [k for (k,) in db.query(NotificationDB.dedup_key).filter(
+            NotificationDB.acknowledged_at.is_(None), NotificationDB.dedup_key.like(f"{prefix}%")) if k not in keep]
+        if stale:
+            db.query(NotificationDB).filter(NotificationDB.dedup_key.in_(stale), NotificationDB.acknowledged_at.is_(None)).update(
+                {NotificationDB.acknowledged_at: datetime.now(timezone.utc), NotificationDB.acknowledged_by: RESOLVED_BY},
+                synchronize_session=False)
+            db.commit()
+    return len(stale)
 
 
 def channel_status() -> Dict[str, Any]:

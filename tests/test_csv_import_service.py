@@ -138,6 +138,8 @@ def test_copilot_execute_csv_import_action():
         }
     )
     assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert data["data"]["status"] == "SUCCESS"
+    proposal = response.json()
+    assert proposal["status"] == "needs_confirmation"          # a change to master data waits for a click
+    confirmed = client.post(f"/api/v1/assistant/actions/{proposal['action']['id']}", json={"confirm": True}).json()
+    assert confirmed["status"] == "DONE"
+    assert confirmed["result"]["data"]["status"] == "SUCCESS"

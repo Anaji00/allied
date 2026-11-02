@@ -22,6 +22,7 @@ person in the loop for anything binding.
 import base64
 import copy
 import json
+import random
 import time
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
@@ -42,6 +43,11 @@ class AIRateLimitedError(AIUnavailableError):
     """The engine's usage limit is reached for now; another engine may still answer."""
 
 
+class AIEngineDownError(AIUnavailableError):
+    """The engine failed for a reason another engine may not share: an outage, a timeout,
+    or a request too large for its limits. A fallback engine is tried."""
+
+
 def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Resolves $ref/$defs so engines with simple schema support accept it."""
     defs = schema.get("$defs", {})
@@ -58,6 +64,12 @@ def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
     return walk(schema)
 
 
+# Groq's strict JSON schema mode does not list these; sending them risks a refusal on
+# every call. pydantic validates them on the answer anyway.
+_UNSUPPORTED_STRICT = {"default", "title", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+                       "multipleOf", "pattern", "format", "minLength", "maxLength", "minItems", "maxItems"}
+
+
 def _strict_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     """The form strict structured output needs: every object closed, every field required.
 
@@ -66,7 +78,7 @@ def _strict_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     """
     def walk(node: Any) -> Any:
         if isinstance(node, dict):
-            node = {k: walk(v) for k, v in node.items() if k not in ("default", "title")}
+            node = {k: walk(v) for k, v in node.items() if k not in _UNSUPPORTED_STRICT}
             if node.get("type") == "object" and "properties" in node:
                 node["additionalProperties"] = False
                 node["required"] = list(node["properties"])
@@ -292,29 +304,39 @@ class GroqProvider(AIProvider):
             raise AIUnavailableError("Set GROQ_API_KEY to use Groq.")
         headers = {"Authorization": f"Bearer {settings.GROQ_API_KEY}"}
         url = f"{settings.GROQ_BASE_URL.rstrip('/')}/chat/completions"
-        for attempt in (1, 2):
+        deadline = time.monotonic() + settings.AI_TIMEOUT_SECONDS
+        for attempt in range(1, 4):
             try:
-                response = httpx.post(url, json=body, headers=headers, timeout=settings.AI_TIMEOUT_SECONDS)
+                # A short connect timeout: a dead network fails fast, not after the full answer timeout.
+                response = httpx.post(url, json=body, headers=headers,
+                                      timeout=httpx.Timeout(settings.AI_TIMEOUT_SECONDS, connect=10.0))
             except httpx.TimeoutException:
-                raise AIUnavailableError(f"Groq took longer than {settings.AI_TIMEOUT_SECONDS:.0f}s.")
+                raise AIEngineDownError(f"Groq took longer than {settings.AI_TIMEOUT_SECONDS:.0f}s.")
             except httpx.TransportError as exc:
-                raise AIUnavailableError(f"Groq is not reachable from this server ({type(exc).__name__}).")
-            if response.status_code == 429:
+                raise AIEngineDownError(f"Groq is not reachable from this server ({type(exc).__name__}).")
+            status = response.status_code
+            if status == 429:
                 wait = _retry_after(response.headers.get("retry-after"))
-                if attempt == 1 and wait <= 10:
-                    time.sleep(wait)
+                if attempt == 1 and wait <= 10 and time.monotonic() + wait < deadline:
+                    time.sleep(wait + random.uniform(0, 1))  # jitter, so parallel callers don't retry together
                     continue
                 raise AIRateLimitedError(
                     f"Groq's free-tier limit is reached; try again in about {max(1, round(wait))}s."
                 )
-            if response.status_code in (401, 403):
+            if status in (500, 502, 503, 498):  # Groq's documented transient errors: retry, then fall back
+                pause = min(8.0, 0.5 * 2 ** attempt) * random.uniform(0.5, 1.0)
+                if attempt < 3 and time.monotonic() + pause < deadline:
+                    time.sleep(pause)
+                    continue
+                raise AIEngineDownError(f"Groq is having trouble (HTTP {status}); try again shortly.")
+            if status in (401, 403):
                 raise AIUnavailableError("Groq rejected the key (GROQ_API_KEY).")
-            if response.status_code == 413:
-                raise AIUnavailableError("This is too much text for Groq's free tier in one go; shorten it.")
-            if response.status_code >= 400:
-                raise _GroqBadRequest(response.status_code, response.text[:300])
+            if status == 413:
+                raise AIEngineDownError("This is too much text for Groq's free tier in one go; shorten it.")
+            if status >= 400:
+                raise _GroqBadRequest(status, response.text[:300])
             return response.json()
-        raise AIRateLimitedError("Groq's free-tier limit is reached; try again shortly.")
+        raise AIEngineDownError("Groq did not answer after retrying.")
 
     def _body(self, model: str, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         body: Dict[str, Any] = {
@@ -327,6 +349,7 @@ class GroqProvider(AIProvider):
             # Thinking tokens count against the answer budget and the per-minute limit.
             body["reasoning_effort"] = settings.GROQ_REASONING_EFFORT or "low"
             body["max_completion_tokens"] = settings.AI_MAX_OUTPUT_TOKENS * 2
+            body["include_reasoning"] = False  # the reasoning text is never used; don't send it back
         return body
 
     @staticmethod
@@ -364,6 +387,8 @@ class GroqProvider(AIProvider):
             {"type": "json_object"},
         ]
         last: Optional[_GroqBadRequest] = None
+        if (model, schema.__name__) in _strict_refused:
+            formats = formats[1:]
         for fmt in formats:
             body = self._body(model, messages if fmt["type"] == "json_schema" else [
                 {"role": "system", "content": f"{system}\n\nAnswer with JSON only, matching this schema:\n"
@@ -375,7 +400,9 @@ class GroqProvider(AIProvider):
                 return _parse(schema, self._content(self._post(body)), "Groq")
             except _GroqBadRequest as exc:
                 last = exc
-                logger.warning(f"Groq refused {fmt['type']} for {schema.__name__} on {model}: {exc.detail}")
+                if fmt["type"] == "json_schema":
+                    _strict_refused.add((model, schema.__name__))
+                logger.warning(f"Groq refused {fmt['type']} for {schema.__name__} on {model}: HTTP {exc.status}")
         raise AIUnavailableError(f"Groq returned HTTP {last.status}: {last.detail}")
 
     def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -393,6 +420,9 @@ class GroqProvider(AIProvider):
             raise AIUnavailableError("The AI answer was cut off (too long); ask something narrower.")
         message = choice.get("message") or {}
         return {"content": (message.get("content") or "").strip(), "tool_calls": _openai_calls(message)}
+
+
+_strict_refused: set = set()  # (model, schema) pairs Groq would not constrain; skip straight to JSON mode
 
 
 class _GroqBadRequest(Exception):
@@ -432,7 +462,7 @@ class FallbackProvider(AIProvider):
         try:
             return call(self.primary)
         except AIUnavailableError as exc:
-            if isinstance(exc, AIRateLimitedError) or not self.primary.status().get("ready"):
+            if isinstance(exc, (AIRateLimitedError, AIEngineDownError)) or not self.primary.status().get("ready"):
                 logger.warning(f"{self.primary.name} unavailable ({exc}); using {self.fallback.name}.")
                 return call(self.fallback)
             raise

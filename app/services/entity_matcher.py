@@ -362,6 +362,9 @@ class EntityMatcher:
         if norm_query in customer_shorthand:
             cust_id = customer_shorthand[norm_query]
             return self.customers_cache[cust_id], 99.0
+        # In a company name a hyphen joins words ("Owens-Corning"); read it as a space from here
+        # on, or the joined word matches neither half. (Part numbers keep theirs: items only.)
+        norm_query = " ".join(norm_query.replace("-", " ").split())
 
         # Disambiguate multi-plant customers by plant keyword. This only
         # applies when the query also names the parent account: a bare

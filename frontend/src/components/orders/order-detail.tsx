@@ -98,9 +98,10 @@ export function OrderDetail({ so }: { so: string }) {
 
 function Figure({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="grid gap-0.5">
+    <div className="grid min-w-0 gap-0.5">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className={cn('text-sm font-semibold tabular-nums', warn && 'text-bad')}>{value}</span>
+      {/* A long foreign-currency total wraps rather than running into the next figure. */}
+      <span className={cn('text-sm font-semibold tabular-nums [overflow-wrap:anywhere]', warn && 'text-bad')}>{value}</span>
     </div>
   );
 }

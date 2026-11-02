@@ -2,6 +2,7 @@
 
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.core.security import require_manager, require_viewer
@@ -101,7 +102,8 @@ async def upload_csv_file(
             detail=f"Uploaded file is not valid UTF-8 text: {e}",
         )
 
-    result = csv_import_service.import_csv(
+    result = await run_in_threadpool(
+        csv_import_service.import_csv,
         text,
         import_type,
         actor_email=current_user.get("email", "system"),

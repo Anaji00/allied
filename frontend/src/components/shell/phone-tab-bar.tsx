@@ -39,7 +39,7 @@ export function PhoneTabBar() {
                 <item.icon />
               </span>
               <span className="truncate">{item.label}</span>
-              {item.href === '/' && waiting.length > 0 && (
+              {item.href === '/inbox' && waiting.length > 0 && (
                 <span
                   className={cn(
                     'absolute top-1.5 left-1/2 ml-2 min-w-5 rounded-full px-1 text-center text-[10px] leading-5 font-semibold tabular-nums',

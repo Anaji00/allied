@@ -1,7 +1,8 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { Count } from './motion';
 
 /** Underlined tabs that switch a page or panel between sections. */
 export function SectionTabs<T extends string>({
@@ -17,6 +18,30 @@ export function SectionTabs<T extends string>({
   label: string;
   small?: boolean;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLSpanElement>(null);
+
+  // One underline slides to the selected tab. Positioned straight on the
+  // element: it follows layout, not React state. It doesn't animate into its
+  // first position, and refits when fonts load or the row resizes.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const bar = barRef.current;
+    if (!list || !bar) return undefined;
+    const fit = () => {
+      const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      bar.style.opacity = tab ? '1' : '0';
+      if (!tab) return;
+      bar.style.translate = `${tab.offsetLeft}px 0`;
+      bar.style.width = `${tab.offsetWidth}px`;
+    };
+    fit();
+    requestAnimationFrame(() => bar.classList.add('transition-[translate,width]'));
+    const ro = new ResizeObserver(fit);
+    ro.observe(list);
+    return () => ro.disconnect();
+  }, [value, tabs.length]);
+
   // Tabs pattern: one tab in the Tab order; Left/Right/Home/End move between them.
   function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, i: number) {
     const last = tabs.length - 1;
@@ -28,7 +53,7 @@ export function SectionTabs<T extends string>({
   }
 
   return (
-    <div role="tablist" aria-label={label} className="flex gap-1 overflow-x-auto border-b">
+    <div ref={listRef} role="tablist" aria-label={label} className="relative flex gap-1 overflow-x-auto border-b">
       {tabs.map(([key, text], i) => (
         <button
           key={key}
@@ -41,12 +66,18 @@ export function SectionTabs<T extends string>({
           className={cn(
             '-mb-px border-b-2 px-3 whitespace-nowrap',
             small ? 'py-1.5 text-[13px]' : 'py-2 text-sm',
-            value === key ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+            value === key ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+            'border-transparent',
           )}
         >
           {text}
         </button>
       ))}
+      <span
+        ref={barRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute bottom-0 left-0 h-0.5 bg-foreground duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
+      />
     </div>
   );
 }
@@ -83,7 +114,7 @@ export function FilterChips<T extends string>({
                 value === o.value && 'opacity-70',
               )}
             >
-              {o.count}
+              <Count value={o.count} />
             </span>
           )}
         </button>

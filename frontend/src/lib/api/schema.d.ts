@@ -905,7 +905,7 @@ export interface paths {
         put?: never;
         /**
          * Execute System Action
-         * @description Executes a systemic action from the Copilot (e.g., scrape leads).
+         * @description Runs a Copilot lookup, or proposes a Copilot change for a person to confirm.
          */
         post: operations["execute_system_action_api_v1_chat_execute_action_post"];
         delete?: never;
@@ -1639,6 +1639,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assistant/actions/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send or cancel several drafts at once (keyboard review)
+         * @description Each one is decided on its own: one that fails or was already decided doesn't stop the rest.
+         */
+        post: operations["decide_batch_api_v1_assistant_actions_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assistant/actions/{action_id}": {
         parameters: {
             query?: never;
@@ -1684,6 +1704,113 @@ export interface paths {
         get: operations["connectors_api_v1_assistant_connectors_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Emails read: what each was and what the system did, newest first
+         * @description Quiet mail (newsletters, auto-replies, bounces, invites, notifications, sent mail and the
+         *     first-start backlog) is left out unless include_quiet, or asked for by category.
+         */
+        get: operations["list_mail_api_v1_mail_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mail/{mail_id}/handled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark an email that needed a person as dealt with */
+        post: operations["handled_api_v1_mail__mail_id__handled_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/engineering-notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Notes on a job or a board, or the ones sent to me (mine=true) */
+        get: operations["list_notes_api_v1_engineering_notes_get"];
+        put?: never;
+        /** Send a note to the engineers on a job (managers) */
+        post: operations["post_note_api_v1_engineering_notes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/engineering-notes/voice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a spoken note: written out, translated if asked, and kept to play */
+        post: operations["post_voice_note_api_v1_engineering_notes_voice_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/engineering-notes/{note_id}/audio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Play a note's voice recording (phone or desktop) */
+        get: operations["play_api_v1_engineering_notes__note_id__audio_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/engineering-notes/{note_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a note sent to me as read */
+        post: operations["mark_read_api_v1_engineering_notes__note_id__read_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1982,6 +2109,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vendors/link-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Orders with no drawing linked, and the drawing jobs each likely belongs to */
+        get: operations["vendor_link_suggestions_api_v1_vendors_link_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vendors/{job_id}": {
         parameters: {
             query?: never;
@@ -2011,6 +2155,24 @@ export interface paths {
         put?: never;
         /** Log an RFQ */
         post: operations["add_rfq_api_v1_rfqs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rfqs/form": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The customer request form's fields (send the form token as X-Form-Token) */
+        get: operations["rfq_form_fields_api_v1_rfqs_form_get"];
+        put?: never;
+        /** A customer sends a request for quote */
+        post: operations["rfq_form_submit_api_v1_rfqs_form_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2086,6 +2248,300 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/autopilot/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** People's own automation recipes (each with board_role and board_id) */
+        get: operations["recipe_list_api_v1_autopilot_recipes_get"];
+        put?: never;
+        /** Add a recipe */
+        post: operations["recipe_add_api_v1_autopilot_recipes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/recipes/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Everything the rule form needs as choices: labels, dates, people, fields */
+        get: operations["recipe_options_api_v1_autopilot_recipes_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/recipes/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** What a rule (saved or not) would act on today; nothing is saved or sent */
+        post: operations["recipe_preview_api_v1_autopilot_recipes_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/recipes/starters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Allied's ready-made recipes, from what the boards show, each with why
+         * @description preview=true adds `today`: the items each would act on now (nothing is saved or sent).
+         */
+        get: operations["recipe_starters_api_v1_autopilot_recipes_starters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/recipes/starters/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add a ready-made recipe (recipients, mode etc. may be changed) */
+        post: operations["recipe_add_starter_api_v1_autopilot_recipes_starters__slug__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/recipes/{recipe_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a recipe */
+        delete: operations["recipe_delete_api_v1_autopilot_recipes__recipe_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a recipe, or switch it on or off */
+        patch: operations["recipe_update_api_v1_autopilot_recipes__recipe_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/autopilot/recipes/run-dates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check the date recipes now (a dry run unless dry_run is false) */
+        post: operations["recipe_run_dates_api_v1_autopilot_recipes_run_dates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/scorecard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How often people send or cancel each automation's drafts, with advice */
+        get: operations["autopilot_scorecard_api_v1_autopilot_scorecard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The monday boards the app reads, and when each was last read */
+        get: operations["board_list_api_v1_boards_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A monday board exactly as monday shows it, with the app's view of each row */
+        get: operations["board_view_api_v1_boards__board_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What changed on a board (monday's activity log), newest first */
+        get: operations["board_activity_api_v1_boards__board_id__activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/status-times": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How long items spend in each status, and who is sitting longest */
+        get: operations["board_status_times_api_v1_boards__board_id__status_times_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** monday's battery, workload and calendar for a board */
+        get: operations["board_dashboard_api_v1_boards__board_id__dashboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The board as Kanban lanes, Gantt bars and a calendar */
+        get: operations["board_timeline_api_v1_boards__board_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/items/{item_id}/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An item's comments and files, read live from monday */
+        get: operations["item_updates_api_v1_boards__board_id__items__item_id__updates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What runs on its own for this board, and the drafts each item is waiting on */
+        get: operations["board_automations_api_v1_boards__board_id__automations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boards/{board_id}/items/{item_id}/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Draft one item's message now, for a person to send or cancel */
+        post: operations["board_draft_now_api_v1_boards__board_id__items__item_id__drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -2126,7 +2582,7 @@ export interface components {
         ActionPayload: {
             /**
              * Action Type
-             * @description 'STAGE_SAGE_ORDER' | 'STAGE_OPERATIONS' | 'VIEW_MTR' | 'COPY_PROPOSAL' | 'RUN_DRY_RUN' | 'EXECUTE_LEAD_SCRAPE' | 'EXECUTE_OEM_UPGRADE' | 'EXECUTE_VENDOR_REPRICE' | 'EXECUTE_CRM_FORM_REQUEST' | 'EXECUTE_OUTREACH_EMAIL' | 'EXECUTE_END_TO_END_ORDER' | 'SCAN_INTERNAL_DOCUMENT' | 'EXECUTE_CSV_IMPORT'
+             * @description 'STAGE_SAGE_ORDER' | 'STAGE_OPERATIONS' | 'VIEW_MTR' | 'COPY_PROPOSAL' | 'RUN_DRY_RUN' | 'EXECUTE_LEAD_SCRAPE' | 'EXECUTE_OEM_UPGRADE' | 'EXECUTE_CRM_FORM_REQUEST' | 'EXECUTE_OUTREACH_EMAIL' | 'EXECUTE_END_TO_END_ORDER' | 'SCAN_INTERNAL_DOCUMENT' | 'EXECUTE_CSV_IMPORT'
              */
             action_type: string;
             /**
@@ -2175,6 +2631,13 @@ export interface components {
              */
             dry_run: boolean;
         };
+        /** BatchIn */
+        BatchIn: {
+            /** Ids */
+            ids: string[];
+            /** Confirm */
+            confirm: boolean;
+        };
         /**
          * BatchScanResult
          * @description Summary of batch document scan processing.
@@ -2213,6 +2676,39 @@ export interface components {
              * @description The supplier's drawing (PDF or image)
              */
             supplier: string;
+        };
+        /** Body_post_voice_note_api_v1_engineering_notes_voice_post */
+        Body_post_voice_note_api_v1_engineering_notes_voice_post: {
+            /**
+             * File
+             * Format: binary
+             * @description The recording (webm, ogg, m4a, mp4, mp3, wav, ...)
+             */
+            file: string;
+            /** Item Id */
+            item_id: string;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /**
+             * Languages
+             * @description zh, vi or zh,vi
+             * @default
+             */
+            languages: string;
+            /**
+             * Urgent
+             * @default false
+             */
+            urgent: boolean;
+            /**
+             * To
+             * @description Emails, comma-separated
+             * @default
+             */
+            to: string;
         };
         /** Body_scan_document_upload_api_v1_documents_scan_post */
         Body_scan_document_upload_api_v1_documents_scan_post: {
@@ -2567,6 +3063,14 @@ export interface components {
             sample_text: string;
             /** Preview Url */
             preview_url?: string | null;
+        };
+        /** DraftNow */
+        DraftNow: {
+            /**
+             * Key
+             * @description The `key` of one of the item's `due` drafts
+             */
+            key: string;
         };
         /**
          * DraftQuoteFromWearRequest
@@ -2997,6 +3501,32 @@ export interface components {
                 [key: string]: string;
             }[];
         };
+        /** NoteIn */
+        NoteIn: {
+            /**
+             * Item Id
+             * @description The monday item (engineering job)
+             */
+            item_id: string;
+            /** Text */
+            text: string;
+            /**
+             * Languages
+             * @description Translations to attach
+             */
+            languages?: ("zh" | "vi")[];
+            /**
+             * Urgent
+             * @description Also send as a text and phone push, at any hour
+             * @default false
+             */
+            urgent: boolean;
+            /**
+             * To
+             * @description Engineers to send to; blank = the job's owners
+             */
+            to?: string[] | null;
+        };
         /** OEMUpgradeRequest */
         OEMUpgradeRequest: {
             /** Current Part */
@@ -3370,6 +3900,45 @@ export interface components {
             /** Executive Summary */
             executive_summary: string;
         };
+        /** RecipeIn */
+        RecipeIn: {
+            /** Name */
+            name?: string | null;
+            /** Board Role */
+            board_role?: ("projects" | "vendors" | "rfqs") | null;
+            /** Trigger */
+            trigger?: ("status_is" | "status_for" | "date_within") | null;
+            /**
+             * Column
+             * @description date_within: the date column's id or title; status_for: the status label
+             */
+            column?: string | null;
+            /**
+             * Value
+             * @description status_is: the label; date_within: days
+             */
+            value?: string | null;
+            /** Action */
+            action?: ("notify" | "draft_email") | null;
+            /**
+             * Recipients
+             * @description owner, leadership, reviewers, or emails
+             */
+            recipients?: string | null;
+            /**
+             * Email To
+             * @description draft_email: vendor, customer, or an address
+             */
+            email_to?: string | null;
+            /** Subject */
+            subject?: string | null;
+            /** Body */
+            body?: string | null;
+            /** Mode */
+            mode?: ("suggest" | "auto") | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /**
          * ReconciliationResult
          * @description Comprehensive 3-way match audit outcome.
@@ -3447,6 +4016,43 @@ export interface components {
              * @default
              */
             note: string;
+        };
+        /** RfqForm */
+        RfqForm: {
+            /** Company */
+            company: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /** Email */
+            email: string;
+            /**
+             * Phone
+             * @default
+             */
+            phone: string;
+            /** Subject */
+            subject: string;
+            /**
+             * Details
+             * @default
+             */
+            details: string;
+            /**
+             * Quantity
+             * @default
+             */
+            quantity: string;
+            /** Needed By */
+            needed_by?: string | null;
+            /**
+             * Website
+             * @description Leave empty (a trap for bots)
+             * @default
+             */
+            website: string;
         };
         /** RfqIn */
         RfqIn: {
@@ -3865,6 +4471,11 @@ export interface components {
             acknowledged_on?: string | null;
             /** Quoted Lead Days */
             quoted_lead_days?: number | null;
+            /**
+             * Follow Up Days
+             * @description Days after the PO before the vendor is followed up; 0 = the usual wait
+             */
+            follow_up_days?: number | null;
             /**
              * Promised On
              * @description Vendor's promised ship date
@@ -6422,6 +7033,41 @@ export interface operations {
             };
         };
     };
+    decide_batch_api_v1_assistant_actions_batch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     decide_api_v1_assistant_actions__action_id__post: {
         parameters: {
             query?: never;
@@ -6493,6 +7139,249 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_mail_api_v1_mail_get: {
+        parameters: {
+            query?: {
+                category?: string | null;
+                needs_action?: boolean | null;
+                q?: string | null;
+                direction?: string | null;
+                days?: number;
+                limit?: number;
+                tag?: string | null;
+                include_quiet?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    handled_api_v1_mail__mail_id__handled_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mail_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notes_api_v1_engineering_notes_get: {
+        parameters: {
+            query?: {
+                item_id?: string | null;
+                board_id?: string | null;
+                mine?: boolean;
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_note_api_v1_engineering_notes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_voice_note_api_v1_engineering_notes_voice_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_post_voice_note_api_v1_engineering_notes_voice_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    play_api_v1_engineering_notes__note_id__audio_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                note_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_read_api_v1_engineering_notes__note_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                note_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7065,6 +7954,28 @@ export interface operations {
             };
         };
     };
+    vendor_link_suggestions_api_v1_vendors_link_suggestions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
     update_vendor_job_api_v1_vendors__job_id__patch: {
         parameters: {
             query?: never;
@@ -7152,6 +8063,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rfq_form_fields_api_v1_rfqs_form_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    rfq_form_submit_api_v1_rfqs_form_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RfqForm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -7285,6 +8253,648 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AutopilotRun"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_list_api_v1_autopilot_recipes_get: {
+        parameters: {
+            query?: {
+                board_role?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_add_api_v1_autopilot_recipes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_options_api_v1_autopilot_recipes_options_get: {
+        parameters: {
+            query: {
+                board_role: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_preview_api_v1_autopilot_recipes_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_starters_api_v1_autopilot_recipes_starters_get: {
+        parameters: {
+            query?: {
+                preview?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_add_starter_api_v1_autopilot_recipes_starters__slug__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_delete_api_v1_autopilot_recipes__recipe_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_update_api_v1_autopilot_recipes__recipe_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recipe_run_dates_api_v1_autopilot_recipes_run_dates_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    autopilot_scorecard_api_v1_autopilot_scorecard_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_list_api_v1_boards_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    board_view_api_v1_boards__board_id__get: {
+        parameters: {
+            query?: {
+                /** @description Leave out finished items */
+                hide_done?: boolean;
+            };
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_activity_api_v1_boards__board_id__activity_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                item_id?: string | null;
+            };
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_status_times_api_v1_boards__board_id__status_times_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_dashboard_api_v1_boards__board_id__dashboard_get: {
+        parameters: {
+            query?: {
+                days_ahead?: number;
+            };
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_timeline_api_v1_boards__board_id__timeline_get: {
+        parameters: {
+            query?: {
+                hide_done?: boolean;
+                start?: string | null;
+                end?: string | null;
+            };
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    item_updates_api_v1_boards__board_id__items__item_id__updates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                board_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_automations_api_v1_boards__board_id__automations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_draft_now_api_v1_boards__board_id__items__item_id__drafts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                board_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftNow"];
             };
         };
         responses: {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Activity, useState } from 'react';
 import { parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { SectionTabs } from '@/components/data/filters';
 import { AiStatusLine, CallTool, DrawingTool, EmailTool, GlossaryTool, HistoryTool, PartTool, TranslateTool, useAiStatus } from './ai-tools';
@@ -27,8 +27,9 @@ export function AssistantView() {
   // Other pages can open the assistant with a question ready to send.
   const [prompt] = useQueryState('prompt', parseAsString.withDefault(''));
   const { data: status } = useAiStatus();
-  // A tab stays mounted once opened, so a slow AI call (or its answer)
-  // survives switching away and back.
+  // A tab mounts when first opened and then lives in an <Activity>: switching
+  // away keeps its state (a slow AI call, an answer, a half-typed form) while
+  // React pauses its effects, so a hidden tab stops polling.
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set([tab]));
   if (!visited.has(tab)) setVisited(new Set(visited).add(tab));
 
@@ -51,9 +52,9 @@ export function AssistantView() {
       {tab !== 'ask' && tab !== 'documents' && tab !== 'tasks' && <AiStatusLine />}
       {TABS.map(([key]) =>
         visited.has(key) ? (
-          <div key={key} hidden={tab !== key}>
+          <Activity key={key} mode={tab === key ? 'visible' : 'hidden'}>
             {panes[key]}
-          </div>
+          </Activity>
         ) : null,
       )}
     </div>

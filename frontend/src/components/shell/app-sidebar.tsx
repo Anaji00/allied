@@ -20,6 +20,7 @@ import { useAuth } from '@/context/AuthContext';
 import { isActive, navFor } from '@/lib/nav';
 import { useAutomationStatus } from '@/lib/queries';
 import { cn } from '@/lib/utils';
+import { Count } from '@/components/data/motion';
 import { useInbox } from '@/components/inbox/use-inbox';
 import { BrandMark } from './brand-mark';
 
@@ -71,9 +72,9 @@ export function AppSidebar() {
                       <item.icon />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
-                    {item.href === '/' && waiting.length > 0 && (
+                    {item.href === '/inbox' && waiting.length > 0 && (
                       <SidebarMenuBadge className={cn('tabular-nums', critical && 'font-semibold text-bad')}>
-                        {waiting.length}
+                        <Count value={waiting.length} />
                       </SidebarMenuBadge>
                     )}
                   </SidebarMenuItem>

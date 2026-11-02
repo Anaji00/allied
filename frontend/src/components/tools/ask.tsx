@@ -7,22 +7,23 @@ import { toast } from 'sonner';
 import { ArrowUp, Loader2, Paperclip, X } from 'lucide-react';
 import { Facts } from '@/components/data/detail-panel';
 import { ToneBadge } from '@/components/data/tone-badge';
+import { DictateButton, addDictation } from '@/components/data/voice';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useAuth } from '@/context/AuthContext';
 import { executeSystemAction, fetchCacheSummary, fetchRAGSources, fetchRAGTemplates, queryRAGChat, uploadChatPDF } from '@/lib/api';
 import { words } from '@/lib/format';
 import { copyText } from './ai-output';
+import { ProposalCard, proposalOf, withdraw, type Outcome, type Proposal } from './proposal';
 
-
-type Citation = { source_id: string; source_type: string; title: string; excerpt: string; relevance_score: number; metadata?: Record<string, unknown> };
+type Citation = {
+  source_id: string;
+  source_type: string;
+  title: string;
+  excerpt: string;
+  relevance_score: number;
+  metadata?: Record<string, unknown>;
+};
 type Action = { action_type: string; button_label: string; prefill_data: Record<string, any> };
 type Message =
   | { role: 'user'; content: string; attachment?: string }
@@ -42,7 +43,10 @@ const SOURCE_TEXT: Record<string, string> = {
   SCANNED_DOC: 'Scanned document',
 };
 
-const clean = (t: string) => String(t || '').replace(/[\p{Extended_Pictographic}️]/gu, '').trim();
+const clean = (t: string) =>
+  String(t || '')
+    .replace(/[\p{Extended_Pictographic}️]/gu, '')
+    .trim();
 const history = (m: Message) => (m.role === 'user' ? m.content : m.content);
 
 /** Where an order-shaped suggestion should go: the New order form, filled in, never created blind. */
@@ -70,7 +74,11 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
   const listRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const templates = useQuery({ queryKey: ['rag', 'templates'], queryFn: async () => (await fetchRAGTemplates()) as { id: string; title: string; prompt: string }[], staleTime: Infinity });
+  const templates = useQuery({
+    queryKey: ['rag', 'templates'],
+    queryFn: async () => (await fetchRAGTemplates()) as { id: string; title: string; prompt: string }[],
+    staleTime: Infinity,
+  });
   const info = useQuery({
     queryKey: ['rag', 'info'],
     queryFn: async () => {
@@ -99,13 +107,38 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
       })) as { answer: string; citations?: Citation[]; suggested_actions?: Action[]; model_used?: string };
     },
     onSuccess: (res) =>
-      push({ role: 'assistant', content: res.answer, citations: res.citations ?? [], actions: res.suggested_actions ?? [], model: res.model_used }),
+      push({
+        role: 'assistant',
+        content: res.answer,
+        citations: res.citations ?? [],
+        actions: res.suggested_actions ?? [],
+        model: res.model_used,
+      }),
     onError: (e) => push({ role: 'assistant', error: true, content: `Sorry, I couldn’t get an answer. ${e.message}` }),
   });
 
+  // Steps that change something come back as a proposal to confirm; lookups answer at once.
+  const [proposal, setProposal] = useState<Proposal | null>(null);
+  const close = () => {
+    if (proposal) void withdraw(proposal);
+    setProposal(null);
+    setConfirming(null);
+  };
   const run = useMutation({
-    mutationFn: async (a: Action) => (await executeSystemAction(a.action_type, a.prefill_data)) as { status?: string; data?: unknown; detail?: string; message?: string },
+    mutationFn: async (a: Action) =>
+      (await executeSystemAction(a.action_type, a.prefill_data)) as {
+        status?: string;
+        data?: unknown;
+        detail?: string;
+        message?: string;
+        action?: { id?: string; summary?: string };
+      },
     onSuccess: (res, a) => {
+      const pending = proposalOf(res);
+      if (pending) {
+        setProposal(pending);
+        return;
+      }
       const done = !res.status || res.status === 'success';
       push({
         role: 'assistant',
@@ -119,6 +152,11 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
       setConfirming(null);
     },
   });
+  const finished = (o: Outcome) => {
+    push({ role: 'assistant', error: o.status === 'FAILED', content: o.text, data: o.data });
+    setProposal(null);
+    setConfirming(null);
+  };
 
   function send(text?: string) {
     const q = (text ?? input).trim();
@@ -161,14 +199,17 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
 
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-      <section aria-label="Conversation" className="grid h-[min(70svh,720px)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border bg-card">
+      <section
+        aria-label="Conversation"
+        className="grid h-[min(70svh,720px)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border bg-card"
+      >
         <div ref={listRef} className="grid content-start gap-4 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <div className="grid gap-3 py-6">
               <h2 className="text-base font-semibold">What do you need to know?</h2>
               <p className="max-w-prose text-sm text-muted-foreground">
-                Ask about steel grades, welding procedures, past prices, supplier terms or mill certificates. Answers list the records
-                they came from.
+                Ask about steel grades, welding procedures, past prices, supplier terms or mill certificates. Answers list the records they
+                came from.
               </p>
               {(templates.data?.length ?? 0) > 0 && (
                 <div className="flex flex-wrap gap-1.5">
@@ -214,7 +255,14 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
           <div className="flex items-end gap-2">
             {canAct && (
               <>
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Attach a PDF" disabled={busy} onClick={() => fileRef.current?.click()}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Attach a PDF"
+                  disabled={busy}
+                  onClick={() => fileRef.current?.click()}
+                >
                   <Paperclip />
                 </Button>
                 <input
@@ -243,6 +291,7 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
               aria-label="Your question"
               className="max-h-40 min-h-8 flex-1 resize-none rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none field-sizing-content focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             />
+            <DictateButton compact onText={(t) => setInput((cur) => addDictation(cur, t))} />
             <Button type="submit" size="icon-sm" aria-label="Send" disabled={busy || (!input.trim() && !file)}>
               <ArrowUp />
             </Button>
@@ -269,39 +318,47 @@ export function Ask({ initialPrompt = '' }: { initialPrompt?: string }) {
         </p>
       </aside>
 
-      <Dialog open={Boolean(confirming)} onOpenChange={(open) => !open && setConfirming(null)}>
+      <Dialog open={Boolean(confirming)} onOpenChange={(open) => !open && close()}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{confirming ? clean(confirming.button_label) : ''}?</DialogTitle>
             <DialogDescription>
-              {canAct
-                ? 'The assistant suggested this. Check what it will use before running it.'
-                : 'Running suggested steps needs an operator account.'}
+              {!canAct
+                ? 'Running suggested steps needs an operator account.'
+                : proposal
+                  ? 'Here is exactly what will happen.'
+                  : 'The assistant suggested this. Check what it will use first.'}
             </DialogDescription>
           </DialogHeader>
-          {confirming && (
-            <div className="max-h-72 overflow-y-auto rounded-md border bg-muted/40 p-3">
-              <Facts
-                items={[
-                  ['Step', words(confirming.action_type)],
-                  ...Object.entries(confirming.prefill_data ?? {}).map(
-                    ([k, v]) => [words(k), typeof v === 'object' ? JSON.stringify(v) : String(v)] as [string, string],
-                  ),
-                ]}
-              />
-            </div>
+          {proposal ? (
+            <ProposalCard proposal={proposal} onOutcome={finished} />
+          ) : (
+            confirming && (
+              <div className="max-h-72 overflow-y-auto rounded-md border bg-muted/40 p-3">
+                <Facts
+                  items={[
+                    ['Step', words(confirming.action_type)],
+                    ...Object.entries(confirming.prefill_data ?? {}).map(
+                      ([k, v]) => [words(k), typeof v === 'object' ? JSON.stringify(v) : String(v)] as [string, string],
+                    ),
+                  ]}
+                />
+              </div>
+            )
           )}
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirming(null)}>
-              Cancel
-            </Button>
-            {canAct && (
-              <Button disabled={run.isPending} onClick={() => confirming && run.mutate(confirming)}>
-                {run.isPending && <Loader2 className="animate-spin" />}
-                Run it
+          {!proposal && (
+            <DialogFooter>
+              <Button variant="ghost" onClick={close}>
+                Cancel
               </Button>
-            )}
-          </DialogFooter>
+              {canAct && (
+                <Button disabled={run.isPending} onClick={() => confirming && run.mutate(confirming)}>
+                  {run.isPending && <Loader2 className="animate-spin" />}
+                  Continue
+                </Button>
+              )}
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
     </div>
@@ -442,4 +499,6 @@ function Blocks({ text }: { text: string }) {
 }
 
 const inline = (t: string) =>
-  t.split(/(\*\*[^*]+\*\*)/g).map((chunk, j) => (chunk.startsWith('**') && chunk.endsWith('**') ? <strong key={j}>{chunk.slice(2, -2)}</strong> : chunk));
+  t
+    .split(/(\*\*[^*]+\*\*)/g)
+    .map((chunk, j) => (chunk.startsWith('**') && chunk.endsWith('**') ? <strong key={j}>{chunk.slice(2, -2)}</strong> : chunk));

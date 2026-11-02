@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { api, ok } from '@/lib/api/client';
+import { optimistic } from '@/lib/optimistic';
 import { day, dateTime, person } from '@/lib/format';
 import {
   MODE_LABEL,
@@ -109,14 +110,34 @@ function RecordChange({ shipment: s, statuses }: { shipment: Shipment; statuses:
   };
   const changed = Object.values(changes).some(Boolean);
 
+  const now = () => new Date().toISOString();
+  const instant = optimistic<void>(client, ['shipments'], (old: { statuses: string[]; shipments: Shipment[] }) => ({
+    ...old,
+    shipments: old.shipments.map((x) =>
+      x.id !== s.id
+        ? x
+        : {
+            ...x,
+            status: changes.status ?? x.status,
+            eta_current: changes.eta ?? x.eta_current,
+            free_time_ends: changes.free_time_ends ?? x.free_time_ends,
+            last_update_at: now(),
+            events: [
+              { at: now(), status: changes.status ?? x.status, description: changes.note ?? null, source: 'manual', eta: changes.eta ?? null },
+              ...(x.events ?? []),
+            ],
+          },
+    ),
+  }));
   const save = useMutation({
     mutationFn: async () =>
       ok(api.PATCH('/api/v1/shipments/{shipment_id}', { params: { path: { shipment_id: s.id } }, body: changes as never })),
-    onSuccess: () => {
-      toast.success('Saved to the shipment’s history');
-      void client.invalidateQueries({ queryKey: ['shipments'] });
+    onMutate: instant.onMutate,
+    onError: (e, _v, context) => {
+      instant.rollback(context);
+      toast.error('The change wasn’t saved', { description: e.message });
     },
-    onError: (e) => toast.error('The change wasn’t saved', { description: e.message }),
+    onSettled: instant.onSettled,
   });
 
   return (

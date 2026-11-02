@@ -7,7 +7,7 @@ autopilot's plays (AUTOPILOT_REACTIONS: off / suggest / auto) and is carried out
 the same way: messages to people outside Allied are drafted for a person to
 confirm unless the reaction is on auto, and nothing is written to monday.
 
-Reactions run on a background thread (AUTOPILOT_EVENTS_ASYNC) so the request or
+Reactions run on a small pool of background workers (AUTOPILOT_EVENTS_ASYNC) so the request or
 sync that raised the event is never slowed down or broken by them. The keys
 are shared with the hourly plays, so an event and the timer never do the same
 thing twice.
@@ -15,6 +15,7 @@ thing twice.
 
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, List
@@ -27,6 +28,13 @@ from app.services.coordination.autopilot import Intent, reviewers, vendor_email
 
 recent: Deque[Dict[str, Any]] = deque(maxlen=200)
 _lock = threading.Lock()
+# One background worker, not a thread per event. Reactions run one at a time anyway (they
+# share drafts and alerts), so more workers would only wait on each other; one keeps events
+# in the order they happened. The queue is capped: past _MAX_WAITING, the caller (a board
+# read) runs the reaction itself, which slows that read instead of growing memory.
+_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="event")
+_MAX_WAITING = 500
+_waiting = threading.BoundedSemaphore(_MAX_WAITING)
 
 
 @dataclass
@@ -129,8 +137,26 @@ def photos_waiting(e: Dict[str, Any]) -> List[Intent]:
 
 
 def chase_late_vendor(e: Dict[str, Any]) -> List[Intent]:
+    """Only once the order's wait after its PO is over; the same draft as the timer's, so never twice."""
     chase = autopilot.vendor_chase(e["job"], alerts.today())
     return [chase] if chase else []
+
+
+def drawing_ready(e: Dict[str, Any]) -> List[Intent]:
+    """A drawing job finished: tell whoever runs the vendor orders waiting on it."""
+    m = e["milestone"]
+    if not m.get("done"):
+        return []
+    from app.services.coordination import vendors
+
+    waiting = [j for j in vendors.overview()["jobs"] if j.get("project_item_id") == m.get("item_id")]
+    if not waiting:
+        return []
+    lines = "\n".join(f"- {j['vendor']} PO {j.get('po_number') or '-'}: {j.get('description') or ''}" for j in waiting)
+    owners = sorted({j["owner_email"] for j in waiting if j.get("owner_email")}) or reviewers()
+    return [Intent("alert", f"drawing-ready:{m['item_id']}:{e.get('to')}", f"Drawing {m.get('name')} is {e.get('to')}",
+                   to=owners, title=f"Drawing ready: {m.get('name')} ({e.get('to')})",
+                   body=f"The drawing these orders wait on is now {e.get('to')}. Send it to the vendor:\n{lines}")]
 
 
 REACTIONS: Dict[str, Reaction] = {
@@ -144,7 +170,9 @@ REACTIONS: Dict[str, Reaction] = {
     "order_photos": Reaction("order.status_changed", photos_waiting, "auto",
                              "When an order is waiting on photos, tells staff to check them."),
     "vendor_late_chase": Reaction("vendor_job.late", chase_late_vendor, "suggest",
-                                  "The moment a vendor order turns late, drafts the chaser."),
+                                  "When an order turns late and its wait after the PO is over, drafts the follow-up."),
+    "drawing_ready": Reaction("milestone.status_changed", drawing_ready, "auto",
+                              "When a drawing job is finished, tells the owners of the vendor orders linked to it."),
 }
 EVENTS = sorted({r.event for r in REACTIONS.values()} | {"milestone.status_changed"})
 
@@ -167,14 +195,28 @@ def emit(event: str, payload: Dict[str, Any], summary: str = "") -> None:
     """Records an event and runs its reactions. Never raises into the caller."""
     if not settings.AUTOPILOT_ENABLED:
         return
+    from app.services.coordination import recipes
+
     chosen = modes()
-    if not any(r.event == event and chosen[n] != "off" for n, r in REACTIONS.items()):
+    try:
+        has_recipes = recipes.wanted(event)
+    except Exception as exc:  # noqa: BLE001 - the built-in reactions still run
+        logger.error(f"Could not read recipes for {event}: {exc}")
+        has_recipes = False
+    if not has_recipes and not any(r.event == event and chosen[n] != "off" for n, r in REACTIONS.items()):
         recent.appendleft({"at": alerts.now_local().isoformat(), "event": event, "summary": summary, "reactions": []})
         return
-    if settings.AUTOPILOT_EVENTS_ASYNC:
-        threading.Thread(target=handle, args=(event, payload, summary), daemon=True, name=f"event-{event}").start()
+    if settings.AUTOPILOT_EVENTS_ASYNC and _waiting.acquire(blocking=False):
+        _pool.submit(_queued, event, payload, summary)
     else:
         handle(event, payload, summary)
+
+
+def _queued(event: str, payload: Dict[str, Any], summary: str) -> None:
+    try:
+        handle(event, payload, summary)
+    finally:
+        _waiting.release()
 
 
 def handle(event: str, payload: Dict[str, Any], summary: str = "", dry_run: bool = False) -> Dict[str, Any]:
@@ -195,6 +237,12 @@ def handle(event: str, payload: Dict[str, Any], summary: str = "", dry_run: bool
                 if did:
                     entry["reactions"].append({"name": name, "mode": chosen[name], "did": did})
                     did_all += did
+            from app.services.coordination import recipes
+
+            did = recipes.safe_on_event(event, payload, dry_run)
+            if did:
+                entry["reactions"].append({"name": "recipes", "mode": "per recipe", "did": did})
+                did_all += did
         if not dry_run:
             autopilot.tell_reviewers(did_all)
             recent.appendleft(entry)

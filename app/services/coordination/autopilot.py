@@ -17,6 +17,7 @@ A dry run (`run(dry_run=True)`) says what each play would do and changes nothing
 """
 
 import csv
+import json
 import threading
 import time
 import uuid
@@ -100,6 +101,11 @@ def vendor_email(name: str) -> Optional[str]:
     key = (name or "").strip().casefold()
     if not key:
         return None
+    for part in (settings.VENDOR_ALIASES or "").split(","):
+        alias, _, vendor = part.partition("=")
+        if alias.strip().casefold() == key and vendor.strip():
+            key = vendor.strip().casefold()
+            break
     for part in (settings.VENDOR_EMAILS or "").split(","):
         n, _, email = part.partition("=")
         if n.strip().casefold() == key and "@" in email:
@@ -154,7 +160,12 @@ def play_rfq_board(on: date) -> List[Intent]:
         return []
     from app.services.monday_client import fetch_projects_board
 
-    return rfq_board_intents(fetch_projects_board(client, int(board), with_subitems=False))
+    items = fetch_projects_board(client, int(board), with_subitems=False)
+    if items:
+        from app.services.coordination import boards
+
+        boards.remember(board, items, client, "rfqs")
+    return rfq_board_intents(items)
 
 
 def _last_board_note(history: List[Dict[str, Any]]) -> Optional[str]:
@@ -262,39 +273,60 @@ def upsert_board_rfq(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def play_vendor_chaser(on: date) -> List[Intent]:
-    """Late vendor orders: a short email asking the vendor for its ship date."""
-    return [i for i in (vendor_chase(j, on) for j in vendors.overview(on)["jobs"] if j["state"] == "late") if i]
+    """Orders not shipped their wait after the PO: the first follow-up, once per PO. Later ones
+    are staff's call, from the board's "Follow up now"."""
+    return [i for i in (vendor_chase(j, on) for j in vendors.overview(on)["jobs"] if (j.get("follow_up") or {}).get("due")) if i]
 
 
 def vendor_chase_body(j: Dict[str, Any], on: date) -> str:
     what = j.get("description") or "your order"
     po = j.get("po_number") or str(j["id"])
+    sent = f"We sent the PO on {j['ordered_on']} and have" if j.get("ordered_on") else "We have"
     return (f"Hello,\n\nCould you confirm the ship date for Allied PO {po} ({what})? "
-            f"By our records it was due to ship {(on - timedelta(days=j['days_late'] or 0)).isoformat()}"
-            f" and we have not seen it leave yet.\n\nPlease reply with the date it will ship, and send "
+            f"{sent} not seen it ship yet.\n\nPlease reply with the date it will ship, and send "
             f"photos of the finished parts and the crating before it goes.\n\nThank you,\nAllied Welding Systems")
 
 
 def chaser_note(j: Dict[str, Any], on: date) -> str:
-    """The line the vendor-late alert ends with: a draft is waiting, or here is what to send."""
+    """The line the vendor-late alert ends with: when the vendor is followed up, or here is what to send."""
     if vendor_email(j["vendor"]):
-        return "A chaser to the vendor is drafted for approval in the assistant."
+        first = vendors.first_follow_up(j)
+        if first is None:
+            return "There is no PO date, so the vendor isn't followed up automatically; use Follow up now on the board."
+        if first > on:
+            return f"The vendor is followed up on {first.isoformat()} if it hasn't shipped by then."
+        return "A follow-up to the vendor is drafted for approval; after it, use Follow up now on the board."
     return (f"There is no email on file for {j['vendor']}, so nothing was drafted. Suggested message:\n\n"
             + vendor_chase_body(j, on))
 
 
-def vendor_chase(j: Dict[str, Any], on: date) -> Optional[Intent]:
-    """One late job's chaser, or None with no email on file (the vendor-late alert then
-    carries the suggested message, so staff get one alert, not two). The key is per job
-    per week, so the timer and the "turned late" event never both make one."""
+def vendor_chase(j: Dict[str, Any], on: date, manual: bool = False) -> Optional[Intent]:
+    """A follow-up to an order's vendor, or None with no email on file (the vendor-late alert then
+    carries the suggested message) or before the order's wait after its PO is over.
+
+    The automatic one is keyed per PO, so the timer and the "turned late" event make it once between
+    them; one asked for from the board (manual) is keyed per day, so a double press makes one."""
+    # One rule, worked out once in vendors._follow_up (overview); a bare job is worked out here.
+    follow = j.get("follow_up") or vendors._follow_up(j, {}, on) or {}
+    if not follow.get("first") or (not manual and (follow["first"] > on.isoformat() or follow.get("started"))):
+        return None  # not due yet, or staff already followed this PO up
     email = vendor_email(j["vendor"])
     if not email:
         return None
     po = j.get("po_number") or str(j["id"])
-    return Intent("draft", f"vendor-chase:{j['id']}:{_week(on)}",
-                  f"Ask {j['vendor']} when PO {po} ships ({j['days_late']} days late)",
+    why = list(j.get("reasons") or []) + [
+        f"Customer needs it shipped by {j['need_by']} ({j.get('need_source')})" if j.get("need_by") else "",
+        f"PO sent {j['ordered_on']}; follow up after {follow['wait_days']} days ({follow['wait_basis']})",
+        f"Last chaser sent {follow['last']}" if follow.get("last") else "No chaser sent yet",
+        "Asked for from the board" if manual else "",
+        f"Order: {j.get('description') or '-'}, PO {po}, {j['vendor']}"]
+    waited = (on - date.fromisoformat(j["ordered_on"])).days
+    key = f"vendor-followup:{j['id']}:{on.isoformat() if manual else j['ordered_on']}"
+    return Intent("draft", key, f"Ask {j['vendor']} when PO {po} ships (PO sent {waited} days ago)",
                   to=reviewers(j.get("owner_email")), tool="send_email",
-                  args={"to": email, "subject": f"Allied PO {po}: ship date?", "body": vendor_chase_body(j, on)})
+                  args={"to": email, "subject": f"Allied PO {po}: ship date?", "body": vendor_chase_body(j, on),
+                        "_job_id": j["id"], "_po_date": j["ordered_on"], "_manual": manual,
+                        "_why": [w for w in why if w]})
 
 
 def play_rfq_vendor_chaser(on: date) -> List[Intent]:
@@ -313,10 +345,14 @@ def play_rfq_vendor_chaser(on: date) -> List[Intent]:
                     f"Could you send the price and lead time, or tell us when you will have it?\n\n"
                     f"Thank you,\nAllied Welding Systems")
             if email:  # with none on file, the RFQ's own "chase vendor price" alert names the contact
+                why = [f"{r['number']} for {r['customer']}: waiting on vendor prices since {since.date().isoformat()}",
+                       f"Bidding vendors: {r.get('vendor')}",
+                       f"Quote due to the customer {(r.get('effective_due_at') or r.get('due_at') or '')[:10]}"]
                 out.append(Intent("draft", f"rfq-vendor-chase:{r['id']}:{name.casefold()}:{_week(on)}",
                                   f"Ask {name} for their price on {r['number']} ({r['customer']})",
                                   to=reviewers(r.get("owner_email")), tool="send_email",
-                                  args={"to": email, "subject": f"Price for {r['subject'] or r['number']}?", "body": body}))
+                                  args={"to": email, "subject": f"Price for {r['subject'] or r['number']}?", "body": body,
+                                        "_why": why}))
     return out
 
 
@@ -398,7 +434,7 @@ class Play:
 PLAYS: Dict[str, Play] = {
     "rfq_board": Play(play_rfq_board, "auto", "Reads the monday Open RFQs board into the RFQ tracker."),
     "orders_watch": Play(play_orders_watch, "auto", "Weekly list of unpaid orders and vendor photos waiting."),
-    "vendor_chaser": Play(play_vendor_chaser, "suggest", "Asks late vendors for their ship date."),
+    "vendor_chaser": Play(play_vendor_chaser, "suggest", "Follows up vendors once an order hasn't shipped its wait after the PO."),
     "rfq_vendor_chaser": Play(play_rfq_vendor_chaser, "suggest", "Asks bidding vendors for prices that are overdue."),
     "quote_followup": Play(play_quote_followup, "suggest", "Follows up customers on quotes they haven't answered."),
 }
@@ -422,20 +458,48 @@ def _draft(play: str, intent: Intent, auto: bool) -> str:
     auto = auto and (intent.tool != "send_email" or outbound_email_service.send_enabled)
     with SessionLocal() as db:
         row = db.get(AssistantActionDB, action_id)
-        if row is not None and not (auto and row.status == "FAILED"):
+        stale = row is not None and (row.status == "EXPIRED" or (
+            row.status == "PENDING" and workdays.as_utc(row.created_at) < workdays.now() - timedelta(hours=settings.AUTOPILOT_DRAFT_HOURS)))
+        if row is not None and row.status == "FAILED" and not auto:
+            # A person sent it and the mail server refused (or it errored): offer it again so
+            # someone can retry or cancel it, rather than leave it failed and forgotten.
+            won = (db.query(AssistantActionDB)
+                   .filter(AssistantActionDB.id == action_id, AssistantActionDB.status == "FAILED")
+                   .update({AssistantActionDB.status: "PENDING", AssistantActionDB.created_at: workdays.now(),
+                            AssistantActionDB.decided_at: None}, synchronize_session=False))
+            db.commit()
+            return "drafted" if won else "already"
+        if stale and not auto:
+            # Nobody acted on it in time: offer it again rather than leave it hidden for good.
+            row.status, row.created_at, row.decided_at = "PENDING", workdays.now(), None
+            db.commit()
+            return "drafted"
+        if row is not None and not stale and not (auto and row.status == "FAILED"):
             return "already"
         if row is None:
             db.add(AssistantActionDB(id=action_id, user_email=owner, user_role="AUTOPILOT", tool=intent.tool,
                                      args={**intent.args, "_play": play}, summary=intent.summary,
                                      status="RUNNING" if auto else "PENDING"))
         else:
-            row.status = "RUNNING"  # a failed send is tried again
+            # A failed or expired one is tried again: claimed in one conditional update, so two
+            # runs at the same moment can't both send it.
+            won = (db.query(AssistantActionDB)
+                   .filter(AssistantActionDB.id == action_id, AssistantActionDB.status == row.status)
+                   .update({AssistantActionDB.status: "RUNNING"}, synchronize_session=False))
+            if won != 1:
+                db.rollback()
+                return "already"
+        created = row is None
         try:
             db.commit()
         except IntegrityError:  # the timer and an event made the same draft at the same moment
             db.rollback()
             return "already"
     if not auto:
+        if created:
+            from app.services.assistant import quick
+
+            quick.push_draft(action_id, intent.summary, owner)  # Send / Review buttons on the reviewer's phone
         return "drafted"
     from app.services.assistant.tools import TOOLS
 
@@ -447,18 +511,23 @@ def _draft(play: str, intent: Intent, auto: bool) -> str:
     except Exception as exc:  # noqa: BLE001 - recorded on the action and in the log
         status, result = "FAILED", {"error": str(exc)[:300]}
     if status == "DONE":
-        after_done({**intent.args, "_play": play}, SYSTEM)
+        after_done({**intent.args, "_play": play}, SYSTEM, result)
     with SessionLocal() as db:
         row = db.get(AssistantActionDB, action_id)
-        row.status, row.result, row.decided_at = status, result if isinstance(result, dict) else {"done": str(result)}, workdays.now()
+        row.status, row.decided_at = status, workdays.now()
+        row.result = json.loads(json.dumps(result if isinstance(result, dict) else {"done": str(result)}, default=str))
         db.commit()
     audit_log(action="AUTOPILOT", resource_type="ACTION", resource_id=action_id, actor_email=SYSTEM["email"],
               actor_role="SYSTEM", detail=f"{play}: {intent.summary} -> {status.lower()}")
     return status.lower()
 
 
-def after_done(args: Dict[str, Any], user: Dict[str, Any]) -> None:
-    """What a carried-out draft settles here: an acknowledgement sent means the RFQ is acknowledged."""
+def after_done(args: Dict[str, Any], user: Dict[str, Any], result: Optional[Dict[str, Any]] = None) -> None:
+    """What a carried-out draft settles here: an acknowledgement really sent means the RFQ is
+    acknowledged. One only drafted (mail off) or redirected to a test address reached nobody,
+    so the RFQ stays NEW and its "not acknowledged" alert still fires."""
+    if (result or {}).get("status") not in (None, "SENT"):
+        return
     if args.get("_play") == "rfq_acknowledge" and args.get("_rfq_id"):
         try:
             if rfqs.get(args["_rfq_id"])["status"] == "NEW":
@@ -551,6 +620,79 @@ def drafts_waiting() -> List[str]:
                                                    AssistantActionDB.status == "PENDING")
                 .order_by(AssistantActionDB.created_at).all())
         return [f"{r.summary} (for {r.user_email})" for r in rows if workdays.as_utc(r.created_at) >= cutoff]
+
+
+def scorecard(days: int = 90) -> Dict[str, Any]:
+    """For each play, reaction and recipe: how many drafts people sent, cancelled or let lapse,
+    and what that suggests. A draft nearly always sent is ready for auto; one mostly
+    cancelled is noise to fix or switch off."""
+    since = workdays.now() - timedelta(days=days)
+    rows: Dict[str, Dict[str, int]] = {}
+    with SessionLocal() as db:
+        for r in db.query(AssistantActionDB).filter(AssistantActionDB.user_role == "AUTOPILOT",
+                                                    AssistantActionDB.created_at >= since):
+            name = (r.args or {}).get("_play") or "unknown"
+            c = rows.setdefault(name, {"drafted": 0, "sent": 0, "cancelled": 0, "lapsed": 0, "failed": 0, "waiting": 0})
+            c["drafted"] += 1
+            c[{"DONE": "sent", "CANCELLED": "cancelled", "REJECTED": "cancelled", "EXPIRED": "lapsed",
+               "FAILED": "failed", "PENDING": "waiting", "RUNNING": "waiting"}.get(r.status, "waiting")] += 1
+    from app.services.coordination import events
+
+    current = {**modes(), **events.modes()}
+    out = []
+    for name, c in sorted(rows.items(), key=lambda kv: -kv[1]["drafted"]):
+        decided = c["sent"] + c["cancelled"] + c["lapsed"]
+        rate = round(c["sent"] / decided, 2) if decided else None
+        mode = current.get(name, "per recipe" if name.startswith("recipe_") else None)
+        if decided < settings.AUTOPILOT_SCORECARD_MIN:
+            advice = f"Too few decided yet ({decided}) to judge."
+        elif rate >= 0.9 and mode == "suggest":
+            advice = "People send nearly every draft: consider auto."
+        elif rate < 0.4:
+            advice = "Most drafts are cancelled or left: change its wording or timing, or switch it off."
+        elif c["lapsed"] > c["sent"]:
+            advice = "Drafts lapse unread: check who reviews them."
+        else:
+            advice = "Working as set."
+        out.append({"name": name, "mode": mode, **c, "send_rate": rate, "advice": advice})
+    return {"days": days, "automations": out, "alerts": alert_scorecard(days)}
+
+
+def alert_scorecard(days: int = 90, ignored_after_days: int = 3) -> List[Dict[str, Any]]:
+    """For each kind of alert: how many were raised, how many a person marked handled, how many
+    cleared on their own (the problem went away), and how many sat unread. An alert nobody acts
+    on is noise; the advice says so."""
+    since = workdays.now() - timedelta(days=days)
+    stale = workdays.now() - timedelta(days=ignored_after_days)
+    rows: Dict[str, Dict[str, int]] = {}
+    with SessionLocal() as db:
+        for kind, created, acked_at, acked_by in db.query(
+                NotificationDB.kind, NotificationDB.created_at, NotificationDB.acknowledged_at,
+                NotificationDB.acknowledged_by).filter(NotificationDB.created_at >= since):
+            created = workdays.as_utc(created)
+            c = rows.setdefault(kind, {"raised": 0, "handled": 0, "cleared": 0, "ignored": 0, "open": 0})
+            c["raised"] += 1
+            if acked_at is None:
+                c["ignored" if created < stale else "open"] += 1
+            elif acked_by == alerts.RESOLVED_BY:
+                c["cleared"] += 1
+            else:
+                c["handled"] += 1
+    out = []
+    for kind, c in sorted(rows.items(), key=lambda kv: -kv[1]["raised"]):
+        judged = c["handled"] + c["ignored"]
+        rate = round(c["handled"] / judged, 2) if judged else None
+        if judged < settings.AUTOPILOT_SCORECARD_MIN:
+            advice = f"Too few handled or left yet ({judged}) to judge."
+        elif rate < 0.3:
+            advice = (f"Mostly left unread for {ignored_after_days}+ days: send it to someone who acts on it, "
+                      "make it rarer (a longer wait, a daily list), or switch it off.")
+        elif c["cleared"] > c["handled"] + c["ignored"]:
+            advice = "Usually clears on its own before anyone acts: consider waiting longer before raising it."
+        else:
+            advice = "People act on it."
+        out.append({"kind": kind, **c, "handled_rate": rate, "advice": advice})
+    return out
 
 
 def status() -> Dict[str, Any]:

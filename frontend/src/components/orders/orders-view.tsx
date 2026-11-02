@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { parseAsBoolean, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from 'nuqs';
+import { useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { Plus, Search } from 'lucide-react';
-import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel } from '@/components/data/detail-panel';
 import { SectionTabs, chipClass } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
@@ -13,13 +14,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
 import { useAuth } from '@/context/AuthContext';
+import { useListNav } from '@/hooks/use-list-nav';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { date, money, pct } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { NewOrderDialog } from './new-order-dialog';
 import { OrderDetail } from './order-detail';
 import { OrderEmails, SupplierBills, Suppliers } from './order-tabs';
-import { ARCHETYPE, PAGE_SIZE, STATUS, useOrders, useSuppliers, type Order, type OrderView } from './use-orders';
+import { ARCHETYPE, PAGE_SIZE, STATUS, complianceQuery, orderQuery, useOrders, useSuppliers, type Order, type OrderView } from './use-orders';
 
 const TABS = ['orders', 'emails', 'bills', 'suppliers'] as const;
 const TAB_LABEL = { orders: 'All orders', emails: 'Order emails', bills: 'Supplier bills', suppliers: 'Suppliers' };
@@ -47,6 +49,7 @@ export function OrdersView() {
 const col = columnHelper<Order>();
 
 function OrderList() {
+  const client = useQueryClient();
   const { hasRole } = useAuth();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [q, setQ] = useQueryState('q', parseAsString.withDefault(''));
@@ -111,9 +114,7 @@ function OrderList() {
   ]);
 
   const open = (o?: Order) => void setSo(o ? o.sales_order_number : null);
-  useHotkeys(['j', 'ArrowDown'], () => rows[index + 1] && open(rows[index + 1]), { preventDefault: true }, [rows, index]);
-  useHotkeys(['k', 'ArrowUp'], () => (index > 0 ? open(rows[index - 1]) : index === -1 && rows[0] && open(rows[0])), { preventDefault: true }, [rows, index]);
-  useHotkeys('escape', () => open(undefined));
+  useListNav(rows, index, open);
   useHotkeys('slash', () => searchRef.current?.focus(), { preventDefault: true });
   useHotkeys('n', () => hasRole('OPERATOR') && setCreating(true), [hasRole]);
 
@@ -185,6 +186,11 @@ function OrderList() {
               columns={columns}
               data={rows}
               getRowId={(o) => o.sales_order_number}
+              recordName={(o) => recordKey('order', o.sales_order_number)}
+              onPrefetch={(o) => {
+                void client.prefetchQuery(orderQuery(o.sales_order_number));
+                void client.prefetchQuery(complianceQuery(o.sales_order_number));
+              }}
               selectedId={so}
               onSelect={open}
               minWidth={860}
@@ -218,7 +224,7 @@ function OrderList() {
           )}
         </div>
 
-        <DetailPanel open={Boolean(so)} onClose={() => open(undefined)} title={<span className="font-mono">{so}</span>} description={rows[index]?.customer_name}>
+        <DetailPanel open={Boolean(so)} onClose={() => open(undefined)} recordName={so ? recordKey('order', so) : undefined} title={<span className="font-mono">{so}</span>} description={rows[index]?.customer_name}>
           {so && <OrderDetail key={so} so={so} />}
         </DetailPanel>
       </div>

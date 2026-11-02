@@ -132,6 +132,7 @@ def _sync_schema(db_url: str) -> None:
 
     project_root = Path(__file__).resolve().parent.parent.parent
     cfg = Config(str(project_root / "alembic.ini"))
+    cfg.attributes["configure_logger"] = False  # keep the app's logging as it is
     cfg.set_main_option("script_location", str(project_root / "migrations"))
     cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 

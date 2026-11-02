@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import email
 import imaplib
+import ssl
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.message import Message
 from typing import Any, Dict, List, Optional
@@ -91,6 +92,37 @@ def _attachments(msg: Message) -> List[Dict[str, Any]]:
     return out
 
 
+def folders() -> List[str]:
+    """The folders read: IMAP_FOLDERS (comma-separated), else IMAP_FOLDER."""
+    raw = settings.IMAP_FOLDERS or settings.IMAP_FOLDER or "INBOX"
+    return [f.strip() for f in raw.split(",") if f.strip()]
+
+
+def _quote(folder: str) -> str:
+    return f'"{folder}"' if (" " in folder or "[" in folder) and not folder.startswith('"') else folder
+
+
+def _message_ids(conn: imaplib.IMAP4, nums: List[bytes]) -> Dict[bytes, str]:
+    """Each message's Message-ID, from the headers only (one request; nothing is marked read)."""
+    if not nums:
+        return {}
+    typ, data = conn.fetch(b",".join(nums), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+    out: Dict[bytes, str] = {}
+    for part in data or []:
+        if isinstance(part, tuple) and part[0]:
+            num = part[0].split(b" ", 1)[0]
+            out[num] = _decode(email.message_from_bytes(part[1] or b"").get("Message-ID")).strip()
+    return out
+
+
+def _fallback_id(msg: Message) -> str:
+    """For the rare message with no Message-ID: the same message always gets the same id."""
+    import hashlib
+
+    raw = f"{msg.get('From')}|{msg.get('Date')}|{msg.get('Subject')}".encode("utf-8", "replace")
+    return "noid-" + hashlib.sha256(raw).hexdigest()[:32]
+
+
 class MailboxPoller:
     """Reads unseen mail on a timer and feeds it to the inbound email daemon."""
 
@@ -112,7 +144,8 @@ class MailboxPoller:
 
     @property
     def enabled(self) -> bool:
-        return bool(settings.IMAP_POLL_ENABLED and settings.IMAP_HOST)
+        # A mailbox needs its login; with the host set but no app password yet it waits, quietly.
+        return bool(settings.IMAP_POLL_ENABLED and settings.IMAP_HOST and settings.IMAP_USERNAME and settings.IMAP_PASSWORD)
 
     def status(self) -> Dict[str, Any]:
         detail = "Polling is switched off."
@@ -120,6 +153,8 @@ class MailboxPoller:
             detail = "No mailbox configured; orders must be handed to the system."
         elif not settings.IMAP_POLL_ENABLED:
             detail = "Mailbox configured but polling is switched off."
+        elif not (settings.IMAP_USERNAME and settings.IMAP_PASSWORD):
+            detail = "Mailbox set; waiting for IMAP_USERNAME and IMAP_PASSWORD (an app password)."
         elif self._stats["running"]:
             detail = (
                 f"Watching {settings.IMAP_USERNAME or settings.IMAP_HOST} "
@@ -127,7 +162,7 @@ class MailboxPoller:
             )
         return {**self._stats, "enabled": self.enabled, "detail": detail,
                 "poll_seconds": settings.IMAP_POLL_SECONDS,
-                "folder": settings.IMAP_FOLDER}
+                "folders": folders()}
 
     # ------------------------------------------------------------- lifecycle
 
@@ -168,85 +203,148 @@ class MailboxPoller:
     # ------------------------------------------------------------------ work
 
     def poll_once(self) -> Dict[str, Any]:
-        """Reads unseen messages once. Safe to call directly, including in tests."""
-        from app.services.inbound_email_daemon import InboundEmailMessage
-
+        """Reads every folder once. Each message is handled once, by its Message-ID in the mail
+        log, without marking it read in the mailbox. Safe to call directly, including in tests."""
         if self._daemon is None:
             from app.services.inbound_email_daemon import inbound_email_daemon
 
             self._daemon = inbound_email_daemon
-
-        ingested = 0
-        created = 0
         self._stats["polls"] += 1
         self._stats["last_poll_at"] = datetime.now(timezone.utc).isoformat()
-
+        totals = {"ingested": 0, "orders_created": 0, "logged_only": 0}
         conn = self._connect()
         try:
-            conn.select(settings.IMAP_FOLDER)
-            typ, data = conn.search(None, "UNSEEN")
-            if typ != "OK":
-                return {"ingested": 0, "orders_created": 0}
-
-            for num in (data[0].split() if data and data[0] else []):
+            for folder in folders():
                 if self._stop.is_set():
                     break
-                typ, raw = conn.fetch(num, "(BODY.PEEK[])")
-                if typ != "OK" or not raw or not raw[0]:
-                    continue
-
-                msg = email.message_from_bytes(raw[0][1])
-                sender = email.utils.parseaddr(msg.get("From", ""))[1]
-                message = InboundEmailMessage(
-                    email_id=_decode(msg.get("Message-ID")) or f"IMAP-{num.decode()}",
-                    sender_email=sender or "unknown@unknown",
-                    sender_name=_decode(msg.get("From")),
-                    subject=_decode(msg.get("Subject")),
-                    body_text=_body_text(msg),
-                    attachments=[
-                        {"filename": a["filename"], "mime": a["mime"], "size_bytes": len(a["content"])}
-                        for a in _attachments(msg)
-                    ],
-                )
-
-                try:
-                    result = self._daemon.process_inbound_email(message)
-                    ingested += 1
-                    if getattr(result, "sales_order_number", None):
-                        created += 1
-                except Exception as exc:  # noqa: BLE001
-                    self._stats["errors"] += 1
-                    self._stats["last_error"] = f"{type(exc).__name__}: {exc}"
-                    logger.error(f"Could not process message {message.email_id}: {exc}")
-                    # Left unseen on purpose, so it is retried and visible.
-                    continue
-
-                if settings.IMAP_MARK_SEEN:
-                    try:
-                        conn.store(num, "+FLAGS", "\\Seen")
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(f"Could not mark message seen: {exc}")
+                for key, n in self._poll_folder(conn, folder).items():
+                    totals[key] += n
         finally:
             try:
-                conn.close()
-            except Exception:
-                pass
-            try:
                 conn.logout()
-            except Exception:
+            except Exception:  # noqa: BLE001 - already closing
                 pass
+        self._stats["messages_ingested"] += totals["ingested"] + totals["orders_created"]
+        self._stats["orders_created"] += totals["orders_created"]
+        if any(totals.values()):
+            logger.info(f"Mailbox poll: {totals['ingested'] + totals['orders_created']} handled, "
+                        f"{totals['logged_only']} logged only, {totals['orders_created']} order(s) created.")
+        return totals
 
-        self._stats["messages_ingested"] += ingested
-        self._stats["orders_created"] += created
-        if ingested:
-            logger.info(f"Mailbox poll ingested {ingested} message(s), {created} order(s) created.")
-        return {"ingested": ingested, "orders_created": created}
+    def _poll_folder(self, conn: imaplib.IMAP4, folder: str) -> Dict[str, int]:
+        from app.services import mail_log
+
+        out = {"ingested": 0, "orders_created": 0, "logged_only": 0}
+        # Read only, unless messages are to be marked read: otherwise the mailbox is never changed.
+        typ, _ = conn.select(_quote(folder), readonly=not settings.IMAP_MARK_SEEN)
+        if typ != "OK":
+            logger.warning(f"Mail folder {folder} could not be opened; skipped.")
+            return out
+        since = (datetime.now(timezone.utc) - timedelta(days=settings.IMAP_LOOKBACK_DAYS)).strftime("%d-%b-%Y")
+        typ, data = conn.search(None, "SINCE", since)
+        nums = data[0].split() if typ == "OK" and data and data[0] else []
+        ids = _message_ids(conn, nums)
+        seen = mail_log.known([i for i in ids.values() if i])
+        act_after = datetime.now(timezone.utc) - timedelta(hours=settings.IMAP_ACT_ON_HOURS)
+        for num in nums:
+            if self._stop.is_set():
+                break
+            if ids.get(num) and ids[num] in seen:
+                continue
+            typ, raw = conn.fetch(num, "(BODY.PEEK[])")
+            if typ != "OK" or not raw or not isinstance(raw[0], tuple):
+                continue
+            handled = self._one(email.message_from_bytes(raw[0][1]), folder, act_after)
+            if handled is None:
+                continue
+            out[handled] += 1
+            if handled != "logged_only" and settings.IMAP_MARK_SEEN:
+                try:
+                    conn.store(num, "+FLAGS", "\\Seen")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Could not mark message seen: {exc}")
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    def _one(self, msg: Message, folder: str, act_after: datetime) -> Optional[str]:
+        """Handles one new message and logs it: ingested / orders_created / logged_only, or None
+        if it was logged already (another poll got there first)."""
+        from app.services import mail_log, mail_tags
+        from app.services.inbound_email_daemon import InboundEmailMessage
+
+        sender = email.utils.parseaddr(msg.get("From", ""))[1] or "unknown@unknown"
+        subject = _decode(msg.get("Subject"))
+        message_id = _decode(msg.get("Message-ID")).strip() or _fallback_id(msg)
+        try:
+            received = email.utils.parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
+            if received is not None:
+                received = received.astimezone(timezone.utc) if received.tzinfo else received.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            received = None
+        recipients = ", ".join(a for _, a in email.utils.getaddresses(msg.get_all("To", []) + msg.get_all("Cc", [])) if a)
+        way = mail_log.direction(sender, folder)
+        body = _body_text(msg)
+        tags = mail_tags.topics(subject, body)
+        quiet = mail_tags.noise(msg, sender, subject) if way != "out" else None
+        thread = mail_tags.thread_key(msg, subject, message_id)
+        base = dict(message_id=message_id, folder=folder, sender=sender, sender_name=_decode(msg.get("From")),
+                    recipients=recipients, subject=subject, received_at=received, direction_=way,
+                    tags=([quiet] if quiet else []) + tags, thread_key=thread)
+        if way == "out":
+            done = mail_log.record(**base, category="sent", summary=" ".join(body.split())[:300],
+                                   outcome="LOGGED_ONLY", needs_action=False)
+            return "logged_only" if done else None
+        if quiet:
+            # Newsletters, auto-replies, bounces, invites, notifications: logged quietly, with no
+            # AI read (it saves the free quota) and no alert, and hidden from the feed.
+            done = mail_log.record(**base, category="noise", summary=" ".join(body.split())[:300],
+                                   outcome="LOGGED_ONLY", needs_action=False)
+            return "logged_only" if done else None
+        if received is not None and received < act_after:
+            # Older mail (the backlog on first start) is recorded, never acted on, so an old
+            # thread can't raise orders, RFQs or drafts today.
+            done = mail_log.record(**base, category="earlier", summary=" ".join(body.split())[:300],
+                                   outcome="LOGGED_ONLY", needs_action=False)
+            return "logged_only" if done else None
+        message = InboundEmailMessage(
+            email_id=message_id, sender_email=sender, sender_name=_decode(msg.get("From")), subject=subject,
+            body_text=body,
+            attachments=[{"filename": a["filename"], "mime": a["mime"], "size_bytes": len(a["content"]),
+                          "content": a["content"]} for a in _attachments(msg)],
+        )
+        try:
+            result = self._daemon.process_inbound_email(message)
+        except Exception as exc:  # noqa: BLE001 - logged for a person; not retried every poll
+            self._stats["errors"] += 1
+            self._stats["last_error"] = f"{type(exc).__name__}: {exc}"
+            logger.error(f"Could not process message {message_id}: {exc}")
+            mail_log.record(**base, category="other", summary=f"Could not be read automatically: {exc}"[:500],
+                            outcome="FAILED", needs_action=True)  # waits in the feed and the daily summary
+            return "ingested"
+        category, needs_action = mail_log.classify(result.status)
+        urgent = "urgent" in tags and way == "in"
+        if not mail_log.record(**base, category=category, summary=result.notes, outcome=result.status,
+                               needs_action=needs_action or urgent):
+            return None
+        # Only what can't wait alerts at once, and once per conversation a day; the rest that
+        # needs a person waits in the feed and the daily summary.
+        if (needs_action or urgent) and mail_log.alert_now(category, tags):
+            mail_log.alert(category if category in mail_log.TITLED else "urgent", thread, sender, subject, result.notes)
+        return "orders_created" if getattr(result, "sales_order_number", None) else "ingested"
 
     def _connect(self) -> imaplib.IMAP4:
+        # A verified TLS context (the default one checks nothing) and a timeout, so a
+        # stalled server can't hang the poller thread.
         if settings.IMAP_USE_SSL:
-            conn: imaplib.IMAP4 = imaplib.IMAP4_SSL(settings.IMAP_HOST, settings.IMAP_PORT)
+            conn: imaplib.IMAP4 = imaplib.IMAP4_SSL(settings.IMAP_HOST, settings.IMAP_PORT,
+                                                    ssl_context=ssl.create_default_context(), timeout=30)
         else:
-            conn = imaplib.IMAP4(settings.IMAP_HOST, settings.IMAP_PORT)
+            conn = imaplib.IMAP4(settings.IMAP_HOST, settings.IMAP_PORT, timeout=30)
+            if settings.IMAP_USERNAME:  # never send the password in the clear
+                conn.starttls(ssl_context=ssl.create_default_context())
         if settings.IMAP_USERNAME:
             conn.login(settings.IMAP_USERNAME, settings.IMAP_PASSWORD)
         return conn

@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { api, ok } from '@/lib/api/client';
+import { optimistic } from '@/lib/optimistic';
 import { dateTime } from '@/lib/format';
 import { CHEMISTRY, DECISIONS, KNOWN_PARTS, NCR_STATUS, psi, useNCR, type MTR, type NCR } from './use-quality';
 
@@ -83,10 +84,30 @@ export function NcrDetail({ id, onLookUp }: { id: string; onLookUp: (heat: strin
   );
 }
 
+// What each decision does to the hold; a lab retest keeps it on hold.
+const OUTCOME: Record<string, string> = {
+  RETURN_TO_SUPPLIER: 'REJECTED',
+  APPROVE_CONCESSION: 'CONCESSION_APPROVED',
+  REQUEST_LAB_RETEST: 'QUARANTINED',
+};
+
 function DecisionForm({ ncr }: { ncr: NCR }) {
   const client = useQueryClient();
+  const { employeeEmail } = useAuth();
   const [action, setAction] = useState<string>(DECISIONS[0].value);
   const [notes, setNotes] = useState('');
+  const decided = (n: NCR): NCR =>
+    n.ncr_id !== ncr.ncr_id
+      ? n
+      : {
+          ...n,
+          status: OUTCOME[action] ?? n.status,
+          disposition_notes: `${action}: ${notes.trim()}`,
+          resolved_at: OUTCOME[action] === 'QUARANTINED' ? n.resolved_at : new Date().toISOString(),
+          resolved_by: employeeEmail ?? n.resolved_by,
+        };
+  // The list and the open hold both live under ['ncrs'].
+  const instant = optimistic<void>(client, ['ncrs'], (old: NCR[] | NCR) => (Array.isArray(old) ? old.map(decided) : decided(old)));
   const decide = useMutation({
     mutationFn: async () =>
       ok(
@@ -95,11 +116,13 @@ function DecisionForm({ ncr }: { ncr: NCR }) {
           body: { action, disposition_notes: notes.trim() },
         }),
       ),
-    onSuccess: () => {
-      toast.success(`Decision saved for heat ${ncr.heat_number}`);
-      void client.invalidateQueries({ queryKey: ['ncrs'] });
+    onMutate: instant.onMutate,
+    onSuccess: () => toast.success(`Decision saved for heat ${ncr.heat_number}`),
+    onError: (e, _v, context) => {
+      instant.rollback(context);
+      toast.error('The decision wasn’t saved', { description: e.message });
     },
-    onError: (e) => toast.error('The decision wasn’t saved', { description: e.message }),
+    onSettled: instant.onSettled,
   });
 
   return (

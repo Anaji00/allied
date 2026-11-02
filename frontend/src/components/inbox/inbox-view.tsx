@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { parseAsBoolean, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Loader2, Sparkles } from 'lucide-react';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
+import { useFreshKeys } from '@/components/data/motion';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,14 +19,7 @@ import { ago, dateTime, words } from '@/lib/format';
 import { AiOutput } from '@/components/tools/ai-output';
 import { useUndoQueue } from '@/lib/undo';
 import { cn } from '@/lib/utils';
-import {
-  explainProblem,
-  inboxPost,
-  useInbox,
-  useRefreshSource,
-  type InboxAction,
-  type InboxItem,
-} from './use-inbox';
+import { DRAFT_KIND, decideDrafts, explainProblem, useInbox, useRefreshSource, type InboxAction, type InboxItem } from './use-inbox';
 
 const GROUPS = ['all', 'approvals', 'problems', 'schedule'] as const;
 const GROUP_LABEL: Record<(typeof GROUPS)[number], string> = {
@@ -34,9 +28,24 @@ const GROUP_LABEL: Record<(typeof GROUPS)[number], string> = {
   problems: 'Problems',
   schedule: 'Schedule',
 };
-const SOURCE_LABEL = { alerts: 'alerts', problems: 'order problems', ai: 'AI results', monday: 'monday.com events' };
+const SOURCE_LABEL = {
+  alerts: 'alerts',
+  problems: 'order problems',
+  ai: 'AI results',
+  drafts: 'drafts to send',
+  monday: 'monday.com events',
+};
 
 const STRIPE = { critical: 'bg-bad', warning: 'bg-warn', info: 'bg-info' } as const;
+
+// How long a decided item takes to fold away; matches the CSS duration below.
+const FOLD_MS = 200;
+
+const without = (set: Set<string>, key: string) => {
+  const next = new Set(set);
+  next.delete(key);
+  return next;
+};
 
 export function InboxView() {
   const router = useRouter();
@@ -49,9 +58,15 @@ export function InboxView() {
   const refresh = useRefreshSource();
   const queue = useUndoQueue();
 
-  // Decided items leave the list at once; Undo brings them back.
+  // A decided item folds away (`leaving`), then is hidden; Undo unfolds it
+  // (`returning`). Counts and J/K skip a leaving item at once.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const visible = useMemo(() => items.filter((i) => !hidden.has(i.key)), [items, hidden]);
+  const [leaving, setLeaving] = useState<Set<string>>(() => new Set());
+  const [returning, setReturning] = useState<Set<string>>(() => new Set());
+  const listed = useMemo(() => items.filter((i) => !hidden.has(i.key) && (show === 'all' || i.group === show)), [items, hidden, show]);
+  const visible = useMemo(() => items.filter((i) => !hidden.has(i.key) && !leaving.has(i.key)), [items, hidden, leaving]);
+  // Items that arrive with the 30-second refresh get a short wash.
+  const fresh = useFreshKeys(listed.map((i) => i.key));
   const shown = useMemo(() => visible.filter((i) => show === 'all' || i.group === show), [visible, show]);
   const counts = useMemo(() => {
     const c = { all: visible.length, approvals: 0, problems: 0, schedule: 0 };
@@ -71,23 +86,82 @@ export function InboxView() {
 
   const select = (item?: InboxItem) => void setSelectedKey(item ? item.key : null);
 
+  // Drafts picked to send or cancel together (checkboxes, or Space on the open one).
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const togglePick = (item: InboxItem) => setPicked((p) => (p.has(item.key) ? without(p, item.key) : new Set(p).add(item.key)));
+  const pickedItems = shown.filter((i) => picked.has(i.key));
+  // The open draft's whole kind ("all vendor follow-ups"), for deciding a group at once.
+  const sameKind = selected?.draft ? shown.filter((i) => i.draft?.kind === selected.draft!.kind) : [];
+
+  // Each item's fold timer, so an Undo during the fold can stop it hiding the item after all.
+  const folding = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  /** Folds items away now and moves the selection on; returns what brings them back. */
+  function foldAway(list: InboxItem[]) {
+    const keys = new Set(list.map((i) => i.key));
+    const next =
+      shown.slice(index + 1).find((i) => !keys.has(i.key)) ?? shown.slice(0, Math.max(index, 0)).findLast((i) => !keys.has(i.key));
+    for (const key of keys) {
+      setLeaving((l) => new Set(l).add(key));
+      clearTimeout(folding.current.get(key));
+      folding.current.set(
+        key,
+        setTimeout(() => {
+          folding.current.delete(key);
+          setHidden((h) => new Set(h).add(key));
+          setLeaving((l) => without(l, key));
+        }, FOLD_MS),
+      );
+    }
+    setPicked((p) => new Set([...p].filter((k) => !keys.has(k))));
+    // Wide screens move straight on. On narrow ones the sheet is modal and would
+    // block the toast's Undo button, so it closes instead.
+    if (selected && keys.has(selected.key)) select(wide ? next : undefined);
+    return (back: Iterable<string> = keys) => {
+      for (const key of back) {
+        clearTimeout(folding.current.get(key));
+        folding.current.delete(key);
+        setHidden((h) => without(h, key));
+        setLeaving((l) => without(l, key));
+        setReturning((r) => new Set(r).add(key));
+        setTimeout(() => setReturning((r) => without(r, key)), FOLD_MS * 2);
+      }
+    };
+  }
+
+  /** Sends or cancels several drafts as one decision, with one Undo. Any that fail come back. */
+  function decideMany(list: InboxItem[], confirm: boolean) {
+    const drafts = list.filter((i) => i.draft);
+    if (!drafts.length) return;
+    const restore = foldAway(drafts);
+    const byId = new Map(drafts.map((i) => [i.draft!.id, i.key]));
+    const n = drafts.length;
+    queue(`${confirm ? 'Sent' : 'Cancelled'} ${n} draft${n === 1 ? '' : 's'}`, {
+      commit: async (keepalive) => {
+        const failed = await decideDrafts([...byId.keys()], confirm, keepalive);
+        await refresh('drafts');
+        if (failed.length) {
+          restore(failed.map((f) => byId.get(f.id)!).filter(Boolean));
+          toast.error(`${failed.length} of ${n} didn’t go through`, { description: failed[0].error });
+        }
+      },
+      onUndo: () => restore(),
+      onError: (error) => {
+        restore();
+        toast.error(`${confirm ? 'Sending' : 'Cancelling'} didn’t go through`, {
+          description: error instanceof Error ? error.message : undefined,
+        });
+      },
+    });
+  }
+
   function decide(item: InboxItem, action: InboxAction, commit = action.commit) {
     if (action.href) {
       router.push(action.href);
       return;
     }
     if (!commit) return;
-    const next = shown[index + 1] ?? shown[index - 1];
-    setHidden((h) => new Set(h).add(item.key));
-    // Wide screens move straight on. On narrow ones the sheet is modal and would
-    // block the toast's Undo button, so it closes instead.
-    if (selected?.key === item.key) select(wide ? next : undefined);
-    const restore = () =>
-      setHidden((h) => {
-        const n = new Set(h);
-        n.delete(item.key);
-        return n;
-      });
+    const restore = foldAway([item]);
     queue(`${action.verb}: ${item.title}`, {
       commit: async (keepalive) => {
         await commit(keepalive);
@@ -107,23 +181,32 @@ export function InboxView() {
   }
 
   const allowed = (item?: InboxItem) => (item ? item.actions.filter((a) => hasRole(a.minRole)) : []);
-  const primary = allowed(selected).find((a) => a.primary && !a.needsPrice);
+  const primary = allowed(selected).find((a) => a.primary);
 
   useHotkeys(['j', 'ArrowDown'], () => shown[index + 1] && select(shown[index + 1]), { preventDefault: true }, [shown, index]);
   useHotkeys(['k', 'ArrowUp'], () => shown[index - 1] && select(shown[index - 1]), { preventDefault: true }, [shown, index]);
   useHotkeys('e', () => selected && primary && decide(selected, primary), [selected, primary]);
   useHotkeys(
-    ['a', 'r'],
+    ['a', 'r', 'x'],
     (e) => {
       const action = allowed(selected).find((a) => a.hotkey === e.key.toLowerCase());
       if (selected && action) decide(selected, action);
     },
     [selected],
   );
-  useHotkeys('enter', () => {
-    const open = allowed(selected).find((a) => a.href);
-    if (open) router.push(open.href!);
-  }, [selected]);
+  useHotkeys(
+    'enter',
+    () => {
+      // A draft's Enter sends it; anything else's opens where it points.
+      if (selected?.draft && primary) return decide(selected, primary);
+      const open = allowed(selected).find((a) => a.href);
+      if (open) router.push(open.href!);
+    },
+    [selected, primary],
+  );
+  useHotkeys('space', () => selected?.draft && togglePick(selected), { preventDefault: true }, [selected]);
+  // Shift+Enter: the picked drafts, or else every draft of the open one's kind.
+  useHotkeys('shift+enter', () => decideMany(pickedItems.length ? pickedItems : sameKind, true), [pickedItems, sameKind]);
 
   return (
     <div className="grid gap-4">
@@ -163,9 +246,46 @@ export function InboxView() {
         <p className="ml-auto hidden items-center gap-1.5 text-xs text-muted-foreground lg:flex">
           <Kbd>J</Kbd>
           <Kbd>K</Kbd> move · <Kbd>E</Kbd> do the first action · <Kbd>A</Kbd>
-          <Kbd>R</Kbd> approve or reject · <Kbd>Enter</Kbd> open
+          <Kbd>R</Kbd> approve or reject · <Kbd>Enter</Kbd> open or send · <Kbd>X</Kbd> cancel a draft · <Kbd>Space</Kbd> pick ·{' '}
+          <Kbd>Shift</Kbd>
+          <Kbd>Enter</Kbd> send picked
         </p>
       </div>
+
+      {(pickedItems.length > 0 || sameKind.length > 1) && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm"
+          role="group"
+          aria-label="Several drafts at once"
+        >
+          {pickedItems.length > 0 ? (
+            <>
+              <span className="font-medium tabular-nums">{pickedItems.length} picked</span>
+              <Button size="sm" onClick={() => decideMany(pickedItems, true)}>
+                Send {pickedItems.length}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => decideMany(pickedItems, false)}>
+                Cancel {pickedItems.length}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
+                Clear
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="text-muted-foreground">
+                {sameKind.length} {(DRAFT_KIND[selected!.draft!.kind] ?? 'similar').toLowerCase()} drafts waiting
+              </span>
+              <Button size="sm" variant="outline" onClick={() => decideMany(sameKind, true)}>
+                Send all {sameKind.length}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPicked(new Set(sameKind.map((i) => i.key)))}>
+                Pick them
+              </Button>
+            </>
+          )}
+        </div>
+      )}
 
       {failed.length > 0 && (
         <p role="alert" className="rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">
@@ -180,35 +300,66 @@ export function InboxView() {
         <section aria-label="Waiting on you" className="overflow-hidden rounded-lg border bg-card">
           {isPending && items.length === 0 ? (
             <RowsSkeleton />
-          ) : failed.length === 4 ? (
+          ) : failed.length === Object.keys(SOURCE_LABEL).length ? (
             <ErrorState error={failed[0].error} onRetry={() => void refetch()} />
-          ) : shown.length === 0 ? (
+          ) : listed.length === 0 ? (
             <EmptyState title={show === 'all' ? 'Nothing waiting on you' : `No ${GROUP_LABEL[show].toLowerCase()} waiting`}>
               New problems, approvals and schedule warnings show up here as they happen.
             </EmptyState>
           ) : (
-            <ul role="listbox" aria-label="Inbox items">
-              {shown.map((item) => (
-                <li key={item.key} id={`inbox-${item.key}`} role="option" aria-selected={item.key === selected?.key}>
-                  <button
-                    type="button"
-                    onClick={() => select(item)}
+            <ul role="listbox" aria-label="Inbox items" className="rows-enter">
+              {listed.map((item) => (
+                <li
+                  key={item.key}
+                  id={`inbox-${item.key}`}
+                  role="option"
+                  aria-selected={item.key === selected?.key}
+                  aria-hidden={leaving.has(item.key) || undefined}
+                  className={cn(
+                    'grid grid-rows-[1fr] transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]',
+                    leaving.has(item.key) && 'pointer-events-none grid-rows-[0fr] opacity-0',
+                    returning.has(item.key) && 'starting:grid-rows-[0fr] starting:opacity-0',
+                  )}
+                >
+                  <div
                     className={cn(
-                      'grid w-full grid-cols-[3px_minmax(0,1fr)_auto] items-start gap-3 border-b py-2.5 pr-3 text-left last:border-b-0 hover:bg-muted/60',
-                      item.key === selected?.key && 'bg-accent hover:bg-accent',
+                      'flex min-h-0 overflow-hidden border-b',
+                      fresh.has(item.key) && 'row-fresh',
+                      picked.has(item.key) && 'bg-accent/60',
                     )}
                   >
-                    <span className={cn('h-full self-stretch rounded-r-sm', STRIPE[item.severity])} aria-hidden="true" />
-                    <span className="grid min-w-0 gap-0.5">
-                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        {item.kind}
-                        {item.severity === 'critical' && <ToneBadge tone="bad">Critical</ToneBadge>}
+                    {item.draft && (
+                      <label className="grid shrink-0 cursor-pointer place-items-center pl-3" title="Pick to send or cancel with others">
+                        <input
+                          type="checkbox"
+                          checked={picked.has(item.key)}
+                          onChange={() => togglePick(item)}
+                          aria-label={`Pick: ${item.title}`}
+                          className="size-4 accent-foreground"
+                        />
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => select(item)}
+                      className={cn(
+                        'grid min-w-0 flex-1 grid-cols-[3px_minmax(0,1fr)_auto] items-start gap-3 py-2.5 pr-3 text-left hover:bg-muted/60',
+                        item.draft && 'pl-2',
+                        item.key === selected?.key && 'bg-accent hover:bg-accent',
+                      )}
+                    >
+                      <span className={cn('h-full self-stretch rounded-r-sm', STRIPE[item.severity])} aria-hidden="true" />
+                      <span className="grid min-w-0 gap-0.5">
+                        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          {item.kind}
+                          {item.severity === 'critical' && <ToneBadge tone="bad">Critical</ToneBadge>}
+                        </span>
+                        <span className="truncate text-sm font-medium">{item.title}</span>
+                        {item.meta && <span className="truncate text-xs text-muted-foreground">{item.meta}</span>}
                       </span>
-                      <span className="truncate text-sm font-medium">{item.title}</span>
-                      {item.meta && <span className="truncate text-xs text-muted-foreground">{item.meta}</span>}
-                    </span>
-                    <span className="pt-0.5 text-xs text-muted-foreground tabular-nums">{ago(item.at)}</span>
-                  </button>
+                      <span className="pt-0.5 text-xs text-muted-foreground tabular-nums">{ago(item.at)}</span>
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -239,8 +390,6 @@ function ItemDetail({
 }) {
   const [explanation, setExplanation] = useState<{ explanation?: string; suggested_fix?: string } | null>(null);
   const [explaining, setExplaining] = useState(false);
-  const [pricing, setPricing] = useState<InboxAction | null>(null);
-  const [price, setPrice] = useState('');
   const viewOnly = actions.every((a) => a.href);
 
   async function explain() {
@@ -280,6 +429,25 @@ function ItemDetail({
         </div>
       )}
 
+      {item.draft?.email?.body && (
+        <div className="grid gap-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground">What will be sent</h3>
+          <pre className="max-h-80 overflow-auto rounded-md border bg-muted/40 p-3 font-sans text-[13px] leading-relaxed whitespace-pre-wrap">
+            {item.draft.email.body}
+          </pre>
+        </div>
+      )}
+      {item.draft && item.draft.why.length > 0 && (
+        <div className="grid gap-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground">Why it was drafted</h3>
+          <ul className="grid list-disc gap-0.5 pl-5 text-sm text-foreground/90">
+            {item.draft.why.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="rounded-md border p-3">
         <Facts items={item.facts} />
       </div>
@@ -293,54 +461,18 @@ function ItemDetail({
         </div>
       )}
 
-      {pricing ? (
-        <form
-          className="grid gap-2 rounded-md border p-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const value = Number(price);
-            if (!(value > 0)) return;
-            onDecide(item, pricing, (keepalive) =>
-              inboxPost(
-                `/exceptions/${encodeURIComponent(item.explainId!)}/resolve`,
-                { action_type: pricing.id, new_unit_price: value, resolution_notes: `Price approved at ${value} from the Inbox` },
-                keepalive,
-              ),
-            );
-          }}
-        >
-          <label htmlFor="inbox-price" className="text-sm font-medium">
-            New unit price ($)
-          </label>
-          <Input id="inbox-price" type="number" step="0.01" min="0.01" required autoFocus value={price} onChange={(e) => setPrice(e.target.value)} />
-          <div className="flex gap-2">
-            <Button type="submit" size="sm">
-              Approve price
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setPricing(null)}>
-              Cancel
-            </Button>
-          </div>
-        </form>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {actions.map((action) => (
-            <Button
-              key={action.id}
-              size="sm"
-              variant={action.primary ? 'default' : 'outline'}
-              onClick={() => (action.needsPrice ? setPricing(action) : onDecide(item, action))}
-            >
-              {action.label}
-              {action.primary && !action.needsPrice && <Kbd className="bg-transparent text-current opacity-60">E</Kbd>}
-              {action.hotkey && !action.primary && <Kbd className="bg-transparent text-current opacity-60">{action.hotkey.toUpperCase()}</Kbd>}
-            </Button>
-          ))}
-        </div>
-      )}
-      {viewOnly && item.source !== 'alerts' && (
-        <p className="text-xs text-muted-foreground">Your role can see this but not act on it.</p>
-      )}
+      <div className="flex flex-wrap gap-2">
+        {actions.map((action) => (
+          <Button key={action.id} size="sm" variant={action.primary ? 'default' : 'outline'} onClick={() => onDecide(item, action)}>
+            {action.label}
+            {action.primary && <Kbd className="bg-transparent text-current opacity-60">{item.draft ? 'Enter' : 'E'}</Kbd>}
+            {action.hotkey && !action.primary && (
+              <Kbd className="bg-transparent text-current opacity-60">{action.hotkey.toUpperCase()}</Kbd>
+            )}
+          </Button>
+        ))}
+      </div>
+      {viewOnly && item.source !== 'alerts' && <p className="text-xs text-muted-foreground">Your role can see this but not act on it.</p>}
     </div>
   );
 }

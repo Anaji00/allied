@@ -1,6 +1,6 @@
 'use client';
 
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions, useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { api, ApiError, ok } from '@/lib/api/client';
 import type { Tone } from '@/components/data/tone-badge';
@@ -90,33 +90,38 @@ export function useOrders({ q, view, vendor, page }: { q: string; view: OrderVie
   });
 }
 
-export function useOrder(so: string | null) {
-  return useQuery({
+/** One order; shared by the detail panel and the hover prefetch so they hit the same cache entry. */
+export const orderQuery = (so: string) =>
+  queryOptions({
     queryKey: ['orders', 'one', so],
     queryFn: async () =>
-      (await ok(api.GET('/api/v1/orders/{so_number}', { params: { path: { so_number: so! } } }))) as unknown as Order,
-    enabled: Boolean(so),
+      (await ok(api.GET('/api/v1/orders/{so_number}', { params: { path: { so_number: so } } }))) as unknown as Order,
   });
+
+export function useOrder(so: string | null) {
+  return useQuery({ ...orderQuery(so ?? ''), enabled: Boolean(so) });
 }
 
 export type ComplianceBundle = { heat_numbers?: string[]; blind_shipping_enforced?: boolean; drawing_reference?: string };
 
 /** Heats and blind-ship status. Held in memory, so it can be missing after a restart. */
-export function useCompliance(so: string | null) {
-  return useQuery({
+export const complianceQuery = (so: string) =>
+  queryOptions({
     queryKey: ['orders', 'compliance', so],
     queryFn: async () => {
       try {
         return (await ok(
-          api.GET('/api/v1/cache/orders/{order_key}/compliance', { params: { path: { order_key: so! } } }),
+          api.GET('/api/v1/cache/orders/{order_key}/compliance', { params: { path: { order_key: so } } }),
         )) as ComplianceBundle;
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;
       }
     },
-    enabled: Boolean(so),
   });
+
+export function useCompliance(so: string | null) {
+  return useQuery({ ...complianceQuery(so ?? ''), enabled: Boolean(so) });
 }
 
 export type Supplier = {

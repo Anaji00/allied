@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import ssl
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -35,6 +36,18 @@ logger = logging.getLogger("allied_bridge")
 _MAX_OUTBOX = 500
 
 
+# Hosted services that refuse mail without a login. Any other host with no username is taken to be
+# a relay that accepts mail by address (a local postfix, an office relay) and is used as it is.
+_NEEDS_LOGIN = ("smtp.gmail.com", "smtp.office365.com", "smtp-mail.outlook.com", "smtp.mail.yahoo.com",
+                "smtp.zoho.com", "smtp.sendgrid.net", "smtp.mailgun.org", "email-smtp.")
+
+
+def _login_ready() -> bool:
+    if settings.SMTP_USERNAME:
+        return bool(settings.SMTP_PASSWORD)
+    return not any(settings.SMTP_HOST.casefold().startswith(h) for h in _NEEDS_LOGIN)
+
+
 class OutboundEmailService:
     """Drafts, records, and (when enabled) sends operational mail."""
 
@@ -46,8 +59,9 @@ class OutboundEmailService:
 
     @property
     def send_enabled(self) -> bool:
-        """True only when a host is configured and sending was switched on."""
-        return bool(settings.EMAIL_SEND_ENABLED and settings.SMTP_HOST)
+        """True only when a host and its login are set and sending was switched on. A host with
+        no login (Gmail, Microsoft 365) would refuse every message, so it stays draft-only."""
+        return bool(settings.EMAIL_SEND_ENABLED and settings.SMTP_HOST and _login_ready())
 
     def status(self) -> Dict[str, Any]:
         """Describes the current posture, for the operations screen."""
@@ -55,6 +69,8 @@ class OutboundEmailService:
             mode, detail = "DRAFT_ONLY", "No mail server configured."
         elif not settings.EMAIL_SEND_ENABLED:
             mode, detail = "DRAFT_ONLY", "Mail server configured but sending is switched off."
+        elif not _login_ready():
+            mode, detail = "DRAFT_ONLY", "Mail server set; waiting for SMTP_USERNAME and SMTP_PASSWORD (an app password)."
         elif settings.EMAIL_REDIRECT_ALL_TO:
             mode, detail = "REDIRECTED", f"All mail is redirected to {settings.EMAIL_REDIRECT_ALL_TO}."
         else:
@@ -177,8 +193,10 @@ class OutboundEmailService:
 
     def _deliver(self, msg: EmailMessage, recipients: List[str]) -> None:
         """Opens a connection and sends. Separated so tests can replace it."""
+        # Without a context, smtplib uses an unverified one: anyone in the path could read the password.
+        tls = ssl.create_default_context()
         if settings.SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as smtp:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30, context=tls) as smtp:
                 if settings.SMTP_USERNAME:
                     smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
                 smtp.send_message(msg, to_addrs=recipients)
@@ -186,7 +204,9 @@ class OutboundEmailService:
 
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as smtp:
             if settings.SMTP_USE_TLS:
-                smtp.starttls()
+                smtp.starttls(context=tls)
+            elif settings.SMTP_USERNAME:
+                raise RuntimeError("Refusing to send a mail password without TLS (set SMTP_USE_TLS or use port 465).")
             if settings.SMTP_USERNAME:
                 smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
             smtp.send_message(msg, to_addrs=recipients)

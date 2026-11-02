@@ -135,7 +135,7 @@ def test_late_vendor_gets_a_drafted_chaser_that_waits_for_its_owner(monkeypatch,
     autopilot.run("vendor_chaser")
     mine = [d for d in _drafts("vendor_chaser") if d.args.get("to") == f"sales@zz{tag}.test"]
     assert len(mine) == 1 and mine[0].status == "PENDING" and mine[0].user_email == OWNER["email"]
-    assert f"P{tag}" in mine[0].args["subject"] and "20 days late" in mine[0].summary
+    assert f"P{tag}" in mine[0].args["subject"] and "PO sent 40 days ago" in mine[0].summary
     # No email on file: no second alert from the autopilot; the vendor-late alert carries the message.
     with SessionLocal() as db:
         assert db.query(NotificationDB).filter(NotificationDB.dedup_key.like(f"autopilot:vendor-chase:{nomail['id']}:%")).count() == 0
@@ -147,7 +147,7 @@ def test_late_vendor_gets_a_drafted_chaser_that_waits_for_its_owner(monkeypatch,
     assert "drafted for approval" in mine_late.body
 
     autopilot.run("vendor_chaser")
-    assert len([d for d in _drafts("vendor_chaser") if d.args.get("to") == f"sales@zz{tag}.test"]) == 1  # once a week
+    assert len([d for d in _drafts("vendor_chaser") if d.args.get("to") == f"sales@zz{tag}.test"]) == 1  # once per PO
 
     # The owner sees it in the assistant, long after a chat proposal would have expired.
     with SessionLocal() as db:
@@ -240,8 +240,25 @@ def test_any_reviewer_can_act_on_a_draft_and_an_acknowledgement_acknowledges(mon
                     OWNER, source="email")
     [draft] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r["number"] in p["summary"]]
     assert agent.decide(draft["id"], True, second)["status"] == "DONE"     # not only the first reviewer
-    assert rfqs.get(r["id"])["status"] == "ACKNOWLEDGED"                   # sending it acknowledged the RFQ
-    with pytest.raises(LookupError):
+    assert rfqs.get(r["id"])["status"] == "NEW"        # mail is off: only drafted, the customer heard nothing
+
+    from app.services.outbound_email_service import outbound_email_service
+    r2 = rfqs.create({"customer": "Vulcan", "subject": "Liner", "contact_email": f"ack{uuid.uuid4().hex[:6]}@v.test"},
+                     OWNER, source="email")
+    [draft2] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r2["number"] in p["summary"]]
+    monkeypatch.setattr(outbound_email_service, "send", lambda *a, **kw: {"status": "SENT"})
+    assert agent.decide(draft2["id"], True, second)["status"] == "DONE"
+    assert rfqs.get(r2["id"])["status"] == "ACKNOWLEDGED"                  # really sent: acknowledged
+
+    r3 = rfqs.create({"customer": "Vulcan", "subject": "Chute 2", "contact_email": f"ack{uuid.uuid4().hex[:6]}@v.test"},
+                     OWNER, source="email")
+    [draft3] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r3["number"] in p["summary"]]
+    monkeypatch.setattr(outbound_email_service, "send", lambda *a, **kw: {"status": "FAILED"})
+    assert agent.decide(draft3["id"], True, second)["status"] == "FAILED"  # a refused send is not "done"
+    assert rfqs.get(r3["id"])["status"] == "NEW"
+    with pytest.raises(LookupError):                                       # not a reviewer: can't see it
+        agent.decide(draft["id"], True, {"email": "stranger@allied.test", "role": "MANAGER"})
+    with pytest.raises(ValueError):                                        # an admin can, but it is decided
         agent.decide(draft["id"], True, {"email": "stranger@allied.test", "role": "ADMIN"})
 
 
@@ -303,3 +320,31 @@ def test_vendor_names_on_the_boards_are_matched_to_the_vendor_master():
     assert autopilot.vendor_email("NIBROCK") == "dparker@nibrockinc.com"      # vendor id
     assert autopilot.vendor_email("helen") == "helen@zbsupereal.com"          # the contact, before the @
     assert autopilot.vendor_email("Nobody Here") is None
+
+
+def test_a_vendor_is_followed_up_only_once_its_order_has_waited_its_time_after_the_po(monkeypatch):
+    tag = uuid.uuid4().hex[:6]
+    monkeypatch.setattr(settings, "VENDOR_EMAILS", f"WAIT{tag}=sales@wait{tag}.test")
+    job = vendors.create({"vendor": f"WAIT{tag}", "description": "Liners", "po_number": f"W{tag}",
+                          "ordered_on": _d(-5), "quoted_lead_days": 20}, OWNER)
+    follow = lambda: {j["id"]: j for j in vendors.overview()["jobs"]}[job["id"]]  # noqa: E731
+
+    j = follow()
+    assert j["follow_up"]["first"] == _d(15) and j["follow_up"]["wait_basis"] == "the vendor's quoted lead time"
+    assert not j["follow_up"]["due"] and autopilot.vendor_chase(j, TODAY) is None       # 5 of 20 days: not yet
+    assert autopilot.vendor_chase(j, TODAY, manual=True) is not None                     # staff may still ask
+
+    vendors.update(job["id"], {"follow_up_days": 3}, OWNER)                                 # set by hand on this order
+    j = follow()
+    assert j["follow_up"]["due"] and j["follow_up"]["wait_basis"] == "set by hand" and j["follow_up"]["wait_days"] == 3
+    assert autopilot.vendor_chase(j, TODAY).key == f"vendor-followup:{job['id']}:{_d(-5)}"   # once per PO
+
+    vendors.update(job["id"], {"follow_up_days": 0}, OWNER)                                 # back to the lead time
+    assert follow()["follow_up"]["wait_days"] == 20
+
+    vendors.update(job["id"], {"shipped_on": TODAY.isoformat()}, OWNER)
+    assert vendors.overview(include_shipped=True)["jobs"] and follow_up_after_ship(job["id"]) is None
+
+
+def follow_up_after_ship(job_id):
+    return {j["id"]: j for j in vendors.overview(include_shipped=True)["jobs"]}[job_id]["follow_up"]

@@ -327,6 +327,8 @@ class ScriptedAI(providers.AIProvider):
 
     def chat(self, messages, tools):
         self.seen.append((json.loads(json.dumps(messages)), [t["function"]["name"] for t in tools]))
+        if not self.script:
+            raise providers.AIUnavailableError("script finished")
         step = self.script.pop(0)
         if isinstance(step, str):
             return {"content": step, "tool_calls": []}
@@ -397,6 +399,9 @@ def test_step_limit_and_missing_fields(scripted, monkeypatch):
     monkeypatch.setattr(settings, "ASSISTANT_MAX_STEPS", 2)
     scripted(("my_alerts", {}), ("my_alerts", {}))
     assert "more lookups" in agent.chat([{"role": "user", "content": "loop"}], ADMIN)["reply"]
+    ai = scripted(("my_alerts", {}), ("my_alerts", {}), "You have no open alerts.")
+    assert agent.chat([{"role": "user", "content": "loop"}], ADMIN)["reply"] == "You have no open alerts."
+    assert ai.seen[-1][1] == []                       # the last call offers no tools: answer from what was found
     ai = scripted(("log_rfq", {"customer": "Only a name"}), "What should be quoted?")
     out = agent.chat([{"role": "user", "content": "log one"}], OPERATOR)
     assert out["actions"] == [] and "missing subject" in ai.seen[1][0][-1]["content"]
@@ -443,7 +448,8 @@ def test_mcp_server_tools_are_added_reads_run_and_writes_wait(monkeypatch, scrip
     monkeypatch.setattr(mcp.httpx, "post", fake)
     monkeypatch.setenv("TRACKER_TOKEN", "secret-123")
     monkeypatch.setattr(settings, "ASSISTANT_MCP_SERVERS", json.dumps([
-        {"name": "tracker", "url": "https://mcp.tracker.test/mcp", "headers": {"Authorization": "env:TRACKER_TOKEN"}}]))
+        {"name": "tracker", "url": "https://mcp.tracker.test/mcp", "headers": {"Authorization": "env:TRACKER_TOKEN"},
+         "trust_annotations": True}]))
     mcp._cache["raw"], mcp._sessions = None, {}
     ai = scripted(("tracker__search_issues", {"q": "liner"}), ("tracker__create_issue", {"title": "x"}))
     out = agent.chat([{"role": "user", "content": "find and file"}], OPERATOR)
@@ -453,6 +459,15 @@ def test_mcp_server_tools_are_added_reads_run_and_writes_wait(monkeypatch, scrip
     assert ("tools/call", ) == tuple({m for m, _ in fake.calls if m == "tools/call"})
     assert fake.calls[0][1]["Authorization"] == "secret-123" and fake.calls[-1][1]["Mcp-Session-Id"] == "s1"
     assert agent.decide(out["actions"][0]["id"], True, OPERATOR)["result"]["done"] == "called create_issue"
+
+    # Without trust_annotations, the server's own "read-only" label counts for nothing:
+    # every tool waits for a person.
+    monkeypatch.setattr(settings, "ASSISTANT_MCP_SERVERS", json.dumps([
+        {"name": "tracker", "url": "https://mcp.tracker.test/mcp", "headers": {"Authorization": "env:TRACKER_TOKEN"}}]))
+    mcp._cache["raw"], mcp._sessions = None, {}
+    assert mcp.tools()["tracker__search_issues"].write is True
+    assert mcp._safe_name("my.server", "do/thing") == "my_server__do_thing"
+    assert len(mcp._safe_name("s", "x" * 100)) <= 64
     monkeypatch.setattr(settings, "ASSISTANT_MCP_SERVERS", "")
     mcp._cache["raw"] = None
 

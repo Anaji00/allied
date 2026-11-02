@@ -131,7 +131,9 @@ class DocumentScannerService:
                 # rendering happen here on one thread; only the Tesseract calls
                 # (a subprocess each) run in parallel.
                 page_texts: List[Tuple[int, str, Optional[bytes]]] = []
-                with pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
+                from app.services.ai.drawings import PDF_LOCK  # PyMuPDF is not thread-safe
+
+                with PDF_LOCK, pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
                     for idx in range(min(len(doc), 8)):
                         page = doc[idx]
                         txt = page.get_text().strip()

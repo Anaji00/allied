@@ -211,16 +211,6 @@ class OutboundWebhookService:
         message = f"Order {order_id} for {customer} is now {status}. Total Value: ${total_revenue:,.2f}"
         return self.send_sync(title=title, message=message, severity="INFO")
 
-    def notify_stale_pricing(self, vendor: str, stale_skus: list) -> Dict[str, str]:
-        """Helper to send stale pricing halt notification."""
-        title = f"Stale Vendor Pricing Halt: {vendor}"
-        message = (
-            f"Orchestration paused for {vendor} due to price quotes older than "
-            f"{settings.VENDOR_PRICE_STALENESS_DAYS} days for SKUs: {', '.join(stale_skus)}. "
-            f"RFQ dispatched."
-        )
-        return self.send_sync(title=title, message=message, severity="WARNING")
-
 
 # Global instances
 outbound_webhooks = OutboundWebhookService()

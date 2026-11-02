@@ -8,8 +8,10 @@ everything else needs the user's confirmation. Secrets go in headers as
 "env:NAME" so they live in the environment, not in the setting.
 """
 
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -104,11 +106,34 @@ def _call(server: Dict[str, Any], method: str, params: Optional[Dict[str, Any]] 
         return _rpc(server, method, params)
 
 
+def _safe_name(server: str, tool: str) -> str:
+    """Tool names the model API accepts (letters, digits, _ and -, at most 64); a name that had
+    to be shortened gets a short hash so two long names can't collide."""
+    raw = re.sub(r"[^A-Za-z0-9_-]", "_", f"{server}__{tool}")
+    return raw if len(raw) <= 64 else f"{raw[:55]}_{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
+
+
+def _list_tools(server: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every page of tools/list (servers page long lists with nextCursor)."""
+    found, cursor = [], None
+    for _ in range(20):
+        page = _call(server, "tools/list", {"cursor": cursor} if cursor else None) or {}
+        found += page.get("tools") or []
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+    return found
+
+
 def _make_tool(server: Dict[str, Any], t: Dict[str, Any]):
     from app.services.assistant.tools import Tool
 
     name = t.get("name") or ""
-    read_only = bool((t.get("annotations") or {}).get("readOnlyHint")) or name in (server.get("read_only_tools") or [])
+    # A server's own "read-only" label is untrusted (MCP spec): a careless or hostile server
+    # could label a write that way and skip the confirmation card. It counts only when this
+    # server's config says trust_annotations, or the tool is listed in read_only_tools here.
+    hinted = bool((t.get("annotations") or {}).get("readOnlyHint")) and bool(server.get("trust_annotations"))
+    read_only = hinted or name in (server.get("read_only_tools") or [])
     schema = t.get("inputSchema") or {"type": "object", "properties": {}}
 
     def run(args: Dict[str, Any], user: Dict[str, Any]) -> Any:
@@ -119,11 +144,12 @@ def _make_tool(server: Dict[str, Any], t: Dict[str, Any]):
         return text if read_only else {"done": text[:500] or f"{name} done."}
 
     return Tool(
-        name=f"{server['name']}__{name}"[:64],
+        name=_safe_name(server["name"], name),
         description=(f"[{server['name']}] " + (t.get("description") or name))[:300],
         params=schema.get("properties") or {}, required=list(schema.get("required") or []),
         run=run, write=not read_only, min_role=server.get("min_role") or "OPERATOR", connector=server["name"],
-        summarize=lambda a, n=name, s=server["name"]: f"Run {n} on {s} with {json.dumps(a)[:400]}",
+        # The card shows everything that will be sent, not a cut-off preview.
+        summarize=lambda a, n=name, s=server["name"]: f"Run {n} on {s} with {json.dumps(a, indent=1)[:4000]}",
     )
 
 
@@ -136,7 +162,7 @@ def tools() -> Dict[str, Any]:
         found, status = {}, {}
         for server in servers():
             try:
-                listed = _call(server, "tools/list").get("tools") or []
+                listed = _list_tools(server)
                 allowed = server.get("allowed_tools")
                 for t in listed:
                     if allowed and t.get("name") not in allowed:
