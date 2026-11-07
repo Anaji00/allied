@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
-import { dispatchOrder, downloadPackingSlip } from '@/lib/api';
+import { authFetch, dispatchOrder, downloadPackingSlip } from '@/lib/api';
 import { api, ok } from '@/lib/api/client';
 import { date, dateTime, money, pct } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -207,6 +207,65 @@ function Quality({ order }: { order: Order }) {
   );
 }
 
+type Rate = { carrier: string; service: string; live?: boolean; transit_days?: number | null; usd?: number | null; cad?: number | null; cny?: number | null };
+
+/** Prices from every carrier that is set up, then the saved rate card. Looks up prices only; nothing is booked. */
+function ShippingPrices({ address, currency }: { address?: string | null; currency?: string }) {
+  const [weight, setWeight] = useState('');
+  const quote = useMutation({
+    mutationFn: async () => {
+      const qs = new URLSearchParams({ address: address || '', weight_lbs: weight });
+      const res = await authFetch(`/api/v1/carriers/quote?${qs}`, { cache: 'no-store' });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : `Couldn’t get prices (${res.status}).`);
+      return body as Rate[];
+    },
+  });
+  const cur = (currency || 'USD').toUpperCase();
+  const price = (r: Rate) => {
+    const v = cur === 'CAD' ? r.cad : cur === 'CNY' ? r.cny : r.usd;
+    return v == null ? '–' : `${money(v)} ${cur === 'CAD' || cur === 'CNY' ? cur : 'USD'}`;
+  };
+
+  return (
+    <div className="grid gap-2 rounded-lg border p-3">
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (Number(weight) > 0) quote.mutate();
+        }}
+      >
+        <label className="grid gap-1 text-xs">
+          <span className="font-medium">Shipping prices</span>
+          <Input className="w-32" inputMode="decimal" placeholder="Weight (lbs)" value={weight} onChange={(e) => setWeight(e.target.value.replace(/[^\d.]/g, ''))} />
+        </label>
+        <Button type="submit" variant="outline" size="sm" disabled={!address || !(Number(weight) > 0) || quote.isPending}>
+          {quote.isPending && <Loader2 className="animate-spin" />}
+          Get prices
+        </Button>
+        {!address && <span className="text-xs text-muted-foreground">This order has no shipping address.</span>}
+      </form>
+      {quote.isError && <p className="text-xs text-bad">{quote.error.message}</p>}
+      {quote.data && (
+        <ul className="grid gap-1 text-[13px]">
+          {quote.data.map((r, i) => (
+            <li key={`${r.carrier}-${r.service}-${i}`} className="flex flex-wrap items-baseline gap-2">
+              <span className="font-medium">{r.carrier}</span>
+              <span className="text-xs text-muted-foreground">{r.service}</span>
+              {r.live && <ToneBadge tone="ok">Live</ToneBadge>}
+              {r.transit_days != null && <span className="text-xs text-muted-foreground">{r.transit_days} days</span>}
+              <span className="ml-auto tabular-nums">{price(r)}</span>
+            </li>
+          ))}
+          {quote.data.length === 0 && <li className="text-muted-foreground">No prices came back.</li>}
+          <li className="text-xs text-muted-foreground">Prices only. Nothing is booked or bought here.</li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Documents({ order }: { order: Order }) {
   const { hasRole } = useAuth();
   const [confirming, setConfirming] = useState(false);
@@ -255,6 +314,7 @@ function Documents({ order }: { order: Order }) {
       {!order.has_packing_slip && (
         <p className="text-xs text-muted-foreground">No packing slip has been made for this order yet. Dispatching makes one.</p>
       )}
+      {hasRole('OPERATOR') && <ShippingPrices address={order.shipping_address} currency={order.currency} />}
 
       <Dialog open={confirming} onOpenChange={setConfirming}>
         <DialogContent>

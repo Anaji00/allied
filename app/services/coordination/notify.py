@@ -197,6 +197,11 @@ def _log_failure(future) -> None:
         logger.error("Alert delivery failed", exc_info=exc)
 
 
+# Notices that come often and are answered in the app: in-app and phone push only, no email
+# (the daily summary lists what is waiting).
+_APP_AND_PHONE_ONLY = {"autopilot_drafts"}
+
+
 def _deliver(nid: int) -> None:
     with SessionLocal() as db:
         row = db.get(NotificationDB, nid)
@@ -216,7 +221,7 @@ def _deliver(nid: int) -> None:
             continue
         channels = set(contact.get("channels") or ["email"])
         result: Dict[str, str] = {}
-        if "email" in channels:
+        if "email" in channels and n["kind"] not in _APP_AND_PHONE_ONLY:
             result["email"] = _email(email, n, url)
         if "push" in channels and n["severity"] in ("warning", "critical"):
             wants_push = True

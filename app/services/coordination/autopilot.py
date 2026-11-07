@@ -496,11 +496,7 @@ def _draft(play: str, intent: Intent, auto: bool) -> str:
             db.rollback()
             return "already"
     if not auto:
-        if created:
-            from app.services.assistant import quick
-
-            quick.push_draft(action_id, intent.summary, owner)  # Send / Review buttons on the reviewer's phone
-        return "drafted"
+        return "drafted"   # the reviewer hears once per run, grouped (tell_reviewers), not once per draft
     from app.services.assistant.tools import TOOLS
 
     status, result = "DONE", None
@@ -546,7 +542,10 @@ def carry_out(name: str, mode: str, intents: List[Intent], dry_run: bool = False
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Autopilot {name}: {it.summary} failed: {exc}")
             outcome = f"failed: {exc}"[:200]
-        did.append({"what": it.summary, "outcome": outcome, "to": it.to[:1]})
+        entry = {"what": it.summary, "outcome": outcome, "to": it.to[:1]}
+        if it.kind == "draft":
+            entry["id"] = uuid.uuid5(uuid.NAMESPACE_URL, f"allied-autopilot:{it.key}").hex
+        did.append(entry)
     return did
 
 
@@ -600,16 +599,35 @@ def run(play: Optional[str] = None, dry_run: bool = False, on: Optional[date] = 
 
 
 def tell_reviewers(did: List[Dict[str, Any]]) -> None:
-    """One alert per person per day when new drafts are waiting for them."""
-    new: Dict[str, int] = {}
+    """Whenever drafts join someone's queue, they hear once for the whole batch: one alert in the
+    app saying how many are waiting (it replaces their last one, so there's only ever one), and
+    one phone push. A single draft gets Send and Review buttons; several get "Review all"."""
+    new: Dict[str, List[Dict[str, Any]]] = {}
     for d in did:
         if d["outcome"] == "drafted" and d["to"]:
-            new[d["to"][0]] = new.get(d["to"][0], 0) + 1
-    for email, n in new.items():
-        alerts.notify("autopilot_drafts", f"autopilot-drafts:{email}:{alerts.today()}",
-                      f"{n} message(s) drafted for you to check",
-                      "Allied's autopilot drafted messages that need your OK before they go out. "
-                      "Open the assistant to read, send or cancel each one.", to=[email], link="/automation")
+            new.setdefault(d["to"][0], []).append(d)
+    if not new:
+        return
+    from app.services.assistant import quick
+
+    for email, items in new.items():
+        waiting = waiting_for(email)
+        lines = "\n".join(f"- {d['what']}" for d in items[:15]) + (
+            f"\n- and {len(items) - 15} more" if len(items) > 15 else "")
+        now = alerts.now_local()
+        alerts.notify("autopilot_drafts", f"autopilot-drafts:{email}:{now:%Y%m%d-%H%M%S-%f}",
+                      f"{waiting} message{'s' if waiting != 1 else ''} waiting for your OK",
+                      f"New just now:\n{lines}\n\nOpen your Inbox to send, change or cancel each one.",
+                      to=[email], link="/inbox?show=approvals", replaces=[f"autopilot-drafts:{email}:"])
+        quick.push_batch(email, items, waiting)
+
+
+def waiting_for(email: str) -> int:
+    """Drafts in this person's queue now."""
+    with SessionLocal() as db:
+        return (db.query(AssistantActionDB).filter(AssistantActionDB.user_role == "AUTOPILOT",
+                                                    AssistantActionDB.status == "PENDING",
+                                                    AssistantActionDB.user_email == email).count())
 
 
 def drafts_waiting() -> List[str]:

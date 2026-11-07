@@ -12,18 +12,10 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { useDictation } from '@/hooks/use-dictation';
-import {
-  aiCompareDrawings,
-  aiDraftEmail,
-  aiSuggestItem,
-  aiSummarizeCall,
-  aiTranslate,
-  aiTriageEmail,
-} from '@/lib/api';
+import { aiCompareDrawings, aiDraftEmail, aiSuggestItem, aiSummarizeCall, aiTranslate, aiTriageEmail } from '@/lib/api';
 import { api, ok } from '@/lib/api/client';
 import { dateTime } from '@/lib/format';
 import { AiOutput, CallView, CopyButton, DraftView, DrawingView, FEATURE_LABEL, TriageView, pctOf } from './ai-output';
-
 
 const LANGS = [
   ['en', 'English'],
@@ -35,7 +27,12 @@ const SLOW = 'The model can take up to a minute.';
 
 /** Two columns on wide screens: what you give it, and what comes back. */
 function Split({ left, right }: { left: ReactNode; right: ReactNode }) {
-  return <div className="grid items-start gap-4 lg:grid-cols-2">{left}{right}</div>;
+  return (
+    <div className="grid items-start gap-4 lg:grid-cols-2">
+      {left}
+      {right}
+    </div>
+  );
 }
 
 function Panel({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
@@ -70,7 +67,12 @@ function Dictate({ language, onText }: { language: string; onText: (t: string) =
   const { listening, error, start, stop } = useDictation(onText);
   return (
     <span className="inline-flex items-center gap-2">
-      <Button type="button" size="sm" variant={listening ? 'destructive' : 'outline'} onClick={() => (listening ? stop() : start(language))}>
+      <Button
+        type="button"
+        size="sm"
+        variant={listening ? 'destructive' : 'outline'}
+        onClick={() => (listening ? stop() : start(language))}
+      >
         {listening ? <Square /> : <Mic />}
         {listening ? 'Stop' : 'Dictate'}
       </Button>
@@ -94,7 +96,10 @@ export function TranslateTool() {
   return (
     <Split
       left={
-        <Panel title="Text to translate" description="For emails, notes and instructions. Safety-critical documents keep an official version checked by a bilingual reviewer.">
+        <Panel
+          title="Text to translate"
+          description="For emails, notes and instructions. Safety-critical documents keep an official version checked by a bilingual reviewer."
+        >
           <div className="flex items-end gap-2">
             <Field label="From" className="flex-1">
               <NativeSelect value={source} onChange={(e) => setSource(e.target.value)}>
@@ -144,7 +149,9 @@ export function TranslateTool() {
             {result && (
               <>
                 <p className="text-sm whitespace-pre-wrap">{result.translation}</p>
-                {result.unsure_terms?.length > 0 && <p className="text-xs text-warn">Check these terms: {result.unsure_terms.join(', ')}</p>}
+                {result.unsure_terms?.length > 0 && (
+                  <p className="text-xs text-warn">Check these terms: {result.unsure_terms.join(', ')}</p>
+                )}
                 <CopyButton text={result.translation} />
               </>
             )}
@@ -179,7 +186,10 @@ export function EmailTool() {
   return (
     <Split
       left={
-        <Panel title="Read an email" description="Sorts it and pulls out any order. Orders and anything unsure wait in the Inbox for a person.">
+        <Panel
+          title="Read an email"
+          description="Sorts it and pulls out any order. Orders and anything unsure wait in the Inbox for a person."
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="From">
               <Input value={mail.sender} onChange={(e) => setMail({ ...mail, sender: e.target.value })} placeholder="buyer@customer.com" />
@@ -223,7 +233,11 @@ export function EmailTool() {
             </Field>
           </div>
           <Field label="To">
-            <Input value={draft.recipient} onChange={(e) => setDraft({ ...draft, recipient: e.target.value })} placeholder="Name or company" />
+            <Input
+              value={draft.recipient}
+              onChange={(e) => setDraft({ ...draft, recipient: e.target.value })}
+              placeholder="Name or company"
+            />
           </Field>
           <Field label="Facts to include" hint="Order numbers, dates, quantities. Anything missing comes back as [TO CONFIRM].">
             <Textarea rows={5} value={draft.facts} onChange={(e) => setDraft({ ...draft, facts: e.target.value })} />
@@ -280,7 +294,10 @@ export function CallTool({ recordingsReady }: { recordingsReady?: boolean }) {
   const [from, setFrom] = useState('');
   const run = useMutation({
     mutationFn: () =>
-      aiSummarizeCall(transcript, from) as Promise<{ result: any; matched_orders?: { sales_order_number: string; customer_po_number: string; status: string }[] }>,
+      aiSummarizeCall(transcript, from) as Promise<{
+        result: any;
+        matched_orders?: { sales_order_number: string; customer_po_number: string; status: string }[];
+      }>,
   });
 
   if (!hasRole('OPERATOR')) return <EmptyState title="Summarising calls needs an operator account" />;
@@ -306,9 +323,11 @@ export function CallTool({ recordingsReady }: { recordingsReady?: boolean }) {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            A phone system can post each call’s transcript to <code>/api/v1/ai/calls?token=…</code> (set PHONE_WEBHOOK_TOKEN). The AI
-            never takes an order or quotes a price.{' '}
-            {recordingsReady ? 'Recordings can be transcribed on this server.' : 'Transcribing recordings on the server is off (needs faster-whisper).'}
+            Paste a call’s transcript here, or have your phone system send it in (ask your administrator to set that up). The AI never takes
+            an order or quotes a price.{' '}
+            {recordingsReady
+              ? 'Recordings can be transcribed on this server.'
+              : 'Writing out recordings isn’t switched on for this server yet.'}
           </p>
         </Panel>
       }
@@ -375,15 +394,21 @@ export function PartTool() {
             <p className={run.data.result.item_id ? 'text-sm' : 'text-sm text-warn'}>
               {run.data.result.item_id ? (
                 <>
-                  Suggested <span className="font-mono">{run.data.result.item_id}</span> ({pctOf(run.data.result.confidence)} sure), waiting in
-                  the Inbox for approval.
+                  Suggested <span className="font-mono">{run.data.result.item_id}</span> ({pctOf(run.data.result.confidence)} sure), waiting
+                  in the Inbox for approval.
                 </>
               ) : (
                 'No clear match.'
               )}{' '}
               <span className="text-muted-foreground">{run.data.result.reason}</span>
             </p>
-            <DataTable label="Nearest catalogue items" columns={candidateColumns} data={run.data.candidates ?? []} getRowId={(c) => c.item_id} minWidth={480} />
+            <DataTable
+              label="Nearest catalogue items"
+              columns={candidateColumns}
+              data={run.data.candidates ?? []}
+              getRowId={(c) => c.item_id}
+              minWidth={480}
+            />
           </div>
         )}
       </Working>
@@ -421,7 +446,14 @@ export function GlossaryTool() {
       <p className="text-sm text-muted-foreground">
         The engineering terms translation always uses. Terms not yet checked by a bilingual reviewer are used, but flagged.
       </p>
-      <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a term" aria-label="Find a term" className="sm:w-72" />
+      <Input
+        type="search"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Find a term"
+        aria-label="Find a term"
+        className="sm:w-72"
+      />
       {isPending ? (
         <RowsSkeleton rows={5} />
       ) : error ? (
@@ -481,7 +513,11 @@ export function HistoryTool() {
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['ai', 'history', feature],
     queryFn: async () =>
-      ((await ok(api.GET('/api/v1/ai/suggestions', { params: { query: { feature: feature || undefined, limit: 100 } } }))) as { items: Suggestion[] }).items,
+      (
+        (await ok(api.GET('/api/v1/ai/suggestions', { params: { query: { feature: feature || undefined, limit: 100 } } }))) as {
+          items: Suggestion[];
+        }
+      ).items,
   });
 
   return (
@@ -495,7 +531,9 @@ export function HistoryTool() {
         }}
         options={[{ value: '', label: 'All' }, ...Object.entries(FEATURE_LABEL).map(([value, label]) => ({ value, label }))]}
       />
-      <p className="text-xs text-muted-foreground">Everything the AI has produced. Results waiting for a person are decided in the Inbox.</p>
+      <p className="text-xs text-muted-foreground">
+        Everything the AI has produced. Results waiting for a person are decided in the Inbox.
+      </p>
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
         {isPending ? (
           <RowsSkeleton rows={6} />
@@ -554,8 +592,8 @@ export function AiStatusLine() {
     <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       <ToneBadge tone={engine.ready ? 'ok' : 'warn'}>{engine.ready ? 'AI ready' : 'AI not ready'}</ToneBadge>
       <span>
-        {engine.detail || `${engine.provider} ${engine.model}.`} The AI reads, translates and drafts; a person approves anything that commits
-        money, a date or a specification.
+        {engine.detail || `${engine.provider} ${engine.model}.`} The AI reads, translates and drafts; a person approves anything that
+        commits money, a date or a specification.
       </span>
     </p>
   );

@@ -92,6 +92,29 @@ def _attachments(msg: Message) -> List[Dict[str, Any]]:
     return out
 
 
+def _authenticated(msg: Message, sender: str) -> Optional[bool]:
+    """Gmail's verdict on the sender, from its Authentication-Results header: dmarc=pass, or a
+    passing DKIM/SPF check for the sender's own domain, is genuine; dmarc=fail is forged.
+    None when there is no verdict to read."""
+    import re
+
+    results = " ".join(str(v) for v in (msg.get_all("Authentication-Results") or [])).lower()
+    if not results:
+        return None
+    domain = (sender or "").rsplit("@", 1)[-1].lower()
+    if re.search(r"\bdmarc=pass\b", results):
+        return True
+    if re.search(r"\bdmarc=fail\b", results):
+        return False
+    for m in re.finditer(r"\bdkim=pass\b[^;]*?header\.(?:d|i)=@?([a-z0-9.-]+)", results):
+        if domain and (m.group(1) == domain or domain.endswith("." + m.group(1))):
+            return True
+    for m in re.finditer(r"\bspf=pass\b[^;]*?smtp\.mailfrom=[^@\s;]*@?([a-z0-9.-]+)", results):
+        if domain and (m.group(1) == domain or domain.endswith("." + m.group(1))):
+            return True
+    return False if re.search(r"\b(?:spf|dkim)=(?:fail|softfail)\b", results) else None
+
+
 def folders() -> List[str]:
     """The folders read: IMAP_FOLDERS (comma-separated), else IMAP_FOLDER."""
     raw = settings.IMAP_FOLDERS or settings.IMAP_FOLDER or "INBOX"
@@ -310,6 +333,8 @@ class MailboxPoller:
                                    outcome="LOGGED_ONLY", needs_action=False)
             return "logged_only" if done else None
         message = InboundEmailMessage(
+            authenticated=_authenticated(msg, sender),
+            from_mailbox=True,
             email_id=message_id, sender_email=sender, sender_name=_decode(msg.get("From")), subject=subject,
             body_text=body,
             attachments=[{"filename": a["filename"], "mime": a["mime"], "size_bytes": len(a["content"]),
@@ -324,6 +349,14 @@ class MailboxPoller:
             mail_log.record(**base, category="other", summary=f"Could not be read automatically: {exc}"[:500],
                             outcome="FAILED", needs_action=True)  # waits in the feed and the daily summary
             return "ingested"
+        if result.status == "RETRY_LATER":
+            # The AI is busy or down: leave it unlogged so the next pass reads it again, unless
+            # it has waited two hours, when a person gets it instead.
+            if received is not None and received > datetime.now(timezone.utc) - timedelta(hours=2):
+                return None
+            mail_log.record(**base, category="other", summary="The AI couldn't read this for two hours; please read it.",
+                            outcome="FAILED", needs_action=True)
+            return "ingested"
         category, needs_action = mail_log.classify(result.status)
         urgent = "urgent" in tags and way == "in"
         if not mail_log.record(**base, category=category, summary=result.notes, outcome=result.status,
@@ -333,6 +366,12 @@ class MailboxPoller:
         # needs a person waits in the feed and the daily summary.
         if (needs_action or urgent) and mail_log.alert_now(category, tags):
             mail_log.alert(category if category in mail_log.TITLED else "urgent", thread, sender, subject, result.notes)
+        if way == "in":
+            from app.services.coordination import secretary
+
+            # A reply drafted for a person to send: where an order is, or an acknowledgement.
+            secretary.on_mail(category, message_id, sender, subject, body, result.notes or "",
+                              trusted=message.authenticated is not False)
         return "orders_created" if getattr(result, "sales_order_number", None) else "ingested"
 
     def _connect(self) -> imaplib.IMAP4:

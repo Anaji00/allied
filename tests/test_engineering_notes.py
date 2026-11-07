@@ -45,7 +45,7 @@ def job(monkeypatch):
 
 def _alert(note_id):
     with SessionLocal() as db:
-        return db.query(NotificationDB).filter(NotificationDB.dedup_key == f"eng-note:{note_id}").one()
+        return db.query(NotificationDB).filter(NotificationDB.dedup_key == f"eng-note:{note_id}:").one()
 
 
 def test_a_manager_sends_a_note_with_both_translations_to_the_jobs_engineers(job, client):
@@ -210,3 +210,11 @@ def test_everyone_signed_in_can_listen_and_nobody_else(job, heard, client, auth_
 def test_the_alert_opens_the_board_the_job_is_on(job):
     note = eng_notes.post(job["id"], "Check the flange.", BOSS)
     assert _alert(note["id"]).link == f"/?board=1657858464&item={job['id']}"
+
+
+def test_reading_note_1_never_closes_note_12s_alert(job):
+    notes = [eng_notes.post(job["id"], f"Note {i}.", BOSS, to=[PAUL]) for i in range(13)]
+    first = next(n for n in notes if str(n["id"]).endswith("1") and len(str(n["id"])) == len(str(notes[0]["id"])))
+    eng_notes.mark_read(first["id"], {"email": PAUL})
+    others = [n for n in notes if n["id"] != first["id"] and str(n["id"]).startswith(str(first["id"]))]
+    assert all(_alert(n["id"]).acknowledged_at is None for n in others)

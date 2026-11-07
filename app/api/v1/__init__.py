@@ -14,11 +14,14 @@ from app.api.v1.endpoints import (
     documents,
     eng_notes,
     exceptions,
+    carriers,
+    fedex,
     health,
     inbound_email,
     leads,
     mail,
     orders,
+    packing_slips,
     rag_chat,
     reconciliation,
     sage_export,
@@ -48,6 +51,9 @@ api_v1_router.include_router(webhooks.router, prefix="/webhooks", tags=["Monday.
 api_v1_router.include_router(ai.router, prefix="/ai", tags=["AI Tools"])
 api_v1_router.include_router(assistant.router, prefix="/assistant", tags=["Assistant"])
 api_v1_router.include_router(mail.router, prefix="/mail", tags=["Mail"])
+api_v1_router.include_router(fedex.router, prefix="/fedex", tags=["FedEx"])
+api_v1_router.include_router(carriers.router, prefix="/carriers", tags=["Carriers"])
+api_v1_router.include_router(packing_slips.router, prefix="/packing-slips", tags=["Packing Slips"])
 api_v1_router.include_router(eng_notes.router, prefix="/engineering-notes", tags=["Engineering Notes"])
 api_v1_router.include_router(coordination.projects_router, prefix="/projects", tags=["Projects & Milestones"])
 api_v1_router.include_router(coordination.shipments_router, prefix="/shipments", tags=["Shipments"])

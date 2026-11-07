@@ -188,9 +188,19 @@ def download_packing_slip(
             detail=f"Packing slip for Sales Order #{so_number} not found.",
         )
 
+    # Named for the customer's PO: the file goes to the customer, and our sales order number is internal.
+    from app.core.database import SessionLocal
+    from app.models.db_models import OrderDB
+    from app.services.logistics_dispatcher import _safe_ref
+
+    with SessionLocal() as db:
+        row = db.query(OrderDB).filter(OrderDB.sales_order_number.in_([clean_so, f"SO-{clean_so}"])).first()
+        po = row.customer_po_number if row is not None else ""
+    download_name = f"packing_list_{_safe_ref(po)}.pdf" if _safe_ref(po) else "packing_list.pdf"
+
     return FileResponse(
         path=str(pdf_path),
-        filename=pdf_filename,
+        filename=download_name,
         media_type="application/pdf",
         # The slip carries the customer's name and address; a browser cache
         # would hand it to the next person on the machine without a sign-in.

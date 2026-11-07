@@ -9,6 +9,7 @@ Generates:
 
 from datetime import datetime, timezone
 from pathlib import Path
+import hashlib
 import re
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
@@ -29,6 +30,20 @@ _MAX_DISPATCH_LOG = 500
 
 class AlreadyDispatchedError(ValueError):
     """The order was dispatched before; dispatching it again would ship it twice."""
+
+
+def _safe_ref(value: str) -> str:
+    """A reference fit for a file name or a document number: letters, digits and dashes."""
+    return re.sub(r"[^A-Za-z0-9-]+", "-", str(value or "")).strip("-")[:40]
+
+
+def _cci_number(customer_po: str, so_number: str) -> str:
+    """The customs invoice number: built from the customer's PO so our SO number stays internal. Two shipments
+    of one PO (partial deliveries) must not share a number, so a short code worked out from the SO is added."""
+    ref = _safe_ref(customer_po)
+    if not ref:
+        return f"CCI-2026-{so_number}"
+    return f"CCI-2026-{ref}-{hashlib.sha1(str(so_number).encode()).hexdigest()[:4].upper()}"
 
 
 def _order_rows(db, so_num: str):
@@ -175,69 +190,35 @@ class LogisticsDispatcher:
         cny_rate = round(base_usd / settings.CNY_TO_USD_RATE, 2)
         return cad_rate, cny_rate
 
-    def get_carrier_quotes(self, origin_facility: str, destination_address: str) -> List[CarrierRateQuote]:
-        """Generates multi-carrier shipping quotes in USD, CAD, and CNY."""
+    def get_carrier_quotes(self, origin_facility: str, destination_address: str,
+                           weight_lbs: Optional[float] = None) -> List[CarrierRateQuote]:
+        """Shipping options in USD, CAD and CNY: live prices from any carrier that is set up for them,
+        then the rate card the team keeps up to date. No single carrier is required; each quote says how
+        fresh its price is. A carrier that can't be reached is skipped."""
+        from app.services import carrier_providers, carrier_rates
+
         is_canada = _is_canadian_destination(destination_address)
         is_international = origin_facility.upper() == "ZIBO" or _is_chinese_destination(destination_address)
 
-        quotes = []
-        if is_international:
-            base_exp = 1450.00
-            cad_exp, cny_exp = self.calculate_tri_currency_rates(base_exp)
-            quotes.append(CarrierRateQuote(
-                carrier_name="Expeditors International",
-                service_level="Ocean Direct LCL + Port Drayage",
-                estimated_transit_days=18,
-                rate_usd=base_exp,
-                rate_cad=cad_exp,
-                rate_cny=cny_exp,
-            ))
-            base_air = 3850.00
-            cad_air, cny_air = self.calculate_tri_currency_rates(base_air)
-            quotes.append(CarrierRateQuote(
-                carrier_name="DHL Global Forwarding",
-                service_level="Air Cargo Priority (Zibo -> Chicago O'Hare)",
-                estimated_transit_days=4,
-                rate_usd=base_air,
-                rate_cad=cad_air,
-                rate_cny=cny_air,
-            ))
+        def make(carrier: str, service: str, days: int, usd: float) -> CarrierRateQuote:
+            cad, cny = self.calculate_tri_currency_rates(usd)
+            return CarrierRateQuote(carrier_name=carrier, service_level=service, estimated_transit_days=days,
+                                    rate_usd=round(usd, 2), rate_cad=cad, rate_cny=cny)
 
-        if is_canada:
-            base_dr = 580.00
-            cad_dr, cny_dr = self.calculate_tri_currency_rates(base_dr)
-            quotes.append(CarrierRateQuote(
-                carrier_name="Day & Ross Cross-Border",
-                service_level="Direct LTL (US Midwest -> Alberta Hub)",
-                estimated_transit_days=3,
-                rate_usd=base_dr,
-                rate_cad=cad_dr,
-                rate_cny=cny_dr,
-            ))
-
-        # Standard domestic / cross-border baseline
-        base_tf = 420.00
-        cad_tf, cny_tf = self.calculate_tri_currency_rates(base_tf)
-        quotes.append(CarrierRateQuote(
-            carrier_name="TForce Freight",
-            service_level="Standard Regional LTL",
-            estimated_transit_days=2,
-            rate_usd=base_tf,
-            rate_cad=cad_tf,
-            rate_cny=cny_tf,
-        ))
-
-        base_fx = 610.00
-        cad_fx, cny_fx = self.calculate_tri_currency_rates(base_fx)
-        quotes.append(CarrierRateQuote(
-            carrier_name="FedEx Freight Priority",
-            service_level="Guaranteed Morning Delivery",
-            estimated_transit_days=1,
-            rate_usd=base_fx,
-            rate_cad=cad_fx,
-            rate_cny=cny_fx,
-        ))
-
+        quotes: List[CarrierRateQuote] = []
+        for provider in carrier_providers.PROVIDERS:
+            try:
+                if not provider.status()["ready"]:
+                    continue
+                for q in provider.quotes(destination_address, weight_lbs)[:3]:
+                    cur = (q.get("currency") or "USD").upper()
+                    usd = q["price"] * (settings.CAD_TO_USD_RATE if cur == "CAD" else 1.0)
+                    quotes.append(make(q["name"], f"Live {provider.name} price ({q.get('transit') or 'transit time not given'})", 1, usd))
+            except Exception as exc:  # noqa: BLE001 - one carrier being down must not stop a dispatch
+                logger.warning(f"Live {provider.name} prices unavailable: {exc}")
+        for line in carrier_rates.matching(is_canada, is_international):
+            quotes.append(make(line["carrier"], f"{line['service']} ({carrier_rates.describe(line)})".strip(),
+                               line["transit_days"], carrier_rates.price(line, weight_lbs)))
         return quotes
 
     def generate_customs_invoice(
@@ -248,6 +229,7 @@ class LogisticsDispatcher:
         origin_facility: str,
         items: List[Dict[str, Any]],
         currency: str = "USD",
+        customer_po: str = "",
     ) -> CanadaCustomsInvoice:
         """Generates a Canada Customs Invoice (CCI) or Cross-Border Commercial Invoice."""
         is_canada = _is_canadian_destination(shipping_address)
@@ -308,7 +290,8 @@ class LogisticsDispatcher:
             total_usd = total_val * settings.CNY_TO_USD_RATE
 
         return CanadaCustomsInvoice(
-            cci_number=f"CCI-2026-{so_number}",
+            # Customs sees this number, so it comes from the customer's PO, not Allied's internal sales order.
+            cci_number=_cci_number(customer_po, so_number),
             exporter_name=f"Allied Facility ({origin_facility})",
             exporter_address=exporter,
             consignee_name=customer_name,
@@ -421,6 +404,7 @@ class LogisticsDispatcher:
                 origin_facility=request.origin_facility,
                 items=items,
                 currency=request.currency,
+                customer_po=str(order.get("customer_po_number") or ""),
             )
 
         # Generate the packing list PDF. This method reported
@@ -444,6 +428,7 @@ class LogisticsDispatcher:
         email_body = self._generate_dispatch_email(
             customer_name=customer_name,
             so_number=so_num,
+            customer_po=str(order.get("customer_po_number") or ""),
             shipping_address=shipping_address,
             carrier=request.carrier_name,
             tracking_number=tracking_num,
@@ -514,6 +499,7 @@ class LogisticsDispatcher:
         has_customs: bool = False,
         has_packing_slip: bool = True,
         heat_numbers: Optional[List[str]] = None,
+        customer_po: str = "",
     ) -> str:
         """Composes official shipment notice and packing list delivery.
 
@@ -527,8 +513,12 @@ class LogisticsDispatcher:
             for it in items
         ) or "  • (see attached packing list)"
 
+        # What the customer sees: their own PO. Allied's sales order number is internal, and so is the
+        # stored file's name (it carries that number), so the attachment is named after the PO.
+        ref = f"your PO {customer_po}" if customer_po else "your order"
+        shown_name = f"packing_list_{_safe_ref(customer_po)}.pdf" if customer_po else "packing_list.pdf"
         slip_line = (
-            f"Attachment: {pdf_filename} (Official Allied Packing List with MTR Heat Certs)"
+            f"Attachment: {shown_name} (Official Allied Packing List with MTR Heat Certs)"
             if has_packing_slip
             else "Packing list: to follow under separate cover"
         )
@@ -551,9 +541,9 @@ class LogisticsDispatcher:
         return (
             f"From: Allied Logistics & Freight Dispatch <shipping@alliedweldingsystems.com>\n"
             f"To: {recipient}\n"
-            f"Subject: Shipment Notification & Packing Slip - Allied Order #SO-{so_number}\n\n"
+            f"Subject: Shipment Notification & Packing Slip - {ref.capitalize()}\n\n"
             f"Dear {customer_name} Receiving Department,\n\n"
-            f"Your order #SO-{so_number} has been staged, inspected, and released to {carrier}.\n\n"
+            f"Your order ({ref}) has been staged, inspected, and released to {carrier}.\n\n"
             f"Shipment Details:\n"
             f"  Carrier: {carrier}\n"
             f"  PRO / Tracking #: {tracking_number}\n"

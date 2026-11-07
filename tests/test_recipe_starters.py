@@ -41,7 +41,12 @@ def _orders_board(monkeypatch, items, moves):
 
 
 def _ago(days):
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    """Midday, Allied's time, that many calendar days back: the hour of the day (and a clock change
+    in between) can't shift which day it was."""
+    from zoneinfo import ZoneInfo
+
+    local = datetime.now(ZoneInfo(settings.BUSINESS_TZ)).replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=days)
+    return local.astimezone(timezone.utc).isoformat()
 
 
 def test_an_order_sitting_too_long_in_one_status_is_flagged_once(monkeypatch):

@@ -36,14 +36,11 @@ def _job(item_id: str) -> Dict[str, Any]:
             return {"name": m.name, "board_id": m.board_id, "engineers": list(m.owner_emails or [])}
     from app.services.coordination import boards
 
-    for b in boards.boards():
-        try:
-            view = boards.view(b["board_id"])
-        except LookupError:
-            continue
-        row = next((r for r in view["items"] if r["id"] == str(item_id)), None)
-        if row is not None:
-            return {"name": row["name"], "board_id": b["board_id"], "engineers": list((row.get("app") or {}).get("owners") or [])}
+    with boards._lock:   # the raw board copy: no need to build every board's full view to find one item
+        for b in boards._mirror.values():
+            row = next((r for r in b["items"] if r["id"] == str(item_id)), None)
+            if row is not None:
+                return {"name": row["name"], "board_id": b["board_id"], "engineers": []}
     raise LookupError(f"No job {item_id} on the boards read so far.")
 
 
@@ -165,7 +162,7 @@ def post(item_id: str, text: str, user: Dict[str, Any], languages: Optional[List
             db.refresh(row)
         note = _as_dict(row)
     # Urgent: critical, which also texts and pushes, quiet hours or not. Otherwise a normal note.
-    alerts.notify("engineering_note", f"eng-note:{note['id']}",
+    alerts.notify("engineering_note", f"eng-note:{note['id']}:",
                   f"{'URGENT note' if urgent else 'Note'} from {author.split('@')[0].title()}: {job['name']}"[:300],
                   _body(note), severity="critical" if urgent else "warning", to=recipients,
                   # Boards is the home page; naming the board opens the one the job is on.
@@ -203,5 +200,5 @@ def mark_read(note_id: int, user: Dict[str, Any]) -> Dict[str, Any]:
         db.refresh(row)
         out = _as_dict(row)
     if not out["unread"]:
-        alerts.resolve([f"eng-note:{note_id}"])      # everyone has read it: the alert closes
+        alerts.resolve([f"eng-note:{note_id}:"])   # everyone has read it; the ":" keeps note 1 from closing note 12
     return out

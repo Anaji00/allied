@@ -260,6 +260,7 @@ export const DRAFT_KIND: Record<string, string> = {
   rfq_price_ask: 'Price request',
   rfq_vendor_chase: 'Vendor price chase',
   recipe: 'Your rule',
+  customer_reply: 'Customer reply',
 };
 
 /** The decide endpoint answers 200 even when the step itself failed; that must not read as done. */

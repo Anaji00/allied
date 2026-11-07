@@ -71,8 +71,7 @@ export function BoardsView() {
   if (!list.length)
     return (
       <EmptyState title="No monday boards have been read yet">
-        Boards show up here once the app reads them from monday. In practice mode (MONDAY_SIMULATION_MODE on) nothing is read, so this stays
-        empty.
+        Boards show up here once the app reads them from monday. In practice mode nothing is read, so this stays empty.
       </EmptyState>
     );
 

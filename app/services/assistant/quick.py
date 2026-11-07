@@ -10,7 +10,7 @@ lapses with the draft (AUTOPILOT_DRAFT_HOURS); a draft can only be decided once.
 import hashlib
 import hmac
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -89,5 +89,32 @@ def push_draft(action_id: str, summary: str, email: str) -> str:
         r = httpx.post(settings.NTFY_URL.rstrip("/"), json=payload, headers=headers, timeout=10)
         return "sent" if r.status_code < 300 else f"error {r.status_code}"
     except Exception as exc:  # noqa: BLE001 - a push that fails leaves the draft waiting as before
+        logger.info(f"Draft push failed: {type(exc).__name__}")
+        return f"failed: {type(exc).__name__}"
+
+
+def push_batch(email: str, items: List[Dict[str, Any]], waiting: int) -> str:
+    """One push for a batch of new drafts: one draft keeps its Send / Review buttons; several
+    become "N waiting" with a Review-all button, so a busy run doesn't buzz the phone N times."""
+    if len(items) == 1 and items[0].get("id"):
+        return push_draft(items[0]["id"], items[0]["what"], email)
+    from app.services.coordination import notify
+
+    if not (settings.AUTOPILOT_PUSH_DRAFTS and settings.NTFY_URL and settings.NTFY_TOPIC):
+        return "off"
+    if notify._quiet():
+        return "held"
+    lines = "\n".join(f"- {d['what']}" for d in items[:6]) + (
+        f"\n- and {len(items) - 6} more" if len(items) > 6 else "")
+    payload: Dict[str, Any] = {"topic": settings.NTFY_TOPIC, "title": f"{waiting} drafts waiting for your OK",
+                               "message": lines[:3500], "priority": 3, "tags": ["envelope"]}
+    if _reachable():
+        payload["actions"] = [{"action": "view", "label": "Review all",
+                               "url": f"{settings.APP_BASE_URL.rstrip('/')}/inbox?show=approvals"}]
+    headers = {"Authorization": f"Bearer {settings.NTFY_TOKEN}"} if settings.NTFY_TOKEN else {}
+    try:
+        r = httpx.post(settings.NTFY_URL.rstrip("/"), json=payload, headers=headers, timeout=10)
+        return "sent" if r.status_code < 300 else f"error {r.status_code}"
+    except Exception as exc:  # noqa: BLE001
         logger.info(f"Draft push failed: {type(exc).__name__}")
         return f"failed: {type(exc).__name__}"

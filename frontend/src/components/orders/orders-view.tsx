@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { parseAsBoolean, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from 'nuqs';
 import { useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Printer, Search } from 'lucide-react';
+import { toast } from 'sonner';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel } from '@/components/data/detail-panel';
 import { SectionTabs, chipClass } from '@/components/data/filters';
@@ -16,15 +17,17 @@ import { Kbd } from '@/components/ui/kbd';
 import { useAuth } from '@/context/AuthContext';
 import { useListNav } from '@/hooks/use-list-nav';
 import { useMediaQuery } from '@/hooks/use-media-query';
+import { openDocument } from '@/lib/assistant-api';
 import { date, money, pct } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { NewOrderDialog } from './new-order-dialog';
 import { OrderDetail } from './order-detail';
-import { OrderEmails, SupplierBills, Suppliers } from './order-tabs';
+import { PackingSlips, usePackingQueue } from './packing-slips';
+import { OrderEmails,SupplierBills, Suppliers } from './order-tabs';
 import { ARCHETYPE, PAGE_SIZE, STATUS, complianceQuery, orderQuery, useOrders, useSuppliers, type Order, type OrderView } from './use-orders';
 
-const TABS = ['orders', 'emails', 'bills', 'suppliers'] as const;
-const TAB_LABEL = { orders: 'All orders', emails: 'Order emails', bills: 'Supplier bills', suppliers: 'Suppliers' };
+const TABS = ['orders', 'slips', 'emails', 'bills', 'suppliers'] as const;
+const TAB_LABEL = { orders: 'All orders', slips: 'Packing slips', emails: 'Order emails', bills: 'Supplier bills', suppliers: 'Suppliers' };
 const VIEWS = ['all', 'attention', 'not_in_sage', 'in_sage'] as const;
 const VIEW_LABEL: Record<OrderView, string> = {
   all: 'All',
@@ -35,10 +38,13 @@ const VIEW_LABEL: Record<OrderView, string> = {
 
 export function OrdersView() {
   const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS).withDefault('orders'));
+  const failed = usePackingQueue().data?.counts?.FAILED ?? 0;
+  const label = (t: (typeof TABS)[number]) => (t === 'slips' && failed > 0 ? `Packing slips (${failed} need a person)` : TAB_LABEL[t]);
   return (
     <div className="grid gap-4">
-      <SectionTabs label="Orders sections" value={tab} onChange={(t) => void setTab(t === 'orders' ? null : t)} tabs={TABS.map((t) => [t, TAB_LABEL[t]] as const)} />
+      <SectionTabs label="Orders sections" value={tab} onChange={(t) => void setTab(t === 'orders' ? null : t)} tabs={TABS.map((t) => [t, label(t)] as const)} />
       {tab === 'orders' && <OrderList />}
+      {tab === 'slips' && <PackingSlips />}
       {tab === 'emails' && <OrderEmails />}
       {tab === 'bills' && <SupplierBills />}
       {tab === 'suppliers' && <Suppliers />}
@@ -58,7 +64,7 @@ function OrderList() {
   const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
   const [so, setSo] = useQueryState('order');
   const [creating, setCreating] = useState(false);
-  // Other pages open a filled-in new order with ?new=1&customer=…&part=…&price=…
+  // Other pages open a filled-in new order with ?new=true&customer=…&part=…&price=…
   const [prefill, setPrefill] = useQueryStates({
     new: parseAsBoolean,
     customer: parseAsString,
@@ -87,6 +93,30 @@ function OrderList() {
 
   const columns = col.columns([
     col.accessor('sales_order_number', { header: 'Order', cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span> }),
+    col.display({
+      id: 'print',
+      header: '',
+      cell: ({ row }) => {
+        const o = row.original;
+        return (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!o.has_packing_slip}
+            title={o.has_packing_slip ? undefined : 'No packing slip has been made for this order yet'}
+            onClick={(e) => {
+              e.stopPropagation();
+              openDocument(`/api/v1/orders/${encodeURIComponent(o.sales_order_number)}/packing-slip`).catch((err: Error) =>
+                toast.error('Couldn’t open the packing slip', { description: err.message }),
+              );
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <Printer /> Print packing slip
+          </Button>
+        );
+      },
+    }),
     col.accessor('customer_name', { header: 'Customer', meta: { className: 'max-w-64 truncate' } }),
     col.accessor('archetype', { header: 'Type', cell: (c) => ARCHETYPE[c.getValue() ?? ''] ?? '–' }),
     col.accessor('purchase_orders', {

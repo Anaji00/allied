@@ -11,14 +11,7 @@ import { Field, FilterChips, NativeSelect, PanelHeading } from '@/components/dat
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
 import { Textarea } from '@/components/ui/textarea';
@@ -27,6 +20,8 @@ import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
 import { dateTime, money, person, words } from '@/lib/format';
 import { addRfq, fetchRfqs, updateRfq } from '@/lib/opsApi';
+import { BulkBar } from '@/components/data/bulk-bar';
+import { RowActions } from '@/components/data/row-actions';
 import { cn } from '@/lib/utils';
 
 type Rfq = {
@@ -93,7 +88,11 @@ const NEXT = ['ACKNOWLEDGED', 'CLARIFYING', 'WAITING_VENDOR', 'PRICING', 'QUOTE_
 const CLOSED = ['WON', 'LOST', 'NO_BID'];
 const pct = (v?: number | null) => (v == null ? '–' : `${Math.round(v * 100)}%`);
 const hoursLeft = (r: Rfq) =>
-  r.hours_left == null ? '' : r.hours_left <= 0 ? `${Math.abs(r.hours_left).toFixed(0)} working h late` : `${r.hours_left.toFixed(0)} working h left`;
+  r.hours_left == null
+    ? ''
+    : r.hours_left <= 0
+      ? `${Math.abs(r.hours_left).toFixed(0)} working h late`
+      : `${r.hours_left.toFixed(0)} working h left`;
 
 const SHOW = ['open', 'mine', 'all'] as const;
 const col = columnHelper<Rfq>();
@@ -120,6 +119,38 @@ export function RfqsView() {
   const m = data?.metrics;
   const t = data?.targets;
 
+  const client = useQueryClient();
+  // A new request just needs someone to say "got it"; that is the one step worth a button on the row.
+  const acknowledge = useMutation({
+    mutationFn: (r: Rfq) => updateRfq(r.id, { status: 'ACKNOWLEDGED' }),
+    onSuccess: () => toast.success('Marked as received'),
+    onError: (e) => toast.error('Couldn’t update it', { description: e.message }),
+    onSettled: () => client.invalidateQueries({ queryKey: ['rfqs'] }),
+  });
+
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set());
+  // Only rows still on screen count: a filter change or refresh can drop ticked rows.
+  const tickedRows = rows.filter((r) => ticked.has(String(r.id)));
+  const gotItMany = useMutation({
+    mutationFn: async (list: Rfq[]) => {
+      const failed: string[] = [];
+      for (const r of list) {
+        try {
+          await updateRfq(r.id, { status: 'ACKNOWLEDGED' });
+        } catch {
+          failed.push(r.number);
+        }
+      }
+      return { done: list.length - failed.length, failed };
+    },
+    onSuccess: (r) => {
+      setTicked(new Set());
+      if (r.done) toast.success(`${r.done} marked as received`);
+      if (r.failed.length) toast.error(`${r.failed.length} didn’t update`, { description: r.failed.join(', ') });
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: ['rfqs'] }),
+  });
+
   const columns = col.columns([
     col.accessor('number', { header: 'RFQ', cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span> }),
     col.accessor('customer', { header: 'Customer', meta: { className: 'max-w-48 truncate' }, cell: (c) => c.getValue() || 'Unknown' }),
@@ -142,6 +173,28 @@ export function RfqsView() {
       },
     }),
     col.accessor('owner_email', { header: 'Owner', cell: (c) => person(c.getValue(), employeeEmail) || '–' }),
+    col.display({
+      id: 'next',
+      header: () => <span className="sr-only">Next step</span>,
+      meta: { align: 'right' },
+      cell: (c) => {
+        const r = c.row.original;
+        return (
+          <RowActions
+            rowLabel={r.number}
+            main={
+              canEdit && r.status === 'NEW'
+                ? {
+                    label: 'Got it',
+                    busy: acknowledge.isPending && acknowledge.variables?.id === r.id,
+                    onClick: () => acknowledge.mutate(r),
+                  }
+                : null
+            }
+          />
+        );
+      },
+    }),
   ]);
 
   return (
@@ -173,11 +226,7 @@ export function RfqsView() {
             ['Median time to quote', m.turnaround_median_days != null ? `${m.turnaround_median_days} d` : '–', false],
             ['Quoted on time', pct(m.on_time_pct), false],
             ['Win rate', pct(m.win_rate), false],
-            [
-              'Open by age',
-              ['0-1 days', '2-3 days', '4-5 days', 'over 5 days'].map((b) => m.open_by_age?.[b] ?? 0).join(' / '),
-              false,
-            ],
+            ['Open by age', ['0-1 days', '2-3 days', '4-5 days', 'over 5 days'].map((b) => m.open_by_age?.[b] ?? 0).join(' / '), false],
           ].map(([label, value, bad]) => (
             <div key={String(label)} className="grid gap-0.5 rounded-lg border bg-card px-3 py-2">
               <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -188,10 +237,11 @@ export function RfqsView() {
       )}
       {t && (
         <p className="text-xs text-muted-foreground">
-          Acknowledge within {t.ack_hours} working hours. Quote within {t.simple_days} day for a repeat part, {t.standard_days} days standard, or{' '}
-          {t.complex_days} days for a new design or vendor pricing.
-          {m?.win_rate_by_speed && ` Win rate when quoted within 2 days: ${pct(m.win_rate_by_speed['within 2 days'])}; slower: ${pct(m.win_rate_by_speed.slower)}.`}
-          {' '}Open by age counts business days: 0-1 / 2-3 / 4-5 / over 5.
+          Acknowledge within {t.ack_hours} working hours. Quote within {t.simple_days} day for a repeat part, {t.standard_days} days
+          standard, or {t.complex_days} days for a new design or vendor pricing.
+          {m?.win_rate_by_speed &&
+            ` Win rate when quoted within 2 days: ${pct(m.win_rate_by_speed['within 2 days'])}; slower: ${pct(m.win_rate_by_speed.slower)}.`}{' '}
+          Open by age counts business days: 0-1 / 2-3 / 4-5 / over 5.
         </p>
       )}
 
@@ -202,17 +252,34 @@ export function RfqsView() {
           ) : error ? (
             <ErrorState error={error} onRetry={() => void refetch()} />
           ) : (
-            <DataTable
-              label="Requests for quote"
-              columns={columns}
-              data={rows}
-              getRowId={(r) => String(r.id)}
-              recordName={(r) => recordKey('rfq', r.id)}
-              selectedId={id != null ? String(id) : null}
-              onSelect={open}
-              minWidth={900}
-              empty={<EmptyState title="No RFQs here">Quote requests that arrive by email are logged automatically. You can also log one by hand.</EmptyState>}
-            />
+            <>
+              <BulkBar
+                count={tickedRows.length}
+                noun="request"
+                actionLabel="Got it"
+                busy={gotItMany.isPending}
+                onAction={() => gotItMany.mutate(tickedRows)}
+                onClear={() => setTicked(new Set())}
+              />
+              <DataTable
+                label="Requests for quote"
+                columns={columns}
+                data={rows}
+                getRowId={(r) => String(r.id)}
+                checked={ticked}
+                onCheckedChange={setTicked}
+                canCheck={(r) => canEdit && r.status === 'NEW'}
+                recordName={(r) => recordKey('rfq', r.id)}
+                selectedId={id != null ? String(id) : null}
+                onSelect={open}
+                minWidth={900}
+                empty={
+                  <EmptyState title="No RFQs here">
+                    Quote requests that arrive by email are logged automatically. You can also log one by hand.
+                  </EmptyState>
+                }
+              />
+            </>
           )}
           {rows.length > 0 && (
             <p className="hidden text-xs text-muted-foreground md:block">
@@ -226,7 +293,13 @@ export function RfqsView() {
             </p>
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} recordName={selected ? recordKey('rfq', selected.id) : undefined} title={selected ? <span className="font-mono">{selected.number}</span> : ''} description={selected?.customer ?? undefined}>
+        <DetailPanel
+          open={Boolean(selected)}
+          onClose={() => open(undefined)}
+          recordName={selected ? recordKey('rfq', selected.id) : undefined}
+          title={selected ? <span className="font-mono">{selected.number}</span> : ''}
+          description={selected?.customer ?? undefined}
+        >
           {selected && <RfqDetail key={`${selected.id}-${selected.history?.length}`} rfq={selected} canEdit={canEdit} />}
         </DetailPanel>
       </div>
@@ -339,12 +412,22 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
             </Field>
           </div>
           <Field label="Owner">
-            <Input type="email" placeholder={r.owner_email || 'name@alliedweldingsystems.com'} value={form.owner_email} onChange={set('owner_email')} />
+            <Input
+              type="email"
+              placeholder={r.owner_email || 'name@alliedweldingsystems.com'}
+              value={form.owner_email}
+              onChange={set('owner_email')}
+            />
           </Field>
           <Field label="Note">
             <Textarea rows={2} value={form.note} onChange={set('note')} />
           </Field>
-          <Button type="submit" size="sm" className="justify-self-start" disabled={!Object.keys(changes).length || (needsReason && !form.reason.trim()) || save.isPending}>
+          <Button
+            type="submit"
+            size="sm"
+            className="justify-self-start"
+            disabled={!Object.keys(changes).length || (needsReason && !form.reason.trim()) || save.isPending}
+          >
             {save.isPending && <Loader2 className="animate-spin" />}
             Save
           </Button>
@@ -377,7 +460,8 @@ function AddRfq({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: 
   const [form, setForm] = useState(blank);
   const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const add = useMutation({
-    mutationFn: async () => (await addRfq({ ...form, owner_email: form.owner_email || null, contact_email: form.contact_email || null })) as Rfq,
+    mutationFn: async () =>
+      (await addRfq({ ...form, owner_email: form.owner_email || null, contact_email: form.contact_email || null })) as Rfq,
     onSuccess: (r) => {
       toast.success(`Logged ${r.number}`);
       void client.invalidateQueries({ queryKey: ['rfqs'] });

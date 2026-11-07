@@ -294,7 +294,9 @@ export async function downloadPackingSlip(soNumber) {
     const err = await res.json().catch(() => ({}));
     throw new Error(typeof err.detail === 'string' ? err.detail : `Could not download the packing slip (${res.status})`);
   }
-  saveBlob(await res.blob(), `packing_slip_${soNumber}.pdf`);
+  // The file is named after the customer's PO, not our internal order number; use the name the server chose.
+  const named = /filename="?([^";]+)"?/i.exec(res.headers.get('content-disposition') || '')?.[1];
+  saveBlob(await res.blob(), named || 'packing_list.pdf');
 }
 
 /**

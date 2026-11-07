@@ -1,7 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { ChevronRight } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -29,6 +31,15 @@ export function AppSidebar() {
   const { hasRole, facility } = useAuth();
   const { setOpenMobile } = useSidebar();
   const groups = navFor(hasRole);
+  // Admin pages are used rarely, so that group starts folded; it opens by itself on one of its pages.
+  const [folded, setFolded] = useState<Set<string>>(() => new Set(['Admin']));
+  const toggle = (name: string) =>
+    setFolded((f) => {
+      const next = new Set(f);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   // Same queries as the Inbox page, so the count costs no extra requests.
   const waiting = useInbox().items;
   const critical = waiting.some((i) => i.severity === 'critical');
@@ -50,39 +61,53 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        {groups.map((group) => (
-          <SidebarGroup key={group.section}>
-            <SidebarGroupLabel>{group.section}</SidebarGroupLabel>
-            <SidebarMenu>
-              {group.items.map((item) => {
-                const active = isActive(item.href, pathname);
-                return (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      isActive={active}
-                      tooltip={item.label}
-                      render={
-                        <Link
-                          href={item.href}
-                          aria-current={active ? 'page' : undefined}
-                          onClick={() => setOpenMobile(false)}
-                        />
-                      }
-                    >
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                    {item.href === '/inbox' && waiting.length > 0 && (
-                      <SidebarMenuBadge className={cn('tabular-nums', critical && 'font-semibold text-bad')}>
-                        <Count value={waiting.length} />
-                      </SidebarMenuBadge>
-                    )}
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroup>
-        ))}
+        {groups.map((group) => {
+          const hasCurrent = group.items.some((i) => isActive(i.href, pathname));
+          const shut = folded.has(group.section) && !hasCurrent;
+          return (
+            <SidebarGroup key={group.section}>
+              {group.section === 'Admin' ? (
+                <SidebarGroupLabel
+                  render={
+                    <button
+                      type="button"
+                      aria-expanded={!shut}
+                      onClick={() => toggle(group.section)}
+                      className="w-full cursor-pointer justify-between hover:text-sidebar-foreground"
+                    />
+                  }
+                >
+                  {group.section}
+                  <ChevronRight className={cn('size-3.5 transition-transform', !shut && 'rotate-90')} aria-hidden />
+                </SidebarGroupLabel>
+              ) : (
+                <SidebarGroupLabel>{group.section}</SidebarGroupLabel>
+              )}
+              <SidebarMenu className={cn(shut && 'hidden')}>
+                {group.items.map((item) => {
+                  const active = isActive(item.href, pathname);
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        isActive={active}
+                        tooltip={item.label}
+                        render={<Link href={item.href} aria-current={active ? 'page' : undefined} onClick={() => setOpenMobile(false)} />}
+                      >
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </SidebarMenuButton>
+                      {item.href === '/inbox' && waiting.length > 0 && (
+                        <SidebarMenuBadge className={cn('tabular-nums', critical && 'font-semibold text-bad')}>
+                          <Count value={waiting.length} />
+                        </SidebarMenuBadge>
+                      )}
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroup>
+          );
+        })}
       </SidebarContent>
 
       <SidebarFooter>
@@ -112,13 +137,12 @@ function ConnectionStatus({ onNavigate }: { onNavigate: () => void }) {
         const known = Boolean(data) && !isError;
         const live = Boolean(row.link?.live);
         return (
-          <span key={row.label} className="flex items-center gap-2" title={`${row.label}: ${known ? (live ? row.on : row.off) : 'checking'}`}>
-            <span
-              className={cn(
-                'size-2 shrink-0 rounded-full',
-                !known ? 'bg-muted-foreground/40' : live ? 'bg-ok' : 'bg-warn',
-              )}
-            />
+          <span
+            key={row.label}
+            className="flex items-center gap-2"
+            title={`${row.label}: ${known ? (live ? row.on : row.off) : 'checking'}`}
+          >
+            <span className={cn('size-2 shrink-0 rounded-full', !known ? 'bg-muted-foreground/40' : live ? 'bg-ok' : 'bg-warn')} />
             <span className="group-data-[collapsible=icon]:hidden">{row.label}</span>
             <span className="ml-auto text-muted-foreground group-data-[collapsible=icon]:hidden">
               {!known ? '…' : live ? row.on : row.off}

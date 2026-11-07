@@ -127,7 +127,7 @@ export function AutomatePanel({
             <>
               {!data.enabled && (
                 <p className="rounded-md border border-warn/40 bg-warn-soft p-3 text-xs text-warn">
-                  The autopilot is switched off (AUTOPILOT_ENABLED), so only the schedule checks run. Drafts can still be made from a row.
+                  Automatic actions are switched off, so only the schedule checks run. Drafts can still be made from a row.
                 </p>
               )}
               {kinds.map((k) => (

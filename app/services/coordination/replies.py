@@ -18,7 +18,8 @@ from app.config import settings
 from app.core.logging import logger
 from app.services.coordination import notify as alerts
 
-_PO = re.compile(r"\b(?:allied\s+)?p\.?\s*o\.?\s*(?:#|no\.?|number)?\s*:?\s*(\d{3,8})\b", re.I)
+# "PO 9277", "P.O. #9277", "Allied PO 9277"; never "P.O. Box 9277" in a signature.
+_PO = re.compile(r"\b(?:allied\s+)?p\.?\s*o\.?(?!\s*box)\s*(?:#|no\.?|number)?\s*:?\s*(\d{3,8})\b", re.I)
 _SHIPPED = re.compile(r"\b(?:has|have|was|were|been)\s+(?:been\s+)?shipped\b|\bshipped\s+(?:out|on|today|yesterday)\b"
                       r"|\b(?:departed|loaded on|on board|sailed)\b", re.I)
 _PHOTOS = re.compile(r"\b(?:photos?|pictures?|pics|images?)\b", re.I)

@@ -45,7 +45,20 @@ export function SectionTabs<T extends string>({
   // Tabs pattern: one tab in the Tab order; Left/Right/Home/End move between them.
   function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, i: number) {
     const last = tabs.length - 1;
-    const to = e.key === 'ArrowRight' ? (i === last ? 0 : i + 1) : e.key === 'ArrowLeft' ? (i === 0 ? last : i - 1) : e.key === 'Home' ? 0 : e.key === 'End' ? last : -1;
+    const to =
+      e.key === 'ArrowRight'
+        ? i === last
+          ? 0
+          : i + 1
+        : e.key === 'ArrowLeft'
+          ? i === 0
+            ? last
+            : i - 1
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? last
+              : -1;
     if (to < 0) return;
     e.preventDefault();
     onChange(tabs[to][0]);
@@ -103,7 +116,13 @@ export function FilterChips<T extends string>({
   return (
     <div className="flex flex-wrap gap-1.5" role="group" aria-label={label}>
       {options.map((o) => (
-        <button key={o.value} type="button" aria-pressed={value === o.value} className={chipClass(value === o.value)} onClick={() => onChange(o.value)}>
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={value === o.value}
+          className={chipClass(value === o.value)}
+          onClick={() => onChange(o.value)}
+        >
           {o.label}
           {o.count != null && (
             <span
@@ -124,7 +143,17 @@ export function FilterChips<T extends string>({
 }
 
 /** A labelled form control, with an optional hint under it. */
-export function Field({ label, hint, children, className }: { label: ReactNode; hint?: ReactNode; children: ReactNode; className?: string }) {
+export function Field({
+  label,
+  hint,
+  children,
+  className,
+}: {
+  label: ReactNode;
+  hint?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <label className={cn('grid gap-1.5 text-sm', className)}>
       <span className="font-medium">{label}</span>

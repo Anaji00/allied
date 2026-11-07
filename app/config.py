@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Reads scanned drawings. Preview on Groq: may change without notice.
     GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
     GROQ_SPEECH_MODEL: str = "whisper-large-v3-turbo"
+    # The chatbot's voice agent: speak a task, the agent does it, and replies in a short sentence.
+    VOICE_AGENT_ENABLED: bool = True
+    # Who speaks the reply: "browser" (the phone or desktop reads it aloud, free), or "" for text only.
+    VOICE_SPOKEN_REPLY: str = "browser"
+    # Spoken replies stay short; the full answer is on screen.
+    VOICE_REPLY_MAX_WORDS: int = 45
     # gpt-oss thinks before it answers; its thinking counts against the
     # free tier's tokens-per-minute, so keep it short.
     GROQ_REASONING_EFFORT: str = "low"
@@ -285,7 +291,8 @@ class Settings(BaseSettings):
     # a JSON list of {"name", "url", "headers": {...}, "read_only_tools": [...], "min_role"}.
     # Header values written as "env:NAME" are read from that environment variable.
     ASSISTANT_ENABLED: bool = True
-    ASSISTANT_MAX_STEPS: int = 5
+    ASSISTANT_MAX_STEPS: int = 8             # a multi-part task chains several tools
+    ASSISTANT_MAX_PROPOSALS: int = 5         # changes queued for one confirmation in a turn
     ASSISTANT_RESULT_CHARS: int = 4000
     ASSISTANT_HISTORY_MESSAGES: int = 10
     ASSISTANT_ACTION_TTL_MINUTES: int = 15
@@ -386,6 +393,19 @@ class Settings(BaseSettings):
     # Sending is off by default and stays off until a host is configured AND
     # EMAIL_SEND_ENABLED is set. Every draft is still recorded either way, so
     # turning this on changes who sees the mail, never whether it was produced.
+    # FedEx parcel prices (Ground and Express). Prices only: nothing is booked or bought. Get the id and
+    # secret from a project on developer.fedex.com; try "sandbox" first.
+    FEDEX_ENABLED: bool = False
+    FEDEX_ENV: str = "sandbox"                 # sandbox or production
+    FEDEX_CLIENT_ID: str = ""
+    FEDEX_CLIENT_SECRET: str = ""
+    FEDEX_ACCOUNT_NUMBER: str = ""
+    FEDEX_SHIPPER_POSTAL: str = ""             # where Allied ships from
+    FEDEX_SHIPPER_STATE: str = ""
+    FEDEX_SHIPPER_CITY: str = ""
+    FEDEX_SHIPPER_COUNTRY: str = "US"
+    CARRIER_RATE_STALE_DAYS: int = 30          # a rate-card price not checked for this long is flagged "confirm before booking"
+    FEDEX_DEFAULT_WEIGHT_LBS: float = 50.0     # used when an order's weight isn't known
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""

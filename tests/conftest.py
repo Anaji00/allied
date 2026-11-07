@@ -66,6 +66,20 @@ for _name in ("IMAP_HOST", "IMAP_USERNAME", "IMAP_PASSWORD"):
 settings.IMAP_POLL_ENABLED = False
 settings.AI_EMAIL_TRIAGE_ENABLED = False
 
+# A net under all of that: no test may open a connection to a mail server, whatever a test
+# configures. (A background alert email could otherwise outlive a test's own fake and reach
+# a real server such as smtp.gmail.com.)
+import smtplib as _smtplib  # noqa: E402
+
+
+class _NoMailServer:
+    def __init__(self, *a, **k):
+        raise ConnectionRefusedError("tests never connect to a mail server")
+
+
+_smtplib.SMTP = _NoMailServer
+_smtplib.SMTP_SSL = _NoMailServer
+
 
 @pytest.fixture
 def auth_enforced():

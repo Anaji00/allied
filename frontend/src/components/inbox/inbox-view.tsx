@@ -51,7 +51,10 @@ export function InboxView() {
   const router = useRouter();
   const { hasRole } = useAuth();
   const wide = useMediaQuery('(min-width: 1280px)');
-  const [show, setShow] = useQueryState('show', parseAsStringLiteral(GROUPS).withDefault('all'));
+  const [shown0, setShow] = useQueryState('show', parseAsStringLiteral(GROUPS).withDefault('all'));
+  // Notification links say ?filter=drafts; drafts to send sit under Approvals.
+  const [filter] = useQueryState('filter');
+  const show = filter === 'drafts' && shown0 === 'all' ? 'approvals' : shown0;
   const [everyone, setEveryone] = useQueryState('everyone', parseAsBoolean.withDefault(false));
   const [selectedKey, setSelectedKey] = useQueryState('item');
   const { items, isPending, failed, canSeeAll, refetch } = useInbox({ everyone });

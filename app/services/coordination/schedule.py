@@ -364,11 +364,17 @@ class CoordinationWorker:
                 from app.services.coordination import recipes
 
                 self._step("date_recipes", lambda: {"did": len(recipes.run_dates())})
+            from app.services import packing_slip_queue
+
+            self._step("packing_slips", packing_slip_queue.retry_due)   # slips whose retry wait is over
             self._step("held", alerts.release_held)
             local = alerts.now_local()
             if local.weekday() < 5 and local.hour >= settings.DIGEST_HOUR and self._summary_date != local.date():
                 # The key per date also makes this once a day across restarts.
                 self._step("summary", send_summary)
+                from app.services.coordination import secretary
+
+                self._step("briefs", secretary.send_briefs)   # each person's own "your day" note
                 if "error" not in self.last.get("summary", {}):  # retried next loop if it failed
                     self._summary_date = local.date()
             self._stop.wait(30)

@@ -403,10 +403,11 @@ class OrderOrchestrator:
         )
 
         # 8. Generate Sanitized White-Label PDF Packing Slip
-        pdf_path = self.packing_slips.generate_pdf(
-            order=master_order,
-            sales_order_number=so_num,
-        )
+        # Queued with the order's details and made now, as its own job: a slip that can't be made is
+        # retried and flagged, and never stops the order. The slip shows the customer's PO.
+        from app.services import packing_slip_queue
+
+        pdf_path = packing_slip_queue.enqueue_and_run(self.packing_slips, master_order, so_num)
 
         # 9. Auto-Generate Certificate of Conformance (CofC)
         cofc_id = None

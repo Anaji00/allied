@@ -146,44 +146,44 @@ def monday_setup(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
             "key": "api_key",
             "label": "API token",
             "ok": bool(settings.MONDAY_API_KEY),
-            "hint": "Set MONDAY_API_KEY (a token whose owner can edit the order board).",
+            "hint": "Add the monday access token. Its owner needs permission to edit the order board. (Setting: MONDAY_API_KEY.)",
         },
         {
             "key": "live",
             "label": "Board writes switched on",
             "ok": settings.monday_live,
-            "hint": "Set MONDAY_SIMULATION_MODE=False once the token and board are confirmed.",
+            "hint": "Turn on the live link to monday once the token and board are confirmed. (Setting: MONDAY_SIMULATION_MODE=False.)",
         },
         {
             "key": "read_only",
             "label": "Read-only (no changes sent to monday)",
             "ok": settings.MONDAY_READ_ONLY,
-            "hint": "MONDAY_READ_ONLY is off: the app can change monday data. Keep it on except for a test board.",
+            "hint": "The app is allowed to change monday. Switch read-only back on unless you are working on a test board. (Setting: MONDAY_READ_ONLY.)",
         },
         {
             "key": "auth",
             "label": "Webhook authentication",
             "ok": bool(settings.MONDAY_WEBHOOK_SECRET or settings.MONDAY_WEBHOOK_TOKEN),
-            "hint": "Set MONDAY_WEBHOOK_TOKEN and register the URL as .../webhooks/monday?token=<value>, "
-            "or MONDAY_WEBHOOK_SECRET for an app-created webhook.",
+            "hint": "Choose a secret word and add it to the web address you give monday (.../webhooks/monday?token=your-word), "
+            "so only monday can send events. (Settings: MONDAY_WEBHOOK_TOKEN, or MONDAY_WEBHOOK_SECRET for a webhook made by a monday app.)",
         },
         {
             "key": "board",
             "label": "Order board restricted",
             "ok": bool(settings.MONDAY_BOARD_ID),
-            "hint": "Set MONDAY_BOARD_ID so events from other boards are ignored.",
+            "hint": "Tell the app which board holds the orders, so changes on other boards are ignored. (Setting: MONDAY_BOARD_ID.)",
         },
         {
             "key": "loop_guard",
             "label": "Own changes ignored",
             "ok": bool(settings.MONDAY_BOT_USER_ID),
-            "hint": "Set MONDAY_BOT_USER_ID to the token owner's monday user id.",
+            "hint": "Tell the app which monday user it acts as, so it ignores its own changes. Use the access token owner's monday user number. (Setting: MONDAY_BOT_USER_ID.)",
         },
         {
             "key": "write_back",
             "label": "Sales order number written to the board",
             "ok": bool(settings.MONDAY_SO_COLUMN_ID),
-            "hint": "Set MONDAY_SO_COLUMN_ID to a text column id.",
+            "hint": "Choose the text column where the sales order number is written back on the board. Use that column's id. (Setting: MONDAY_SO_COLUMN_ID.)",
         },
     ]
     return {

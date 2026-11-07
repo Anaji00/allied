@@ -323,6 +323,26 @@ class EngineeringNoteDB(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
+class PackingSlipDB(Base):
+    """A sales order's packing slip: queued on creation, made, retried if it fails, marked printed."""
+
+    __tablename__ = "packing_slips"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sales_order_number = Column(String(64), nullable=False, unique=True, index=True)
+    customer_po_number = Column(String(64), nullable=True)
+    status = Column(String(16), nullable=False, default="QUEUED", index=True)   # QUEUED, MAKING, READY, FAILED, PRINTED
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    path = Column(String(512), nullable=True)
+    payload = Column(JSON, nullable=True)                 # the order as it was, so a retry makes the same slip
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    next_try_at = Column(DateTime(timezone=True), nullable=True)
+    ready_at = Column(DateTime(timezone=True), nullable=True)
+    printed_at = Column(DateTime(timezone=True), nullable=True)
+    printed_by = Column(String(256), nullable=True)
+
+
 class MailLogDB(Base):
     """Every email the mailbox reader has seen, once, and what was done with it."""
 

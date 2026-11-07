@@ -1,10 +1,12 @@
 """The chat assistant: questions answered through tools, changes confirmed by a person."""
 
-from typing import Any, Dict, List, Literal
+import json
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from app.core.logging import logger
 from app.core.security import require_viewer
 from app.services.ai.providers import AIRateLimitedError, AIUnavailableError
 from app.services.assistant import agent
@@ -44,6 +46,57 @@ def chat(body: ChatIn, user: dict = Depends(require_viewer)) -> Dict[str, Any]:
         _fail(exc)
 
 
+def _plain_error(exc: Exception) -> str:
+    """A sentence a person can read, for a failure while the answer was being made."""
+    if isinstance(exc, AIRateLimitedError):
+        return "The assistant is busy for a moment. Try again in a few seconds."
+    if isinstance(exc, AIUnavailableError):
+        return "The assistant isn't available right now. You can still use the screens."
+    if isinstance(exc, (LookupError, ValueError, PermissionError)):
+        return str(exc)
+    return "Something went wrong and nothing was changed. Please try again."
+
+
+@router.post("/chat/stream", summary="Ask the assistant and watch it work: step lines, then the reply and cards (server-sent events)")
+def chat_stream(body: ChatIn, user: dict = Depends(require_viewer)):
+    """Same question and same rules as /chat. Each event is one JSON object on a `data:` line:
+    {"type":"step","text":...} as each step starts, then {"type":"done", ...the /chat reply} or
+    {"type":"error","message":...}. A `: ping` comment goes out every 10 seconds so proxies keep the
+    connection open. Nothing changes until a click, exactly as with /chat."""
+    import queue
+    import threading
+
+    from fastapi.responses import StreamingResponse
+
+    events: "queue.Queue" = queue.Queue()
+    messages = [m.model_dump() for m in body.messages]
+
+    def work() -> None:
+        try:
+            events.put({"type": "done", **agent.chat(messages, user, progress=lambda t: events.put({"type": "step", "text": t}))})
+        except Exception as exc:  # noqa: BLE001 - told to the person in plain words
+            if not isinstance(exc, (AIUnavailableError, LookupError, ValueError, PermissionError)):
+                logger.warning(f"Assistant stream failed: {type(exc).__name__}: {exc}")
+            events.put({"type": "error", "message": _plain_error(exc)})
+
+    def stream():
+        threading.Thread(target=work, daemon=True, name="assistant-stream").start()
+        # At once, so the screen has something to show.
+        yield 'data: {"type":"step","text":"Reading your request…"}\n\n'
+        while True:
+            try:
+                event = events.get(timeout=10)
+            except queue.Empty:
+                yield ": ping\n\n"
+                continue
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+            if event["type"] in ("done", "error"):
+                return
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
 class QuickIn(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
 
@@ -75,6 +128,47 @@ def decide_batch(body: BatchIn, user: dict = Depends(require_viewer)) -> Dict[st
         except (LookupError, ValueError, PermissionError) as exc:
             out.append({"id": action_id, "status": "SKIPPED", "error": str(exc)})
     return {"results": out, "done": sum(1 for r in out if r["status"] in ("DONE", "CANCELLED"))}
+
+
+class EditIn(BaseModel):
+    changes: Dict[str, Any] = Field(..., description="The fields to change, e.g. {subject, body} for an email draft")
+
+
+@router.patch("/actions/{action_id}", summary="Edit a waiting draft or proposal before sending it")
+def edit(action_id: str, body: EditIn, user: dict = Depends(require_viewer)):
+    try:
+        return agent.edit_action(action_id, body.changes, user)
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+
+
+@router.post("/voice-command", summary="Speak a task: written out, done by the assistant, answered briefly with cards")
+def voice_command(file: Optional[UploadFile] = File(None, description="The recording (webm, ogg, m4a, mp4, mp3, wav)"),
+                  transcript: str = Form("", max_length=4000, description="Or the words already dictated"),
+                  messages: str = Form("", max_length=60000, description="The conversation so far, as JSON"),
+                  confirm_ids: str = Form("", max_length=2000, description="Waiting proposals a spoken 'confirm' would carry out"),
+                  user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.assistant import voice
+    from app.services.coordination import eng_notes
+
+    audio = None
+    if file is not None:
+        chunks, size = [], 0
+        while chunk := file.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > eng_notes.MAX_AUDIO_BYTES:
+                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Keep voice commands under 25 MB.")
+            chunks.append(chunk)
+        audio = b"".join(chunks) or None
+    try:
+        history = json.loads(messages) if messages.strip() else []
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="messages must be JSON.")
+    try:
+        return voice.command(user, audio, (file.filename if file else "") or "", transcript, history if isinstance(history, list) else [],
+                             [x.strip() for x in confirm_ids.split(",") if x.strip()])
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
 
 
 @router.post("/actions/{action_id}", summary="Confirm or cancel a change the assistant proposed")

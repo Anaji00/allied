@@ -86,9 +86,7 @@ export default function AssistantWidget() {
       const res = await askAssistant(history.slice(-12));
       add({ role: 'assistant', content: res.reply, actions: res.actions, steps: res.steps });
     } catch (e) {
-      add({ role: 'error', content: e.status === 503
-        ? `${e.message} The shortcut buttons below still work.`
-        : e.message });
+      add({ role: 'error', content: e.status === 503 ? `${e.message} The shortcut buttons below still work.` : e.message });
     } finally {
       setBusy(false);
     }
@@ -109,9 +107,17 @@ export default function AssistantWidget() {
   }
 
   async function decide(messageId, action, confirm) {
-    const patch = (fields) => setMessages((list) => list.map((m) => (m.id !== messageId ? m : {
-      ...m, actions: m.actions.map((a) => (a.id === action.id ? { ...a, ...fields } : a)),
-    })));
+    const patch = (fields) =>
+      setMessages((list) =>
+        list.map((m) =>
+          m.id !== messageId
+            ? m
+            : {
+                ...m,
+                actions: m.actions.map((a) => (a.id === action.id ? { ...a, ...fields } : a)),
+              },
+        ),
+      );
     patch({ status: 'WORKING' });
     try {
       const res = await decideAssistantAction(action.id, confirm);
@@ -123,8 +129,14 @@ export default function AssistantWidget() {
 
   return (
     <>
-      <button type="button" className={styles.launcher} onClick={() => setOpen((o) => !o)}
-        aria-expanded={open} aria-controls="allied-assistant" aria-label={open ? 'Close the assistant' : 'Open the assistant'}>
+      <button
+        type="button"
+        className={styles.launcher}
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls="allied-assistant"
+        aria-label={open ? 'Close the assistant' : 'Open the assistant'}
+      >
         {open ? '×' : 'Ask'}
       </button>
       {open && (
@@ -139,14 +151,18 @@ export default function AssistantWidget() {
                 {showConnectors ? 'Chat' : 'Connections'}
               </button>
               {messages.length > 0 && (
-                <button type="button" className={styles.link} onClick={() => setMessages([])}>Clear</button>
+                <button type="button" className={styles.link} onClick={() => setMessages([])}>
+                  Clear
+                </button>
               )}
             </div>
           </header>
 
           {showConnectors ? (
             <div className={styles.body}>
-              {!connectors ? <p className={styles.muted}>Checking…</p> : (
+              {!connectors ? (
+                <p className={styles.muted}>Checking…</p>
+              ) : (
                 <ul className={styles.connectors}>
                   {connectors.map((c) => (
                     <li key={c.id}>
@@ -166,8 +182,8 @@ export default function AssistantWidget() {
             <div className={styles.body} aria-live="polite">
               {messages.length === 0 && (
                 <p className={styles.muted}>
-                  Ask about projects, vendor dates, RFQs, shipments or orders. For example: “Which vendors could make
-                  the Vulcan job late?” or “Mark RFQ-2026-0004 as waiting on Zibo for pricing.”
+                  Ask about projects, vendor dates, RFQs, shipments or orders. For example: “Which vendors could make the Vulcan job late?”
+                  or “Mark RFQ-2026-0004 as waiting on Zibo for pricing.”
                 </p>
               )}
               {messages.map((m) => (
@@ -182,8 +198,12 @@ export default function AssistantWidget() {
                       <pre className={styles.summary}>{a.summary}</pre>
                       {(!a.status || a.status === 'PENDING') && (
                         <div className={styles.actionButtons}>
-                          <button type="button" className={styles.confirm} onClick={() => decide(m.id, a, true)}>Do it</button>
-                          <button type="button" className={styles.cancel} onClick={() => decide(m.id, a, false)}>Cancel</button>
+                          <button type="button" className={styles.confirm} onClick={() => decide(m.id, a, true)}>
+                            Do it
+                          </button>
+                          <button type="button" className={styles.cancel} onClick={() => decide(m.id, a, false)}>
+                            Cancel
+                          </button>
                         </div>
                       )}
                       {a.status === 'WORKING' && <p className={styles.muted}>Working…</p>}
@@ -203,14 +223,34 @@ export default function AssistantWidget() {
             <footer className={styles.foot}>
               <div className={styles.shortcuts}>
                 {SHORTCUTS.map((s) => (
-                  <button key={s.tool} type="button" className={styles.chip} disabled={busy} onClick={() => shortcut(s)}>{s.label}</button>
+                  <button key={s.tool} type="button" className={styles.chip} disabled={busy} onClick={() => shortcut(s)}>
+                    {s.label}
+                  </button>
                 ))}
               </div>
-              <form className={styles.form} onSubmit={(e) => { e.preventDefault(); send(); }}>
-                <textarea className={styles.input} rows={2} value={draft} placeholder="Ask a question…"
+              <form
+                className={styles.form}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  send();
+                }}
+              >
+                <textarea
+                  className={styles.input}
+                  rows={2}
+                  value={draft}
+                  placeholder="Ask a question…"
                   onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-                <button type="submit" className={styles.send} disabled={busy || !draft.trim()}>Send</button>
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                />
+                <button type="submit" className={styles.send} disabled={busy || !draft.trim()}>
+                  Send
+                </button>
               </form>
             </footer>
           )}

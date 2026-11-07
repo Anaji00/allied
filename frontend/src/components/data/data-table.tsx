@@ -44,6 +44,10 @@ type Props<T extends RowData> = {
   recordName?: (row: T) => string;
   /** Called once the pointer rests on a row (or it gets focus), to load its details early. */
   onPrefetch?: (row: T) => void;
+  /** Rows ticked for a group action. Give both props to show tick boxes; rows `canCheck` refuses get none. */
+  checked?: Set<string>;
+  onCheckedChange?: (ids: Set<string>) => void;
+  canCheck?: (row: T) => boolean;
 };
 
 const PREFETCH_DELAY = 100;
@@ -66,6 +70,9 @@ export function DataTable<T extends RowData>({
   minWidth = 720,
   recordName,
   onPrefetch,
+  checked,
+  onCheckedChange,
+  canCheck = () => true,
 }: Props<T>) {
   const table = useTable({
     features: tableFeatureSet,
@@ -102,6 +109,16 @@ export function DataTable<T extends RowData>({
     return () => clearTimeout(t);
   }, []);
 
+  const tickable = Boolean(checked && onCheckedChange);
+  const allowed = rows.filter((r) => canCheck(r.original)).map((r) => r.id);
+  const allTicked = allowed.length > 0 && allowed.every((id) => checked?.has(id));
+  const flip = (id: string) => {
+    const next = new Set(checked);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onCheckedChange?.(next);
+  };
+
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       <div className="overflow-x-auto">
@@ -109,6 +126,19 @@ export function DataTable<T extends RowData>({
           <thead>
             {table.getHeaderGroups().map((group) => (
               <tr key={group.id}>
+                {tickable && (
+                  <th scope="col" className="sticky top-0 z-[1] h-9 w-9 border-b bg-card pl-3">
+                    {allowed.length > 0 && (
+                      <input
+                        type="checkbox"
+                        aria-label="Tick all"
+                        checked={allTicked}
+                        onChange={() => onCheckedChange?.(allTicked ? new Set() : new Set(allowed))}
+                        className="size-4 accent-foreground"
+                      />
+                    )}
+                  </th>
+                )}
                 {group.headers.map((header) => {
                   const meta = header.column.columnDef.meta;
                   return (
@@ -169,6 +199,19 @@ export function DataTable<T extends RowData>({
                     selected && 'bg-accent hover:bg-accent',
                   )}
                 >
+                  {tickable && (
+                    <td className="h-9 w-9 pl-3" onClick={(e) => e.stopPropagation()}>
+                      {canCheck(row.original) && (
+                        <input
+                          type="checkbox"
+                          aria-label={`Tick row ${row.id}`}
+                          checked={checked?.has(row.id) ?? false}
+                          onChange={() => flip(row.id)}
+                          className="size-4 accent-foreground"
+                        />
+                      )}
+                    </td>
+                  )}
                   {row.getAllCells().map((cell, c) => {
                     const meta = cell.column.columnDef.meta;
                     // The open record's name moves to the panel heading, so the row drops it.

@@ -93,8 +93,9 @@ class PackingSlipGenerator:
                 ),
                 Paragraph(
                     "<b>PACKING LIST</b><br/>"
-                    f"<font size='9'>Sales Order Number: <b>{safe_xml(sales_order_number)}</b><br/>"
-                    f"Sales Order Date: {order.po_date.strftime('%b %d, %Y')}<br/>"
+                    # Allied's own sales order number is internal; the customer's PO is the reference they know.
+                    f"<font size='9'>Your PO Number: <b>{safe_xml(order.customer_po_number)}</b><br/>"
+                    f"Order Date: {order.po_date.strftime('%b %d, %Y')}<br/>"
                     f"Ship By: {(ship_date or order.po_date).strftime('%b %d, %Y')}<br/>"
                     "Page: 1</font>",
                     title_style,

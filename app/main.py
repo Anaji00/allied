@@ -1,5 +1,6 @@
 """FastAPI main application entrypoint, lifespan, CORS, and route mounting."""
 
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -17,6 +18,20 @@ from app.core.exceptions import (
 from app.core.correlation import reset_correlation_id, set_correlation_id
 from app.core.logging import logger
 from app.services.entity_matcher import EntityMatcher
+
+
+class _HideLinkSecrets(logging.Filter):
+    """Phone approval links carry their signature in the address; the access log keeps only
+    the path, so nobody reading the logs can reuse a link to send a draft."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "/assistant/quick/" in args[2]:
+            record.args = args[:2] + (args[2].split("?", 1)[0],) + args[3:]
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_HideLinkSecrets())
 
 
 @asynccontextmanager

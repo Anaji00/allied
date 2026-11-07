@@ -2,8 +2,19 @@
 
 import { Activity, useState } from 'react';
 import { parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
-import { SectionTabs } from '@/components/data/filters';
-import { AiStatusLine, CallTool, DrawingTool, EmailTool, GlossaryTool, HistoryTool, PartTool, TranslateTool, useAiStatus } from './ai-tools';
+import { NativeSelect, SectionTabs } from '@/components/data/filters';
+import {
+  AiStatusLine,
+  CallTool,
+  DrawingTool,
+  EmailTool,
+  GlossaryTool,
+  HistoryTool,
+  PartTool,
+  TranslateTool,
+  useAiStatus,
+} from './ai-tools';
+import { AssistantChat } from '@/components/assistant/assistant-chat';
 import { Ask } from './ask';
 import { DocumentReader } from './document-reader';
 import { Tasks } from './tasks';
@@ -19,8 +30,12 @@ const TABS = [
   ['glossary', 'Glossary'],
   ['history', 'History'],
   ['tasks', 'Tasks'],
+  ['search', 'Search documents'],
 ] as const;
 type Tab = (typeof TABS)[number][0];
+// The four most used stay as tabs; the rest sit behind one menu.
+const MAIN = TABS.slice(0, 4);
+const MORE = TABS.slice(4);
 
 export function AssistantView() {
   const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS.map(([t]) => t)).withDefault('ask'));
@@ -34,7 +49,8 @@ export function AssistantView() {
   if (!visited.has(tab)) setVisited(new Set(visited).add(tab));
 
   const panes: Record<Tab, React.ReactNode> = {
-    ask: <Ask initialPrompt={prompt} />,
+    ask: <AssistantChat initialPrompt={prompt} />,
+    search: <Ask />,
     documents: <DocumentReader />,
     translate: <TranslateTool />,
     email: <EmailTool />,
@@ -46,9 +62,27 @@ export function AssistantView() {
     tasks: <Tasks />,
   };
 
+  const open = (t: Tab) => void setTab(t === 'ask' ? null : t);
+  const inMore = MORE.some(([t]) => t === tab);
+
   return (
     <div className="grid gap-4">
-      <SectionTabs label="Assistant tools" value={tab} onChange={(t) => void setTab(t === 'ask' ? null : t)} tabs={TABS} />
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <SectionTabs label="Assistant tools" value={tab} onChange={open} tabs={MAIN} />
+        <NativeSelect
+          aria-label="More tools"
+          value={inMore ? tab : ''}
+          onChange={(e) => e.target.value && open(e.target.value as Tab)}
+          className={`mb-1 h-8 w-auto text-xs ${inMore ? 'border-foreground font-medium' : 'text-muted-foreground'}`}
+        >
+          <option value="">More tools…</option>
+          {MORE.map(([t, label]) => (
+            <option key={t} value={t}>
+              {label}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
       {tab !== 'ask' && tab !== 'documents' && tab !== 'tasks' && <AiStatusLine />}
       {TABS.map(([key]) =>
         visited.has(key) ? (

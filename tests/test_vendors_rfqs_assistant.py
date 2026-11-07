@@ -359,7 +359,7 @@ def test_assistant_reads_through_a_tool_and_marks_results_as_data(scripted):
 
 def test_changes_wait_for_the_users_click(scripted):
     customer = f"Lafarge {_uid()}"
-    scripted(("log_rfq", {"customer": customer, "subject": "Grate bars", "complexity": "simple"}))
+    scripted(("log_rfq", {"customer": customer, "subject": "Grate bars", "complexity": "simple"}), "Ready for you to confirm.")
     out = agent.chat([{"role": "user", "content": "Log an RFQ for grate bars"}], OPERATOR)
     assert len(out["actions"]) == 1 and customer in out["actions"][0]["summary"]
     with SessionLocal() as db:
@@ -383,10 +383,10 @@ def test_viewers_are_not_offered_write_tools_and_cannot_use_them(scripted):
 
 
 def test_expired_and_cancelled_proposals_do_nothing(scripted):
-    scripted(("update_rfq", {"rfq": "RFQ-2026-0001", "status": "PRICING"}))
+    scripted(("update_rfq", {"rfq": "RFQ-2026-0001", "status": "PRICING"}), "Waiting for your confirmation.")
     aid = agent.chat([{"role": "user", "content": "move it to pricing"}], OPERATOR)["actions"][0]["id"]
     assert agent.decide(aid, False, OPERATOR)["status"] == "CANCELLED"
-    scripted(("update_rfq", {"rfq": "RFQ-2026-0001", "status": "PRICING"}))
+    scripted(("update_rfq", {"rfq": "RFQ-2026-0001", "status": "PRICING"}), "Waiting for your confirmation.")
     aid = agent.chat([{"role": "user", "content": "again"}], OPERATOR)["actions"][0]["id"]
     with SessionLocal() as db:
         db.get(AssistantActionDB, aid).created_at = datetime.now(timezone.utc) - timedelta(hours=2)
@@ -451,7 +451,7 @@ def test_mcp_server_tools_are_added_reads_run_and_writes_wait(monkeypatch, scrip
         {"name": "tracker", "url": "https://mcp.tracker.test/mcp", "headers": {"Authorization": "env:TRACKER_TOKEN"},
          "trust_annotations": True}]))
     mcp._cache["raw"], mcp._sessions = None, {}
-    ai = scripted(("tracker__search_issues", {"q": "liner"}), ("tracker__create_issue", {"title": "x"}))
+    ai = scripted(("tracker__search_issues", {"q": "liner"}), ("tracker__create_issue", {"title": "x"}), "Ready to confirm.")
     out = agent.chat([{"role": "user", "content": "find and file"}], OPERATOR)
     assert "tracker__search_issues" in ai.seen[0][1]
     assert ai.seen[1][0][-1]["content"].endswith("called search_issues")

@@ -47,15 +47,10 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
-    section: 'Sales',
+    section: 'Sales & quality',
     items: [
       { href: '/sales/pipeline', label: 'Wear & quotes', description: 'Equipment wear tracking and replacement quotes', icon: Gauge },
       { href: '/sales/leads', label: 'Leads', description: 'Prospects, outreach and cost-of-ownership calculator', icon: TrendingUp },
-    ],
-  },
-  {
-    section: 'Quality',
-    items: [
       { href: '/compliance/vault', label: 'Mill certificates', description: 'Heat numbers, ASTM limits and quarantines', icon: BadgeCheck },
     ],
   },

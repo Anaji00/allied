@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api, ok } from '@/lib/api/client';
@@ -184,6 +185,7 @@ export function useDecide(boardId: string) {
 /** Draft one item's message now. It waits for a person; nothing is sent. */
 export function useDraftNow(boardId: string) {
   const client = useQueryClient();
+  const router = useRouter();
   return useMutation({
     mutationFn: async (v: { itemId: string; key: string }) =>
       ok(
@@ -192,7 +194,10 @@ export function useDraftNow(boardId: string) {
           body: { key: v.key },
         }),
       ),
-    onSuccess: () => toast.success('Drafted. Read it, then send or cancel it.'),
+    onSuccess: () =>
+      toast.success('Drafted for you to check', {
+        action: { label: 'Open it', onClick: () => router.push('/inbox?show=approvals') },
+      }),
     onError: (e) => toast.error(e.message),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: automationsKey(boardId) });

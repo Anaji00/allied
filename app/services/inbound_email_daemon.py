@@ -34,6 +34,11 @@ class InboundEmailMessage(BaseModel):
     body_text: str
     attachments: List[Dict[str, Any]] = Field(default_factory=list)
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Gmail's verdict on the sender (SPF/DKIM/DMARC): True passed, False failed (a forged From),
+    # None unknown (handed in over the API by a signed-in person).
+    authenticated: Optional[bool] = None
+    # Read from the mailbox by the reader (it can wait and read it again), not handed in by a person.
+    from_mailbox: bool = False
 
 
 def _number_forms(value: Any) -> List[str]:
@@ -75,6 +80,9 @@ class EmailIngestionResult(BaseModel):
     customer_acknowledgment_email: Optional[str] = None
     monday_pulse_id: Optional[int] = None
     notes: str
+
+
+AI_DOWN = object()   # the AI was asked and couldn't answer: read the email again later
 
 
 class InboundEmailDaemon:
@@ -187,6 +195,14 @@ class InboundEmailDaemon:
         # goes to a person. When AI is off or down, the pattern parser below
         # runs exactly as before.
         ai = self._ai_read(email)
+        if ai is AI_DOWN and not email.from_mailbox:
+            ai = None   # handed in by a person, who wants an answer now: the pattern reader, as before
+        if ai is AI_DOWN:
+            if _rfqs.looks_like_rfq(email.subject):
+                return self._log_rfq(email, None)
+            return EmailIngestionResult(email_id=email.email_id, status="RETRY_LATER",
+                                        customer_name=email.sender_name or email.sender_email, customer_po_number="",
+                                        line_items_count=0, notes="The AI couldn't read it just now; it will be read again.")
         if (ai is not None and ai.category == "quote_request") or (ai is None and _rfqs.looks_like_rfq(email.subject)):
             return self._log_rfq(email, ai)
         if ai is not None and (ai.category != "order" or not self._ai_order_usable(ai, email)):
@@ -259,7 +275,7 @@ class InboundEmailDaemon:
         # An order raises vendor POs and ships goods, so it must come from the customer: an
         # address at a domain on the customer's record (or a colleague forwarding it). Anyone
         # can write "Owens Corning" in an email; only Owens Corning writes from owenscorning.com.
-        if not self._sender_trusted(email.sender_email, matched_cust):
+        if email.authenticated is False or not self._sender_trusted(email.sender_email, matched_cust):
             return self._hold_untrusted_sender(email, matched_cust, po_number)
 
         # 4. Construct Inbound Order Request
@@ -381,12 +397,11 @@ class InboundEmailDaemon:
                 email.sender_email, email.subject, email.body_text, email.attachments, reference=email.email_id
             )
             return triage
-        except AIUnavailableError as exc:
-            logger.warning(f"AI sorting unavailable for {email.email_id}; using the pattern parser. ({exc})")
-            return None
-        except Exception as exc:  # noqa: BLE001 - an answer that can't be used is the same as no answer
-            logger.warning(f"AI sorting failed for {email.email_id} ({type(exc).__name__}); using the pattern parser.")
-            return None
+        except Exception as exc:  # noqa: BLE001 - rate limit, outage or an unusable answer
+            # Not the pattern parser: it would read "where is my order? we need 2x screens" as a
+            # new order. The mail waits and is read again on a later pass.
+            logger.warning(f"AI sorting unavailable for {email.email_id} ({type(exc).__name__}); trying again later.")
+            return AI_DOWN
 
     @staticmethod
     def _ai_order_usable(ai, email: Optional[InboundEmailMessage] = None) -> bool:
@@ -431,8 +446,10 @@ class InboundEmailDaemon:
         from app.services.exception_queue_service import ExceptionItem, exception_queue_service
 
         name = customer.get("customer_name") or email.sender_name or "a customer"
-        notes = (f"Order email for {name} came from {email.sender_email}, which is not an address on file for "
-                 f"{name} ({customer.get('email') or 'no email on file'}). Nothing was raised. Check with "
+        why = ("failed Gmail's check that it really came from that address (it may be forged)"
+               if email.authenticated is False else
+               f"is not an address on file for {name} ({customer.get('email') or 'no email on file'})")
+        notes = (f"Order email for {name} came from {email.sender_email}, which {why}. Nothing was raised. Check with "
                  f"{customer.get('contact_name') or 'the customer'} at their known address before entering it; "
                  "don't reply to the sender. Email ref: " + email.email_id + ".")
         exception_queue_service.add_exception(ExceptionItem(
@@ -695,10 +712,9 @@ class InboundEmailDaemon:
         return (
             f"From: Allied Welding Systems Orders <orders@alliedweldingsystems.com>\n"
             f"To: {recipient_email}\n"
-            f"Subject: Order Acknowledgment - Allied Order #{sales_order_number} (Your PO: {po_number})\n\n"
+            f"Subject: Order Acknowledgment - Your PO {po_number}\n\n"
             f"Dear {customer_name} Purchasing Team,\n\n"
-            f"Thank you for your order. We have successfully logged and processed PO #{po_number} "
-            f"under Allied Sales Order #{sales_order_number}.\n\n"
+            f"Thank you for your order. We have successfully logged and processed your PO {po_number}.\n\n"
             f"Order Breakdown:\n"
             f"{item_rows}\n\n"
             f"Our production scheduling team has verified material allocation and mill test certificates (MTR). "

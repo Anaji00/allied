@@ -7,6 +7,7 @@ purpose (no free-form query or fetch-any-URL tool), and every result is
 plain text sized for Groq's free-tier token limits.
 """
 
+import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
@@ -16,6 +17,26 @@ from app.config import settings
 from app.services.coordination import notify as alerts
 
 ROLE_RANK = {"VIEWER": 0, "OPERATOR": 1, "MANAGER": 2, "ADMIN": 3}
+
+# Cards the tools hand back beside their text, for the screen to draw as buttons: Open Record,
+# Print Packing Slip, Edit and Send, Push to Monday. Collected per chat turn.
+_cards: "contextvars.ContextVar" = contextvars.ContextVar("assistant_cards", default=None)
+
+
+def start_cards() -> None:
+    _cards.set([])
+
+
+def add_card(kind: str, title: str, summary: str = "", buttons: Optional[List[Dict[str, Any]]] = None, **extra: Any) -> None:
+    """One card for the reply. kind: record, document, draft, proposal, push or info. Each button is
+    {label, action: open|download|confirm|cancel|edit|undo|push, href?, action_id?}."""
+    cards = _cards.get()
+    if cards is not None:
+        cards.append({"kind": kind, "title": title[:200], "summary": summary[:600], "buttons": buttons or [], **extra})
+
+
+def take_cards() -> List[Dict[str, Any]]:
+    return list(_cards.get() or [])
 
 
 @dataclass
@@ -377,11 +398,18 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("chat_action", "A change asked for on the Copilot chat screen.", {}, lambda args, user: _chat_action(args, user),
          write=True, min_role="OPERATOR", offered=False,
          summarize=lambda a: _chat_action_summary(a)),
-    Tool("post_monday_update", "Post a comment on a monday item.",
+    Tool("post_monday_update", "Push a comment to a monday item. ONLY when the user explicitly asks to push, sync or post "
+         "something to monday; never on your own.",
          {"item_id": {"type": "integer", "description": "monday item id"}, "text": _s("Comment text")},
          post_monday_update, write=True, min_role="OPERATOR", connector="monday", required=["item_id", "text"],
          summarize=lambda a: f"Post on monday item {a.get('item_id')}: {a.get('text')}"),
 ]}
+
+
+# The rest of the platform (orders, packing slips, MTRs, leads, exceptions, mail, automations, notes, drafts).
+from app.services.assistant import platform_tools  # noqa: E402  (after the helpers it uses)
+
+TOOLS.update({t.name: t for t in platform_tools.TOOLS})
 
 
 def all_tools() -> Dict[str, Tool]:
@@ -390,6 +418,48 @@ def all_tools() -> Dict[str, Tool]:
     out = dict(TOOLS)
     out.update(mcp.tools())
     return out
+
+
+# Which tools to show the AI for a conversation. All of them would use most of the free tier's
+# token allowance on every question, so a few core tools are always offered and each topic adds
+# its own when the user's words touch it; a multi-part task gets several topics together.
+_CORE = ("find_orders", "vendor_status", "rfq_status", "shipment_status", "my_alerts", "schedule_status", "save_email_draft")
+_TOPICS = [
+    (("order", "packing", "slip", "dispatch", "sales order", "so-", "sage", "export"),
+     ("order_detail", "packing_slip", "sage_export_preview", "sage_lookup")),
+    (("mtr", "heat", "cert", "ncr", "material test"), ("mtr_lookup",)),
+    (("lead", "target", "prospect", "outreach"), ("lead_targets",)),
+    (("exception", "review queue", "flagged", "stuck", "held", "bill", "invoice", "reconcil", "dispute", "mismatch"),
+     ("exception_queue", "reconciliation_recent", "resolve_exception")),
+    (("mail", "email", "inbox", "wrote", "reply", "complain"), ("mail_search",)),
+    (("automation", "recipe", "rule", "autopilot", "switch on", "switch off", "turn on", "turn off"),
+     ("recipes_list", "recipes_preview", "toggle_recipe", "add_starter_recipe", "run_recipes_now", "automation_status", "run_autopilot")),
+    (("note", "engineer", "drawing", "scan", "milestone"), ("notes_list", "post_engineering_note")),
+    (("audit", "who changed", "history"), ("audit_recent",)),
+    (("vendor", "supplier", "po ", "lead time", "kws", "kingcera", "helen"), ("create_vendor_job", "update_vendor_job", "vendor_scorecard")),
+    (("shipment", "container", "freight", "eta", "vessel", "forwarder", "tracking"), ("create_shipment", "update_shipment")),
+    (("rfq", "quote", "quoting", "request for", "pricing", "priced", "won", "lost", "no bid"), ("log_rfq", "update_rfq")),
+    (("spec", "procedure", "weld", "price list", "how do", "how to", "standard"), ("search_knowledge",)),
+    (("send", "email", "draft", "write to"), ("send_email",)),
+    (("monday", "push", "sync"), ("post_monday_update",)),
+]
+
+
+def for_message(user: Dict[str, Any], text: str) -> Dict[str, Tool]:
+    """The tools to offer for this conversation: the core, the topics the words touch, and any
+    outside (MCP) tools. With nothing recognised, the core plus the common ones."""
+    allowed = for_user(user)
+    low = (text or "").casefold()
+    names = set(_CORE)
+    hit = False
+    for words, tools_ in _TOPICS:
+        if any(w in low for w in words):
+            names |= set(tools_)
+            hit = True
+    if not hit:
+        # Nothing recognised (a short follow-up like "yes, do that"): the commonly used reads and changes.
+        names |= {"order_detail", "mail_search", "recipes_list", "log_rfq", "update_rfq", "update_vendor_job", "send_email"}
+    return {n: t for n, t in allowed.items() if n in names or n not in TOOLS}
 
 
 def for_user(user: Dict[str, Any]) -> Dict[str, Tool]:

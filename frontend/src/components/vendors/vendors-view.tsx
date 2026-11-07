@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { parseAsBoolean, parseAsInteger, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -11,14 +12,9 @@ import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/c
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { BulkBar } from '@/components/data/bulk-bar';
+import { RowActions } from '@/components/data/row-actions';
 import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
 import { Textarea } from '@/components/ui/textarea';
@@ -26,6 +22,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
 import { dateTime, day, person, since } from '@/lib/format';
+import { api, ok } from '@/lib/api/client';
 import { addVendorJob, fetchVendorJobs, syncVendorBoard, updateVendorJob } from '@/lib/opsApi';
 import { cn } from '@/lib/utils';
 
@@ -35,6 +32,10 @@ type Job = {
   description?: string | null;
   po_number?: string | null;
   project_item_id?: string | null;
+  monday_item_id?: string | null;
+  board_id?: string | null;
+  /** When the vendor is followed up; `started` once the first follow-up has been drafted. */
+  follow_up?: { due: boolean; started: boolean; first: string } | null;
   project_name?: string | null;
   project_due?: string | null;
   owner_email?: string | null;
@@ -115,8 +116,8 @@ export function VendorsView() {
     <div className="grid gap-4">
       {data && !data.board_connected && (
         <p className="rounded-md bg-info-soft p-3 text-sm">
-          The monday vendor board isn’t connected yet. Jobs added here are tracked now; to read them from monday, set MONDAY_VENDOR_BOARD_ID
-          and the VENDOR_…_COLUMN_ID settings.
+          The monday vendor board isn’t connected yet. Jobs added here are tracked now; ask your administrator to connect the board to read
+          them from monday.
         </p>
       )}
       <SectionTabs
@@ -143,9 +144,19 @@ export function VendorsView() {
 
 const col = columnHelper<Job>();
 
-function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit: boolean; shipped: boolean; setShipped: (v: boolean) => void }) {
+function Jobs({
+  data,
+  canEdit,
+  shipped,
+  setShipped,
+}: {
+  data: Overview;
+  canEdit: boolean;
+  shipped: boolean;
+  setShipped: (v: boolean) => void;
+}) {
   const client = useQueryClient();
-  const { employeeEmail } = useAuth();
+  const { employeeEmail, hasRole } = useAuth();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [show, setShow] = useQueryState('show', parseAsStringLiteral(SHOW));
   // `job` is the link alerts and autopilot already use.
@@ -162,13 +173,56 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
   useListNav(rows, index, open);
 
   const sync = useMutation({
-    mutationFn: async () => (await syncVendorBoard()) as { skipped?: string; jobs?: number; added?: number; changed?: number; removed?: number },
+    mutationFn: async () =>
+      (await syncVendorBoard()) as { skipped?: string; jobs?: number; added?: number; changed?: number; removed?: number },
     onSuccess: (r) => {
       if (r.skipped) toast.warning('The board wasn’t read', { description: r.skipped });
       else toast.success(`Read ${r.jobs} jobs`, { description: `${r.added} new, ${r.changed} changed, ${r.removed} removed.` });
       void client.invalidateQueries({ queryKey: ['vendors'] });
     },
     onError: (e) => toast.error('Couldn’t read the board', { description: e.message }),
+  });
+
+  // "Follow up": drafts the message for a person to read and send. Nothing goes out by itself.
+  const router = useRouter();
+  const followUp = useMutation({
+    mutationFn: async (j: Job) =>
+      ok(
+        api.POST('/api/v1/boards/{board_id}/items/{item_id}/drafts', {
+          params: { path: { board_id: j.board_id!, item_id: j.monday_item_id! } },
+          body: { key: `vendor-followup:${j.id}:now` },
+        }),
+      ),
+    onSuccess: () =>
+      toast.success('Drafted for you to check', { action: { label: 'Open it', onClick: () => router.push('/inbox?show=approvals') } }),
+    onError: (e) => toast.error('Couldn’t draft it', { description: e.message }),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ['vendors'] });
+      void client.invalidateQueries({ queryKey: ['inbox'] });
+    },
+  });
+
+  // Ticked orders to follow up together: one draft each, all waiting for a person to send.
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set());
+  // Only rows still on screen count: a filter change or refresh can drop ticked rows.
+  const tickedRows = rows.filter((j) => ticked.has(String(j.id)));
+  const canFollowUp = (j: Job) => Boolean(hasRole('OPERATOR') && j.follow_up?.due && j.board_id && j.monday_item_id);
+  const followUpMany = useMutation({
+    mutationFn: async (list: Job[]) => {
+      const failed: string[] = [];
+      for (const j of list) {
+        try {
+          await followUp.mutateAsync(j);
+        } catch {
+          failed.push(j.vendor);
+        }
+      }
+      return { done: list.length - failed.length, failed };
+    },
+    onSuccess: (r) => {
+      setTicked(new Set());
+      if (r.failed.length) toast.error(`${r.failed.length} didn’t draft`, { description: r.failed.join(', ') });
+    },
   });
 
   const c = data.counts ?? {};
@@ -193,7 +247,8 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
     col.accessor('slack_days', {
       header: 'Spare',
       meta: { align: 'right' },
-      cell: (x) => (x.getValue() == null ? '–' : <span className={cn(x.getValue()! < 0 && 'font-semibold text-bad')}>{x.getValue()} d</span>),
+      cell: (x) =>
+        x.getValue() == null ? '–' : <span className={cn(x.getValue()! < 0 && 'font-semibold text-bad')}>{x.getValue()} d</span>,
     }),
     col.accessor('state', {
       header: 'State',
@@ -203,6 +258,26 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
       },
     }),
     col.accessor('owner_email', { header: 'Owner', cell: (x) => person(x.getValue(), employeeEmail) || '–' }),
+    col.display({
+      id: 'next',
+      header: () => <span className="sr-only">Next step</span>,
+      meta: { align: 'right' },
+      cell: (x) => {
+        const j = x.row.original;
+        const ready = hasRole('OPERATOR') && j.follow_up?.due && j.board_id && j.monday_item_id;
+        return (
+          <RowActions
+            rowLabel={j.vendor}
+            main={
+              ready
+                ? { label: 'Follow up', busy: followUp.isPending && followUp.variables?.id === j.id, onClick: () => followUp.mutate(j) }
+                : null
+            }
+            more={[{ label: 'Open details', onClick: () => open(j) }]}
+          />
+        );
+      },
+    }),
   ]);
 
   const summary = [
@@ -230,7 +305,13 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
         </label>
         {canEdit && (
           <div className="ml-auto flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" disabled={sync.isPending} onClick={() => sync.mutate()} title={data.last_sync?.at ? `Last read ${since(data.last_sync.at)}` : undefined}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={sync.isPending}
+              onClick={() => sync.mutate()}
+              title={data.last_sync?.at ? `Last read ${since(data.last_sync.at)}` : undefined}
+            >
               {sync.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               Read the monday board
             </Button>
@@ -241,17 +322,28 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        {summary.length ? summary.map(([n, what]) => `${n} ${what}`).join(' · ') : 'No vendor is putting a project at risk.'} Must ship by = project due date, less
-        transit and a buffer.
+        {summary.length ? summary.map(([n, what]) => `${n} ${what}`).join(' · ') : 'No vendor is putting a project at risk.'} Must ship by =
+        project due date, less transit and a buffer.
       </p>
 
       <div className={cn('grid items-start gap-4', wide && linked && 'grid-cols-[minmax(0,1fr)_26rem]')}>
         <div className="grid min-w-0 gap-2">
+          <BulkBar
+            count={tickedRows.length}
+            noun="order"
+            actionLabel="Follow up"
+            busy={followUpMany.isPending}
+            onAction={() => followUpMany.mutate(tickedRows)}
+            onClear={() => setTicked(new Set())}
+          />
           <DataTable
             label="Vendor jobs"
             columns={columns}
             data={rows}
             getRowId={(j) => String(j.id)}
+            checked={ticked}
+            onCheckedChange={setTicked}
+            canCheck={canFollowUp}
             recordName={(j) => recordKey('job', j.id)}
             selectedId={id != null ? String(id) : null}
             onSelect={open}
@@ -274,7 +366,13 @@ function Jobs({ data, canEdit, shipped, setShipped }: { data: Overview; canEdit:
             </p>
           )}
         </div>
-        <DetailPanel open={Boolean(linked)} onClose={() => open(undefined)} recordName={linked ? recordKey('job', linked.id) : undefined} title={linked?.vendor ?? ''} description={linked ? linked.description || linked.po_number || undefined : undefined}>
+        <DetailPanel
+          open={Boolean(linked)}
+          onClose={() => open(undefined)}
+          recordName={linked ? recordKey('job', linked.id) : undefined}
+          title={linked?.vendor ?? ''}
+          description={linked ? linked.description || linked.po_number || undefined : undefined}
+        >
           {linked && <JobDetail key={`${linked.id}-${linked.history?.length}`} job={linked} canEdit={canEdit} />}
         </DetailPanel>
       </div>
@@ -313,7 +411,16 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
       </div>
       <Facts
         items={[
-          ['PO', j.po_number ? <span key="po" className="font-mono text-xs">{j.po_number}</span> : '–'],
+          [
+            'PO',
+            j.po_number ? (
+              <span key="po" className="font-mono text-xs">
+                {j.po_number}
+              </span>
+            ) : (
+              '–'
+            ),
+          ],
           ['Project', j.project_name || j.project_item_id || '–'],
           ['PO placed', day(j.ordered_on)],
           ['We asked for', day(j.requested_on)],
@@ -398,7 +505,17 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
 
 function AddJob({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (open: boolean) => void; onAdded: (id: number) => void }) {
   const client = useQueryClient();
-  const blank = { vendor: '', description: '', po_number: '', project_item_id: '', mode: 'SEA', ordered_on: '', requested_on: '', quoted_lead_days: '', promised_on: '' };
+  const blank = {
+    vendor: '',
+    description: '',
+    po_number: '',
+    project_item_id: '',
+    mode: 'SEA',
+    ordered_on: '',
+    requested_on: '',
+    quoted_lead_days: '',
+    promised_on: '',
+  };
   const [form, setForm] = useState(blank);
   const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const add = useMutation({
@@ -422,7 +539,9 @@ function AddJob({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: 
       <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Add a vendor job</DialogTitle>
-          <DialogDescription>One vendor PO. Link it to a project (its monday item number) so the ship-by date can be worked out.</DialogDescription>
+          <DialogDescription>
+            One vendor PO. Link it to a project (its monday item number) so the ship-by date can be worked out.
+          </DialogDescription>
         </DialogHeader>
         <form
           id="add-job"
@@ -486,7 +605,9 @@ const scoreColumns = scol.columns([
   scol.accessor('otd_promise', {
     header: 'On time',
     meta: { align: 'right' },
-    cell: (c) => <ToneBadge tone={c.getValue() == null ? 'neutral' : c.row.original.below_target ? 'bad' : 'ok'}>{pct(c.getValue())}</ToneBadge>,
+    cell: (c) => (
+      <ToneBadge tone={c.getValue() == null ? 'neutral' : c.row.original.below_target ? 'bad' : 'ok'}>{pct(c.getValue())}</ToneBadge>
+    ),
   }),
   scol.accessor('otd_requested', { header: 'Met our date', meta: { align: 'right' }, cell: (c) => pct(c.getValue()) }),
   scol.accessor('avg_days_late', { header: 'Avg late', meta: { align: 'right' }, cell: (c) => (c.getValue() ? `${c.getValue()} d` : '–') }),

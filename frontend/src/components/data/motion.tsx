@@ -16,7 +16,11 @@ export function Count({ value, className }: { value: number; className?: string 
   useEffect(() => {
     if (!last.rises || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     digits.current?.animate(
-      [{ color: 'var(--bad)', backgroundColor: 'var(--bad-soft)' }, { color: 'var(--bad)', backgroundColor: 'var(--bad-soft)', offset: 0.3 }, {}],
+      [
+        { color: 'var(--bad)', backgroundColor: 'var(--bad-soft)' },
+        { color: 'var(--bad)', backgroundColor: 'var(--bad-soft)', offset: 0.3 },
+        {},
+      ],
       { duration: 900, easing: 'ease-out' },
     );
   }, [last.rises]);
