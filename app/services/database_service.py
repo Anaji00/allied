@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core import status_words
 from app.core.logging import logger
 from app.models.db_models import (
     AuditLogDB,
@@ -109,6 +110,7 @@ class DatabaseService:
             "facility": r.facility,
             "currency": r.currency,
             "status": r.status,
+            "status_word": status_words.word("order", r.status),
             "archetype": r.archetype,
             "total_revenue": r.total_revenue,
             "total_expense": r.total_expense,
@@ -257,6 +259,7 @@ class DatabaseService:
                 "vendor_name": r.vendor_name,
                 "po_number": r.po_number,
                 "reconciliation_status": r.reconciliation_status,
+                "status_word": status_words.word("bill", r.reconciliation_status),
                 "authorized_po_total": r.authorized_po_total,
                 "actual_billed_total": r.actual_billed_total,
                 "cost_variance_amount": r.cost_variance_amount,
@@ -312,7 +315,7 @@ class DatabaseService:
         return [
             {
                 "exception_id": r.exception_id,
-                "exception_type": r.exception_type,
+                "exception_type": r.exception_type, "type_word": status_words.word("exception_type", r.exception_type),
                 "severity": r.severity,
                 "title": r.title,
                 "description": r.description,
@@ -320,6 +323,7 @@ class DatabaseService:
                 "vendor_or_customer": r.vendor_or_customer,
                 "variance_amount": r.variance_amount,
                 "status": r.status,
+                "status_word": status_words.word("exception", r.status),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
                 "resolved_by": r.resolved_by,
@@ -359,7 +363,7 @@ class DatabaseService:
             return None
         return {
             "exception_id": row.exception_id,
-            "exception_type": row.exception_type,
+            "exception_type": row.exception_type, "type_word": status_words.word("exception_type", row.exception_type),
             "severity": row.severity,
             "title": row.title,
             "description": row.description,
@@ -367,6 +371,7 @@ class DatabaseService:
             "vendor_or_customer": row.vendor_or_customer,
             "variance_amount": row.variance_amount,
             "status": row.status,
+            "status_word": status_words.word("exception", row.status),
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
             "resolved_by": row.resolved_by,
@@ -450,17 +455,36 @@ class DatabaseService:
         q: Optional[str] = None,
         offset: int = 0,
         with_total: bool = False,
+        action: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ):
         """Audit entries, newest first, with optional filters.
 
         `q` matches the record id, the detail, the action or who did it. With
         `with_total` it returns (entries, total matching) for paging.
         """
+        from datetime import datetime, time, timezone
+
         query = db.query(AuditLogDB)
         if resource_type:
             query = query.filter(AuditLogDB.resource_type == resource_type)
         if actor_email:
             query = query.filter(AuditLogDB.actor_email == actor_email)
+        if action:
+            query = query.filter(AuditLogDB.action == action)
+        if start_date:
+            try:
+                d = datetime.fromisoformat(start_date[:10]).date()
+                query = query.filter(AuditLogDB.timestamp >= datetime.combine(d, time.min, tzinfo=timezone.utc))
+            except ValueError:
+                pass
+        if end_date:
+            try:
+                d = datetime.fromisoformat(end_date[:10]).date()
+                query = query.filter(AuditLogDB.timestamp <= datetime.combine(d, time.max, tzinfo=timezone.utc))
+            except ValueError:
+                pass
         if q and q.strip():
             like = f"%{q.strip()}%"
             query = query.filter(

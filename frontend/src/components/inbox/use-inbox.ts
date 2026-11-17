@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { authFetch } from '@/lib/api';
 import { api, ApiError, ok } from '@/lib/api/client';
-import { dateTime, money, words } from '@/lib/format';
+import { dateTime, kindWord, money, plain, words } from '@/lib/format';
 import type { Role } from '@/lib/nav';
 
 // The Inbox merges five queues that used to live on separate pages: my alerts,
@@ -22,7 +22,7 @@ export type InboxAction = {
   /** Shown in the toast: "Approved: …". */
   verb: string;
   primary?: boolean;
-  hotkey?: 'a' | 'r' | 'x';
+  hotkey?: 'a' | 'r' | 'x' | 'h';
   minRole: Role;
   /** Sent after the undo window; `keepalive` when the tab is closing. */
   commit?: (keepalive: boolean) => Promise<unknown>;
@@ -31,6 +31,8 @@ export type InboxAction = {
 
 export type InboxItem = {
   key: string;
+  /** The daily summary and personal brief: kept out of the main list until asked for. */
+  quiet?: boolean;
   source: Source;
   group: Group;
   severity: Severity;
@@ -48,7 +50,16 @@ export type InboxItem = {
   /** The AI tool behind an approval, so its result renders in its own shape. */
   feature?: string;
   /** Drafts: what would go out, why it was drafted, and its kind (for deciding a whole kind at once). */
-  draft?: { id: string; kind: string; email?: { to?: string; subject?: string; body?: string }; why: string[] };
+  draft?: {
+    id: string;
+    kind: string;
+    email?: { to?: string; subject?: string; body?: string };
+    why: string[];
+    /** What goes with the email: the purchase order PDF first, then the design files. */
+    attachments?: { name: string; size?: number | null }[];
+    /** A suggested row for the Open RFQs board, edited and added from the detail panel. */
+    row?: { item_name: string; customer: string; status: string; notes: string };
+  };
 };
 
 type Alert = {
@@ -64,6 +75,7 @@ type Alert = {
 type Problem = {
   exception_id: string;
   exception_type: string;
+  type_word?: string | null;
   severity: string;
   title: string;
   description: string;
@@ -141,17 +153,27 @@ function fromAlert(a: Alert, everyone: boolean): InboxItem {
       commit: (keepalive) => post(`/alerts/${a.id}/acknowledge`, undefined, keepalive),
     },
   ];
+  // One tap puts it away until tomorrow; it comes back by itself.
+  actions.push({
+    id: 'snooze',
+    label: 'Snooze a day',
+    verb: 'Snoozed until tomorrow',
+    hotkey: 'h',
+    minRole: 'VIEWER',
+    commit: (keepalive) => post(`/alerts/${a.id}/snooze`, { hours: 24 }, keepalive),
+  });
   if (a.link) actions.push({ id: 'open', label: 'Open', verb: 'Opened', minRole: 'VIEWER', href: a.link });
   const facts: [string, string][] = [['Sent', dateTime(a.created_at)]];
   if (everyone && a.recipients?.length) facts.push(['To', a.recipients.join(', ')]);
   return {
     key: `alerts:${a.id}`,
+    quiet: a.kind === 'daily_summary' || a.kind === 'personal_brief',
     source: 'alerts',
     group: REVIEW_KINDS.has(a.kind) ? 'approvals' : SCHEDULE_KINDS.test(a.kind) ? 'schedule' : 'problems',
     severity,
-    kind: REVIEW_KINDS.has(a.kind) ? 'Review' : words(a.kind),
+    kind: REVIEW_KINDS.has(a.kind) ? 'Review' : kindWord(a.kind),
     title: a.title,
-    meta: (a.body || '').split('\n')[0],
+    meta: plain((a.body || '').split('\n')[0]),
     at: a.created_at ?? null,
     body: a.body ?? undefined,
     facts,
@@ -164,6 +186,14 @@ const eventRef = (id: number) => `MONDAY-EVT-${id}`;
 
 const RETIRED_ACTIONS = new Set(['OVERRIDE_PRICE_CHECK', 'DISPATCH_URGENT_RFQ']);
 
+/** The server words some buttons in accounting shorthand; say them the way people do. */
+const PLAIN: [RegExp, string][] = [
+  [/reviewed and handled with AP/i, 'Mark as handled'],
+  [/accept surcharge.*AP/i, 'Accept the extra charge'],
+  [/map sku to/i, 'Match the part to the catalogue'],
+];
+const plainLabel = (label: string) => PLAIN.find(([re]) => re.test(label))?.[1] ?? label;
+
 function fromProblem(p: Problem, event?: MondayEvent): InboxItem {
   const severity: Severity = p.severity === 'CRITICAL' ? 'critical' : p.severity === 'LOW' ? 'info' : 'warning';
   // Vendor repricing was removed; older problems may still list its actions,
@@ -171,7 +201,7 @@ function fromProblem(p: Problem, event?: MondayEvent): InboxItem {
   const listed = (p.available_actions ?? []).filter((a) => !RETIRED_ACTIONS.has(a.action));
   const actions: InboxAction[] = listed.map((a, i) => ({
     id: a.action,
-    label: a.label,
+    label: plainLabel(a.label),
     verb: a.action === 'REPLAY_MONDAY_EVENT' ? 'Replayed' : 'Done',
     primary: i === 0,
     minRole: 'OPERATOR',
@@ -212,7 +242,7 @@ function fromProblem(p: Problem, event?: MondayEvent): InboxItem {
     source: 'problems',
     group: 'problems',
     severity,
-    kind: words(p.exception_type),
+    kind: p.type_word || kindWord(p.exception_type),
     title: p.title,
     meta: `${p.vendor_or_customer} · ${p.reference_id}`,
     at: p.created_at ?? null,
@@ -261,6 +291,8 @@ export const DRAFT_KIND: Record<string, string> = {
   rfq_vendor_chase: 'Vendor price chase',
   recipe: 'Your rule',
   customer_reply: 'Customer reply',
+  monday_row: 'Board row',
+  vendor_po: 'Purchase order to vendor',
 };
 
 /** The decide endpoint answers 200 even when the step itself failed; that must not read as done. */
@@ -290,6 +322,28 @@ function fromDraft(d: Draft): InboxItem {
   const args = d.args ?? {};
   const text = (k: string) => (typeof args[k] === 'string' && args[k] ? (args[k] as string) : undefined);
   const kind = d.kind || 'other';
+  // A suggested row for the Open RFQs board: it has its own small form instead of a Send button.
+  if (kind === 'monday_row' || d.tool === 'add_rfq_to_monday') {
+    const row = {
+      item_name: text('item_name') ?? '',
+      customer: text('customer') ?? '',
+      status: text('status') ?? '',
+      notes: text('notes') ?? '',
+    };
+    return {
+      key: `drafts:${d.id}`,
+      source: 'drafts',
+      group: 'approvals',
+      severity: 'info',
+      kind: DRAFT_KIND.monday_row,
+      title: 'Add to the Open RFQs board',
+      meta: row.item_name,
+      at: d.created_at ?? null,
+      facts: [['Drafted', dateTime(d.created_at)]],
+      draft: { id: d.id, kind: 'monday_row', why: d.why ?? [], row },
+      actions: [],
+    };
+  }
   // A vendor's answer updates the order in the app (never monday); everything else is an email.
   const update = d.tool === 'update_vendor_job';
   const email = update ? undefined : { to: text('to'), subject: text('subject'), body: text('body') };
@@ -312,7 +366,15 @@ function fromDraft(d: Draft): InboxItem {
     meta: email?.to ? `To ${email.to}` : update ? 'Updates the order in the app' : '',
     at: d.created_at ?? null,
     facts,
-    draft: { id: d.id, kind, email, why: d.why ?? [] },
+    draft: {
+      id: d.id,
+      kind,
+      email,
+      why: d.why ?? [],
+      attachments: (Array.isArray(args._attachments) ? (args._attachments as { name?: unknown; size?: unknown }[]) : [])
+        .filter((a) => typeof a?.name === 'string')
+        .map((a) => ({ name: a.name as string, size: typeof a.size === 'number' ? a.size : null })),
+    },
     actions: [
       {
         id: 'send',
@@ -457,7 +519,11 @@ export function useInbox({ everyone = false } = {}) {
 /** After a decision lands, refresh just the queue it came from. */
 export function useRefreshSource() {
   const client = useQueryClient();
-  return (source: Source) => client.invalidateQueries({ queryKey: ['inbox', source] });
+  return (source: Source) => {
+    // The sidebar badge and the alert groups read the same alerts, so they refresh together.
+    void client.invalidateQueries({ queryKey: ['alerts'] });
+    return client.invalidateQueries({ queryKey: ['inbox', source] });
+  };
 }
 
 export async function explainProblem(exceptionId: string) {

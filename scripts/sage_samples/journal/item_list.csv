@@ -1,0 +1,2 @@
+Item ID,Item Description,Item Class,Inactive,Sales Price/Billing Rate 1,Last Unit Cost,G/L Sales Account,G/L Inventory Account,Stocking U/M,Minimum Stock,Vendor ID,Quantity on Hand(X)
+J-ITEM-01,JOURNAL DEMO LINER TILE,Liner,FALSE,"18.50","9.25",4000-00,1200-00,EA,100,J-V001,350

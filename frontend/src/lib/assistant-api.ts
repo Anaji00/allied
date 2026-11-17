@@ -99,7 +99,7 @@ export const decide = (id: string, confirm: boolean) =>
 export const decideMany = (ids: string[], confirm: boolean) =>
   send<{ results: { id: string; status: string; error?: string | null }[] }>('/assistant/actions/batch', json('POST', { ids, confirm }));
 
-export const editDraft = (id: string, changes: { to?: string; subject?: string; body?: string }) =>
+export const editDraft = (id: string, changes: Record<string, string>) =>
   send<unknown>(`/assistant/actions/${encodeURIComponent(id)}`, json('PATCH', { changes }));
 
 /** A spoken task: the recording (or dictated words), the chat so far, and the changes waiting on a yes. */
@@ -121,9 +121,20 @@ export function voiceCommand(opts: {
 
 /** A protected file (a packing slip) opened in a new tab, where it can be read or printed. */
 export async function openDocument(href: string) {
-  const res = await authFetch(href);
-  if (!res.ok) throw new Error(`Couldn’t open it (${res.status}).`);
-  const url = URL.createObjectURL(await res.blob());
-  window.open(url, '_blank', 'noopener');
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  // Open the tab synchronously inside the click gesture so mobile browsers don't block it after await.
+  const win = window.open('', '_blank', 'noopener');
+  try {
+    const res = await authFetch(href);
+    if (!res.ok) throw new Error(`Couldn’t open it (${res.status}).`);
+    const url = URL.createObjectURL(await res.blob());
+    if (win && !win.closed) {
+      win.location.href = url;
+    } else {
+      window.location.assign(url);
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    if (win && !win.closed) win.close();
+    throw e;
+  }
 }

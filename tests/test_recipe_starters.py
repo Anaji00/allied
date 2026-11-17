@@ -11,6 +11,7 @@ from app.config import settings
 from app.core.database import SessionLocal
 from app.models.db_models import AssistantActionDB, AutomationRecipeDB, NotificationDB
 from app.services.coordination import activity, boards, recipes
+from app.services.coordination import notify as alerts
 
 BOSS = {"email": "boss@allied.test", "role": "MANAGER"}
 COLS = [{"id": "status", "title": "Status", "type": "status", "labels": {"WAITING ON PI": "", "FABRICATION": ""}},
@@ -147,3 +148,13 @@ def test_a_rule_can_be_tried_before_it_is_saved(client, monkeypatch):
     bad = client.post("/api/v1/autopilot/recipes/preview", json={"board_role": "vendors", "trigger": "status_for",
                                                                   "column": "X", "value": "soon", "action": "notify"})
     assert bad.status_code == 400
+
+
+def test_the_board_people_come_from_the_board_copy_with_an_email_where_a_contact_has_the_name(client, monkeypatch):
+    cols = COLS + [{"id": "people", "title": "Engineer", "type": "people"}]
+    board = _orders_board(monkeypatch, [{"id": "a", "name": "X", "values": {"status": "FABRICATION", "people": "Nguyen Test Eng, Nobody Known"}}], [])
+    with boards._lock:
+        boards._mirror[board]["columns"] = cols
+    monkeypatch.setattr(alerts, "contacts", lambda: {"nte@alliedweldingsystems.com": {"name": "Nguyen Test Eng", "email": "nte@alliedweldingsystems.com", "role_tag": "engineer", "channels": ["email"], "active": True}})
+    out = client.get("/api/v1/autopilot/recipes/options", params={"board_role": "vendors"}).json()
+    assert out["board_people"] == [{"name": "Nguyen Test Eng", "email": "nte@alliedweldingsystems.com"}, {"name": "Nobody Known", "email": None}]

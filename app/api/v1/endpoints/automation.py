@@ -8,9 +8,9 @@ dispute actually reached the supplier, and that answer lives here.
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
-from app.core.security import require_operator, require_viewer
+from app.core.security import require_manager, require_operator, require_viewer
 from app.services.mailbox_poller import mailbox_poller
 from app.services.outbound_email_service import outbound_email_service
 
@@ -206,3 +206,22 @@ def poll_mailbox(_user: dict = Depends(require_operator)) -> Dict[str, Any]:
         return {"ok": True, "detail": "Mailbox checked.", **result}
     except Exception as exc:  # noqa: BLE001 - reported, never raised at the user
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}", "ingested": 0, "orders_created": 0}
+
+
+@router.get("/list", summary="Every automation in one list: when, then, who reviews, mode")
+def automation_list(_user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    from app.services.coordination import automations
+
+    return automations.listing()
+
+
+@router.put("/mode", summary="The one switch: off, suggest (a person approves) or auto, for a play, reaction or recipe")
+def automation_mode(body: Dict[str, Any] = Body(...), user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services.coordination import automations
+
+    try:
+        return automations.set_mode(str(body.get("id") or ""), str(body.get("mode") or ""), user)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc).strip("'\""))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

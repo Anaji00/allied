@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.core.logging import logger
-from app.core.security import require_operator
+from app.core.security import require_operator, require_viewer
 from app.models.documents import (
     BatchScanResult,
     DocumentScanResponse,
@@ -86,7 +86,7 @@ def scan_document_upload(
     response_model=List[DocumentUploadSample],
     summary="Get Ready-to-Test Document Samples",
 )
-def get_document_samples() -> List[DocumentUploadSample]:
+def get_document_samples(_user: dict = Depends(require_viewer)) -> List[DocumentUploadSample]:
     """Returns sample industrial documents (Customer POs, CAD Blueprints, MTR Mill Certs)."""
     return document_scanner_service.get_sample_documents()
 

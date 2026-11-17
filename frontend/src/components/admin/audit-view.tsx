@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
-import { api, ok } from '@/lib/api/client';
+import { authFetch } from '@/lib/api';
 import { dateTime, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -42,7 +42,7 @@ const KIND: Record<string, string> = {
   COMPLIANCE_NCR: 'Quality holds',
   LOGISTICS_DISPATCH: 'Shipping and customs',
   USER: 'User accounts',
-  MONDAY_EVENT: 'monday events',
+  MONDAY_EVENT: 'monday changes',
 };
 
 function tone(action: string): Tone {
@@ -60,7 +60,7 @@ const columns = col.columns([
     cell: (c) => (
       <span className="grid">
         <span>{KIND[c.getValue()] ?? words(c.getValue())}</span>
-        {c.row.original.resource_id && <span className="font-mono text-[11px] text-muted-foreground">{c.row.original.resource_id}</span>}
+        {c.row.original.resource_id && <span className="font-mono text-xs text-muted-foreground">{c.row.original.resource_id}</span>}
       </span>
     ),
   }),
@@ -72,10 +72,14 @@ export function AuditView() {
   const { hasRole } = useAuth();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [kind, setKind] = useQueryState('kind', parseAsString.withDefault(''));
+  const [action, setAction] = useQueryState('action', parseAsString.withDefault(''));
+  const [startDate, setStartDate] = useQueryState('from', parseAsString.withDefault(''));
+  const [endDate, setEndDate] = useQueryState('to', parseAsString.withDefault(''));
   const [q, setQ] = useQueryState('q', parseAsString.withDefault(''));
   const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
   const [id, setId] = useQueryState('entry');
   const [draft, setDraft] = useState(q);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (draft === q) return undefined;
@@ -86,14 +90,23 @@ export function AuditView() {
     return () => clearTimeout(t);
   }, [draft, q, setQ, setPage]);
 
+  const buildParams = (limit: number, offset: number) => {
+    const p = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (kind) p.set('resource_type', kind);
+    if (action) p.set('action', action);
+    if (startDate) p.set('start_date', startDate);
+    if (endDate) p.set('end_date', endDate);
+    if (q) p.set('q', q);
+    return p.toString();
+  };
+
   const { data, isPending, isFetching, error, refetch } = useQuery({
-    queryKey: ['audit', kind, q, page],
-    queryFn: async () =>
-      (await ok(
-        api.GET('/api/v1/audit', {
-          params: { query: { resource_type: kind || undefined, q: q || undefined, limit: PAGE, offset: (page - 1) * PAGE } },
-        }),
-      )) as Page,
+    queryKey: ['audit', kind, action, startDate, endDate, q, page],
+    queryFn: async () => {
+      const res = await authFetch(`/api/v1/audit?${buildParams(PAGE, (page - 1) * PAGE)}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Couldn’t load the audit trail (${res.status}).`);
+      return (await res.json()) as Page;
+    },
     placeholderData: keepPreviousData,
     enabled: hasRole('MANAGER'),
   });
@@ -104,14 +117,22 @@ export function AuditView() {
   const open = (e?: Entry) => void setId(e ? e.event_id : null);
   useListNav(rows, index, open);
 
-  function downloadJson() {
-    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `allied_audit_${new Date().toISOString().slice(0, 10)}${kind ? `_${kind.toLowerCase()}` : ''}_p${page}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  async function downloadJson() {
+    setExporting(true);
+    try {
+      const res = await authFetch(`/api/v1/audit?${buildParams(500, 0)}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Couldn’t export (${res.status}).`);
+      const full = (await res.json()) as Page;
+      const blob = new Blob([JSON.stringify(full.entries, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `allied_audit_${new Date().toISOString().slice(0, 10)}${kind ? `_${kind.toLowerCase()}` : ''}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } finally {
+      setExporting(false);
+    }
   }
 
   if (!hasRole('MANAGER')) return <EmptyState title="Managers only">The audit trail is open to managers and admins.</EmptyState>;
@@ -121,7 +142,14 @@ export function AuditView() {
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-full sm:w-72">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input type="search" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Order, person, or words in the details" aria-label="Search the audit trail" className="pl-8" />
+          <Input
+            type="search"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Order, person, or words in the details"
+            aria-label="Search the audit trail"
+            className="pl-8"
+          />
         </div>
         <NativeSelect
           aria-label="Kind of record"
@@ -139,8 +167,38 @@ export function AuditView() {
             </option>
           ))}
         </NativeSelect>
-        <Button variant="outline" size="sm" className="ml-auto" disabled={!rows.length} onClick={downloadJson}>
-          <Download /> Download this page
+        <Input
+          type="date"
+          aria-label="From date"
+          value={startDate}
+          onChange={(e) => {
+            void setStartDate(e.target.value || null);
+            void setPage(null);
+          }}
+          className="w-auto"
+        />
+        <Input
+          type="date"
+          aria-label="To date"
+          value={endDate}
+          onChange={(e) => {
+            void setEndDate(e.target.value || null);
+            void setPage(null);
+          }}
+          className="w-auto"
+        />
+        <Input
+          value={action}
+          onChange={(e) => {
+            void setAction(e.target.value.toUpperCase() || null);
+            void setPage(null);
+          }}
+          placeholder="Action (e.g. LOGIN)"
+          aria-label="Filter by action"
+          className="w-36"
+        />
+        <Button variant="outline" size="sm" className="ml-auto" disabled={!rows.length || exporting} onClick={() => void downloadJson()}>
+          <Download /> {exporting ? 'Exporting…' : 'Export filtered'}
         </Button>
       </div>
 
@@ -179,17 +237,36 @@ export function AuditView() {
             </div>
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} title={selected ? words(selected.action) : ''} description={selected ? dateTime(selected.timestamp) : undefined}>
+        <DetailPanel
+          open={Boolean(selected)}
+          onClose={() => open(undefined)}
+          title={selected ? words(selected.action) : ''}
+          description={selected ? dateTime(selected.timestamp) : undefined}
+        >
           {selected && (
             <div className="grid gap-4">
               <Facts
                 items={[
                   ['Record', KIND[selected.resource_type] ?? words(selected.resource_type)],
-                  ['Reference', selected.resource_id ? <span key="r" className="font-mono text-xs">{selected.resource_id}</span> : '–'],
+                  [
+                    'Reference',
+                    selected.resource_id ? (
+                      <span key="r" className="font-mono text-xs">
+                        {selected.resource_id}
+                      </span>
+                    ) : (
+                      '–'
+                    ),
+                  ],
                   ['Who', selected.actor_email || '–'],
                   ['Role', selected.actor_role ? words(selected.actor_role) : '–'],
                   ['Site', selected.facility || '–'],
-                  ['Entry', <span key="e" className="font-mono text-xs">{selected.event_id}</span>],
+                  [
+                    'Entry',
+                    <span key="e" className="font-mono text-xs">
+                      {selected.event_id}
+                    </span>,
+                  ],
                 ]}
               />
               {selected.detail && <p className="text-[13px] whitespace-pre-wrap">{selected.detail}</p>}

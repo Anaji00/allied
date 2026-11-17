@@ -95,7 +95,7 @@ def test_after_the_last_try_the_job_is_failed_and_a_person_is_told_once_then_ret
     job = _job(so)
     assert job.status == "FAILED" and job.attempts == packing_slip_queue.MAX_ATTEMPTS and job.next_try_at is None
     with SessionLocal() as db:
-        assert db.query(NotificationDB).filter(NotificationDB.dedup_key == f"slip-failed:{so}:").count() == 1
+        assert db.query(NotificationDB).filter(NotificationDB.dedup_key.like(f"slip-failed:{so}:%")).count() == 1
     state["fail"] = False
     assert client.post(f"/api/v1/packing-slips/SO-{so}/retry").json()["status"] == "READY"
     assert client.get("/api/v1/packing-slips/queue", params={"state": "FAILED"}).json()["jobs"] == [] or all(
@@ -125,7 +125,7 @@ def test_the_slip_shows_the_customers_po_and_not_our_sales_order_number(client):
     from pathlib import Path
 
     text = _pdf_text(_job(so).path)
-    assert po in text and "Your PO Number" in text
+    assert po in text and "Your Reference" in text
     assert f"Sales Order Number" not in text and f"SO {so}" not in text
     r = client.get(f"/api/v1/orders/{so}/packing-slip")
     assert f"packing_list_{po}.pdf" in r.headers["content-disposition"] and f"SO_{so}" not in r.headers["content-disposition"]

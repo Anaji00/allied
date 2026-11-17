@@ -227,7 +227,7 @@ function RecipeCard({ boardId, recipe, score }: { boardId: string; recipe: Recip
               <Button
                 size="xs"
                 disabled={run.isPending || recipe.mode === 'off'}
-                title={recipe.mode === 'off' ? 'This recipe is off' : undefined}
+                title={recipe.mode === 'off' ? 'This automation is off' : undefined}
                 onClick={() =>
                   run.mutate(
                     { play: recipe.name, dryRun: false },
@@ -235,7 +235,11 @@ function RecipeCard({ boardId, recipe, score }: { boardId: string; recipe: Recip
                       onSuccess: (r) => {
                         setPreview(null);
                         const p = r.plays[recipe.name];
-                        toast(p?.skipped ? `Not run: ${p.skipped}.` : `Done: ${p?.did.length ?? 0} thing(s).`);
+                        toast(
+                          p?.skipped
+                            ? `Not run: ${p.skipped}.`
+                            : `Done: ${p?.did.length === 1 ? '1 thing' : `${p?.did.length ?? 0} things`}.`,
+                        );
                       },
                     },
                   )

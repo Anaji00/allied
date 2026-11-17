@@ -156,7 +156,7 @@ def test_push_to_monday_is_explicit_confirmed_and_refused_while_read_only(script
     card = next(c for c in out["cards"] if c["kind"] == "push")
     assert card["buttons"][0]["label"] == "Push to Monday" and posted == []          # nothing until clicked
     done = agent.decide(out["actions"][0]["id"], True, OPERATOR)
-    assert "read-only" in done["result"]["done"] and "nothing was posted" in done["result"]["done"]
+    assert "read-only" in done["result"]["done"] and "Staged (not sent yet)" in done["result"]["done"] and posted == []   # saved for a push, never sent
 
 
 # ---------------------------------------------------------------------------

@@ -56,7 +56,7 @@
 
 /* Neutrals carry a slight blue cast; primary actions are ink, not red. */
 :root {
-  --radius: 0.5rem;
+  --radius: 0.625rem;
 
   --background: oklch(0.982 0.003 250);
   --foreground: oklch(0.21 0.013 256);
@@ -294,3 +294,34 @@
     min-height: 2.5rem;
   }
 }
+
+
+/* Quiet polish: a little softer, a little smoother, never louder. */
+html { scroll-behavior: smooth; }
+::selection { background: color-mix(in oklch, var(--foreground) 14%, transparent); }
+main h1, main h2 { letter-spacing: -0.011em; }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+@media (prefers-reduced-motion: no-preference) {
+  button, a, [role='tab'], [role='option'], input, select, textarea {
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+  }
+}
+
+
+/* Other languages read better with a little more line height and a Chinese or Vietnamese-capable font. */
+:lang(vi) body { line-height: 1.6; }
+:lang(zh-Hans) body {
+  line-height: 1.7;
+  font-family: var(--font-plex-sans), 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+}
+
+/* On a touchscreen, buttons and table rows get a finger-sized target. */
+@media (pointer: coarse) {
+  [data-slot='button'] { min-height: 2.75rem; }
+  [data-slot='button'][class*='size-'], [data-slot='button'][class*='w-'] { min-width: 2.75rem; }
+  main table tbody tr { height: 2.75rem; }
+}
+
+/* A board cell that can be dragged shows a grab hand. */
+td[draggable='true'] { cursor: grab; }
+td[draggable='true']:active { cursor: grabbing; }

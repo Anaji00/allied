@@ -580,6 +580,8 @@ def find_order_for_item(item_id: Optional[int], item_name: str = "") -> Optional
             "customer_po_number": row.customer_po_number,
             "customer_name": row.customer_name,
             "purchase_orders": row.purchase_orders or {},
+            "line_items": row.line_items or [],
+            "owner_email": getattr(row, "owner_email", None),
             "facility": row.facility,
             "currency": row.currency,
             "monday_item_id": row.monday_item_id,
@@ -681,6 +683,15 @@ def handle_create_order(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _queue_drafts(name: str, intents: list) -> list:
+    """Puts emails in the approval queue (nothing is sent) and tells the reviewers once that drafts are waiting."""
+    from app.services.coordination import autopilot
+
+    did = autopilot.carry_out(name, "suggest", intents)
+    autopilot.tell_reviewers(did)
+    return did
+
+
 def handle_release_po(event: Dict[str, Any]) -> Dict[str, Any]:
     from app.services.outbound_email_service import outbound_email_service
 
@@ -692,17 +703,24 @@ def handle_release_po(event: Dict[str, Any]) -> Dict[str, Any]:
     # Only a PO that really went out counts as released. One drafted while mail was off,
     # or held for a missing supplier email, is sent the next time "Send PO" fires.
     # Earlier runs are read from the database, so a restart can't email a supplier twice.
-    sent = _pos_sent(item_id) | {
-        str(m.get("reference")) for m in outbound_email_service.get_outbox(limit=500)
-        if m.get("category") == "PURCHASE_ORDER" and m.get("status") == "SENT"
-    }
+    sent = _pos_sent(item_id) | outbound_email_service.really_sent("PURCHASE_ORDER")      # the send ledger, not the in-memory outbox
+    from app.core.database import SessionLocal as _Session
+    from app.models.db_models import PurchaseOrderDB as _PO
+
+    with _Session() as _db:          # the purchase order records know about sends from before the ledger existed, and about cancellations
+        _rows = _db.query(_PO.po_number, _PO.status).filter(_PO.po_number.isnot(None)).all()
+    sent |= {str(n) for n, st in _rows if st in ("SENT", "ACKNOWLEDGED", "SENDING")}
+    cancelled = {str(n) for n, st in _rows if st == "CANCELLED"}
     wanted = {str(po) for po in (order["purchase_orders"] or {}).values()}
-    if wanted and wanted <= sent:
-        return {"skipped": "every purchase order for this item was already sent", "sent": sorted(wanted)}
+    if wanted and (wanted - cancelled) <= sent:
+        return {"skipped": "every purchase order for this item was already sent or cancelled", "sent": sorted(wanted & sent), "cancelled": sorted(wanted & cancelled)}
 
     vendors = _orchestrator().entity_matcher.vendors_cache
     outcomes = {}
     for vendor_code, po_number in (order["purchase_orders"] or {}).items():
+        if str(po_number) in cancelled:
+            outcomes[vendor_code] = {"po": po_number, "status": "cancelled, not sent"}
+            continue
         if str(po_number) in sent:
             outcomes[vendor_code] = {"po": po_number, "status": "sent earlier"}
             continue
@@ -711,23 +729,80 @@ def handle_release_po(event: Dict[str, Any]) -> Dict[str, Any]:
         if not email:
             outcomes[vendor_code] = {"po": po_number, "status": "no supplier email on file"}
             continue
-        sent = outbound_email_service.send_purchase_order(
-            vendor_name=vendor.get("vendor_name", vendor_code),
-            vendor_email=email,
-            po_number=str(po_number),
-            body=(
-                f"Please find Allied Welding Systems purchase order {po_number} "
-                f"(our ref SO #{order['sales_order_number']}, customer PO {order['customer_po_number']}).\n\n"
-                f"BLIND SHIPMENT: do not include pricing or your invoice in the crate."
-            ),
-        )
-        outcomes[vendor_code] = {"po": po_number, "status": sent.get("status", "recorded")}
+        vendor_name = vendor.get("vendor_name", vendor_code)
+        from app.services.coordination import jobs as _jobs
+
+        kept = _jobs.po_for_vendor(str(order["sales_order_number"]), vendor_name)
+        if kept and str(po_number) != kept:
+            po_number = kept                 # this vendor already has a PO on the job: same number, no second PO
+            if kept in sent:
+                outcomes[vendor_code] = {"po": po_number, "status": "sent earlier"}
+                continue
+        lines = "\n".join(f"  - {l.get('quantity', 1)} x {l.get('description') or l.get('raw_item_text') or l.get('item_id')}"
+                          + (f" (drawing {l['drawing_ref']})" if l.get("drawing_ref") else "")
+                          for l in (order.get("line_items") or []) if isinstance(l, dict))
+        # The vendor sees the PO number and what to make; never our sales order number or the customer.
+        body = (f"Hello,\n\nPlease find Allied Welding Systems purchase order {po_number}.\n"
+                + (f"\nItems:\n{lines}\n" if lines else "")
+                + "\nBLIND SHIPMENT: do not include pricing or your invoice in the crate, and no company markings other than ours.\n"
+                  "Please confirm you have it and tell us your ship date.\n\nThank you,\nAllied Welding Systems")
+        if settings.VENDOR_PO_MODE == "auto":
+            from app.services.coordination import purchase_orders as _purchase_orders
+
+            rec = _purchase_orders.by_number(str(po_number))
+            token = None
+            if rec:                      # a PO that has its own record is claimed like any other send, so the approval queue can never send it again
+                try:
+                    token = _purchase_orders.begin_send(rec["id"])
+                except ValueError as exc:
+                    outcomes[vendor_code] = {"po": po_number, "status": f"not sent: {exc}"}
+                    continue
+            try:
+                mail_result = outbound_email_service.send_purchase_order(vendor_name=vendor_name, vendor_email=email, po_number=str(po_number), body=body)
+            except Exception:
+                if rec:
+                    _purchase_orders.finish_send(rec["id"], False, token)
+                raise
+            if rec:
+                _purchase_orders.finish_send(rec["id"], mail_result.get("status") == "SENT" and not mail_result.get("redirected"), token)
+            if mail_result.get("redirected"):          # a pilot mail reached the test inbox, not the vendor: it must never be remembered as "sent"
+                outcomes[vendor_code] = {"po": po_number, "status": "pilot test mail only, not sent to the vendor"}
+            else:
+                outcomes[vendor_code] = {"po": po_number, "status": mail_result.get("status", "recorded")}
+            continue
+        from app.services import order_documents
+        from app.services.coordination.autopilot import Intent, reviewers
+
+        _queue_drafts("vendor_po", [Intent("draft", f"vendor-po:{po_number}", f"Send purchase order {po_number} to {vendor_name}",
+                                            to=reviewers(order.get("owner_email")), tool="send_vendor_po",
+                                            args={"to": email, "vendor_name": vendor_name, "po_number": str(po_number), "body": body,
+                                                  "lines": order_documents.po_lines(order.get("line_items") or [])})])
+        outcomes[vendor_code] = {"po": po_number, "status": "drafted for approval"}
 
     summary = "; ".join(f"{v} PO #{o['po']}: {o['status']}" for v, o in outcomes.items()) or "stock order, no vendor POs"
     _monday().post_pulse_update(
         item_id, f"Purchase orders for SO #{order['sales_order_number']}: {summary}", _idem(event, "po-update")
     )
     return {"sales_order_number": order["sales_order_number"], "purchase_orders": outcomes}
+
+
+def _queue_shipment_notice(order: Dict[str, Any], result: Any) -> None:
+    """The shipment notice to the customer is queued as a draft for a person to approve; it never goes out by itself."""
+    text = getattr(result, "customer_notification_email", "") or ""
+    head, _, body = text.partition("\n\n")
+    fields = {ln.split(":", 1)[0].strip().lower(): ln.split(":", 1)[1].strip() for ln in head.splitlines() if ":" in ln}
+    to = fields.get("to", "")
+    from app.services.coordination.autopilot import Intent, reviewers
+
+    ref = f"{order['sales_order_number']}:{getattr(result, 'tracking_number', '')}"
+    if "@" in to and body.strip():
+        _queue_drafts("shipment_notice", [Intent("draft", f"ship-notice:{ref}", f"Tell {to} their order has shipped",
+                                                  to=reviewers(order.get("owner_email")), tool="send_email",
+                                                  args={"to": to, "subject": fields.get("subject") or "Shipment notification", "body": body.strip()})])
+    else:
+        _queue_drafts("shipment_notice", [Intent("alert", f"ship-notice-noaddr:{ref}", "Shipment notice needs an address", to=reviewers(order.get("owner_email")),
+                                                  title="Shipment sent: no customer email on file",
+                                                  body=f"Order {order['sales_order_number']} shipped, but there is no customer email to draft the notice to. Tell the customer by hand.")])
 
 
 def handle_dispatch(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -741,6 +816,13 @@ def handle_dispatch(event: Dict[str, Any]) -> Dict[str, Any]:
 
     order = find_order_for_item(item_id, event.get("pulseName") or "")
     if not order:
+        from app.core.database import SessionLocal
+        from app.models.db_models import VendorJobDB
+
+        with SessionLocal() as db:
+            line = db.query(VendorJobDB).filter(VendorJobDB.monday_item_id == str(item_id)).first()
+        if line is not None:   # a vendor's PO line: SHIPPED means the vendor shipped to us, not that we dispatched a customer's order
+            return {"skipped": f"this is {line.vendor}'s PO {line.po_number or ''} line, not a customer order; the vendor shipping is tracked on the vendor job"}
         raise PermanentEventError("No Allied sales order is linked to this board item; nothing was dispatched.")
 
     result = logistics_dispatcher.dispatch_shipment(
@@ -750,6 +832,7 @@ def handle_dispatch(event: Dict[str, Any]) -> Dict[str, Any]:
             currency=order.get("currency") or "USD",
         )
     )
+    _queue_shipment_notice(order, result)
     _write_back(event, "Shipped")
     _monday().post_pulse_update(
         item_id,

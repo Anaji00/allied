@@ -7,18 +7,12 @@ import { toast } from 'sonner';
 import { Copy, ExternalLink, Loader2 } from 'lucide-react';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
-import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/components/data/filters';
+import { Field, FilterChips, NativeSelect, PanelHeading } from '@/components/data/filters';
+import { TabsWithMore } from '@/components/data/tabs-more';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
@@ -50,8 +44,9 @@ export function LeadsView() {
   const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS).withDefault('accounts'));
   return (
     <div className="grid gap-4">
-      <SectionTabs
+      <TabsWithMore
         label="Sales sections"
+        show={2}
         value={tab}
         onChange={(t) => void setTab(t === 'accounts' ? null : t)}
         tabs={[
@@ -94,7 +89,7 @@ function Accounts() {
       cell: (c) => (
         <span className="grid">
           <span className="truncate font-medium">{c.getValue()}</span>
-          <span className="truncate text-[11px] text-muted-foreground">
+          <span className="truncate text-xs text-muted-foreground">
             {c.row.original.plant_name} · {c.row.original.location}
           </span>
         </span>
@@ -105,13 +100,20 @@ function Accounts() {
       cell: (c) => (
         <span className="grid">
           <span>{c.getValue()}</span>
-          <span className="text-[11px] text-muted-foreground">{c.row.original.contact_title}</span>
+          <span className="text-xs text-muted-foreground">{c.row.original.contact_title}</span>
         </span>
       ),
     }),
-    col.accessor('primary_wear_bottlenecks', { header: 'Parts that wear out', meta: { className: 'max-w-64 truncate' }, cell: (c) => c.getValue().join(', ') || '–' }),
+    col.accessor('primary_wear_bottlenecks', {
+      header: 'Parts that wear out',
+      meta: { className: 'max-w-64 truncate' },
+      cell: (c) => c.getValue().join(', ') || '–',
+    }),
     col.accessor('estimated_annual_spend', { header: 'Est. spend / yr', meta: { align: 'right' }, cell: (c) => money(c.getValue()) }),
-    col.accessor('status', { header: 'Status', cell: (c) => <ToneBadge tone={STATUS_TONE[c.getValue()] ?? 'neutral'}>{words(c.getValue())}</ToneBadge> }),
+    col.accessor('status', {
+      header: 'Status',
+      cell: (c) => <ToneBadge tone={STATUS_TONE[c.getValue()] ?? 'neutral'}>{words(c.getValue())}</ToneBadge>,
+    }),
   ]);
 
   return (
@@ -123,7 +125,11 @@ function Accounts() {
           void setIndustry(v === 'All' ? null : v);
           open(undefined);
         }}
-        options={INDUSTRIES.map((i) => ({ value: i, label: i === 'All' ? 'All industries' : i, count: data ? list.filter((a) => inIndustry(a, i)).length : undefined }))}
+        options={INDUSTRIES.map((i) => ({
+          value: i,
+          label: i === 'All' ? 'All industries' : i,
+          count: data ? list.filter((a) => inIndustry(a, i)).length : undefined,
+        }))}
       />
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_26rem]')}>
         <div className="min-w-0">
@@ -145,7 +151,13 @@ function Accounts() {
             />
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => open(undefined)} recordName={selected ? recordKey('account', selected.account_id) : undefined} title={selected?.company ?? ''} description={selected ? `${selected.plant_name} · ${selected.location}` : undefined}>
+        <DetailPanel
+          open={Boolean(selected)}
+          onClose={() => open(undefined)}
+          recordName={selected ? recordKey('account', selected.account_id) : undefined}
+          title={selected?.company ?? ''}
+          description={selected ? `${selected.plant_name} · ${selected.location}` : undefined}
+        >
           {selected && <AccountDetail key={selected.account_id} account={selected} />}
         </DetailPanel>
       </div>
@@ -160,7 +172,9 @@ function AccountDetail({ account: a }: { account: Account }) {
   const [asking, setAsking] = useState(false);
   const outreach = useMutation({
     mutationFn: async () =>
-      (await generateLeadOutreach({ name: a.key_contact, title: a.contact_title, company: a.company, industry: a.industry })) as { email_body: string },
+      (await generateLeadOutreach({ name: a.key_contact, title: a.contact_title, company: a.company, industry: a.industry })) as {
+        email_body: string;
+      },
     onSuccess: (res) => setDraft(res.email_body),
     onError: (e) => toast.error('No draft this time', { description: e.message }),
   });
@@ -198,7 +212,13 @@ function AccountDetail({ account: a }: { account: Account }) {
                 <p className="text-xs text-muted-foreground">Edit it, then copy it into your own email. Nothing is sent from here.</p>
               </>
             ) : (
-              <Button size="sm" variant="outline" className="justify-self-start" onClick={() => outreach.mutate()} disabled={outreach.isPending}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="justify-self-start"
+                onClick={() => outreach.mutate()}
+                disabled={outreach.isPending}
+              >
                 {outreach.isPending && <Loader2 className="animate-spin" />}
                 {outreach.isPending ? 'Writing…' : `Draft an email to ${a.key_contact}`}
               </Button>
@@ -206,7 +226,9 @@ function AccountDetail({ account: a }: { account: Account }) {
           </div>
           <div className="grid gap-2 rounded-md border p-3">
             <PanelHeading>Drawings and specs</PanelHeading>
-            <p className="text-xs text-muted-foreground">Send the contact a link to the spec form, so engineering can quote to their exact sizes.</p>
+            <p className="text-xs text-muted-foreground">
+              Send the contact a link to the spec form, so engineering can quote to their exact sizes.
+            </p>
             <Button size="sm" variant="outline" className="justify-self-start" onClick={() => setAsking(true)}>
               Ask for drawings…
             </Button>
@@ -240,7 +262,8 @@ function AskForSpecsDialog({ open, onOpenChange, contact }: { open: boolean; onO
       },
     onSuccess: (res) => {
       if (res.status === 'sent') toast.success(`Spec form sent to ${email.trim()}`);
-      else if (res.status === 'drafted') toast.info('Kept as a draft, not sent', { description: res.delivery_detail ?? 'Outgoing mail isn’t set up.' });
+      else if (res.status === 'drafted')
+        toast.info('Kept as a draft, not sent', { description: res.delivery_detail ?? 'Outgoing mail isn’t set up.' });
       else toast.error('The email failed', { description: res.delivery_detail });
       setEmail('');
       setItem('');
@@ -255,8 +278,8 @@ function AskForSpecsDialog({ open, onOpenChange, contact }: { open: boolean; onO
         <DialogHeader>
           <DialogTitle>Ask {contact} for drawings?</DialogTitle>
           <DialogDescription>
-            This emails a link to the spec form. If outgoing mail isn’t set up it’s kept as a draft instead. With a monday item,
-            a note is added to that item too.
+            This emails a link to the spec form. If outgoing mail isn’t set up it’s kept as a draft instead. With a monday item, a note is
+            added to that item too.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -334,7 +357,11 @@ function SavingsCalculator() {
   }, [form]);
 
   const body = Object.fromEntries(Object.entries(debounced).map(([k, v]) => [k, TEXT_KEYS.has(k) ? v : Number(v) || 0]));
-  const { data: roi, error, isFetching } = useQuery({
+  const {
+    data: roi,
+    error,
+    isFetching,
+  } = useQuery({
     queryKey: ['leads', 'roi', body],
     queryFn: async () => (await ok(api.POST('/api/v1/leads/roi-calculator', { body: body as never }))) as Roi,
     placeholderData: keepPreviousData,
@@ -475,7 +502,7 @@ const prospectColumns = pcol.columns([
     cell: (c) => (
       <span className="grid">
         <span className="font-medium">{c.getValue() || 'Name not shown'}</span>
-        <span className="text-[11px] text-muted-foreground">{c.row.original.title}</span>
+        <span className="text-xs text-muted-foreground">{c.row.original.title}</span>
       </span>
     ),
   }),
@@ -485,7 +512,12 @@ const prospectColumns = pcol.columns([
     header: '',
     cell: (c) =>
       /^https:\/\//.test(c.getValue()) ? (
-        <a href={c.getValue()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs underline underline-offset-2">
+        <a
+          href={c.getValue()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs underline underline-offset-2"
+        >
           Profile <ExternalLink className="size-3" />
         </a>
       ) : null,
@@ -539,8 +571,8 @@ function Prospects() {
         </Button>
       </form>
       <p className="text-xs text-muted-foreground">
-        Searches public LinkedIn profiles through the web. Results are only what the search found, with no email addresses; check a
-        profile before reaching out.
+        Searches public LinkedIn profiles through the web. Results are only what the search found, with no email addresses; check a profile
+        before reaching out.
       </p>
       {search.isPending ? (
         <RowsSkeleton rows={5} />

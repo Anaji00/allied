@@ -12,12 +12,21 @@ from app.services.reconciliation_service import (
 client = TestClient(app)
 
 
+def _own_po() -> str:
+    """A private copy of PO-ZIBO-4412 for this test: the database is shared, and a PO already billed in full by another test would (correctly) flag a second full bill."""
+    import copy
+    import uuid
+    name = f"PO-ZIBO-{uuid.uuid4().hex[:6].upper()}"
+    reconciliation_service._authorized_pos[name] = copy.deepcopy(reconciliation_service._authorized_pos["PO-ZIBO-4412"])
+    return name
+
+
 def test_reconciliation_exact_match_approval():
     """Verify clean 3-way match approves invoice without discrepancies."""
     inv = VendorInvoice(
         invoice_number="INV-ZIBO-TEST-01",
         vendor_name="ZIBO",
-        po_number="PO-ZIBO-4412",
+        po_number=_own_po(),
         lines=[
             VendorInvoiceLine(
                 item_id="HOSE-CERAMIC-4IN",

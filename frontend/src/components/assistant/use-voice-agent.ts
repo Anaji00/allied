@@ -90,17 +90,21 @@ export function useVoiceAgent({
         setHeard(reply.transcript);
         cb.current.onTurn(reply);
         const waiting = (reply.plan?.action_ids?.length ?? 0) > 0 || (reply.held?.length ?? 0) > 0;
+        // Hands-free: keep listening after every answer until the person says stop, taps again, or stays quiet.
+        const wantsStop =
+          reply.voice_intent === 'stop' || /^\s*(stop|cancel|quiet|be quiet|enough|that'?s all|goodbye)(\W|$)/i.test(reply.transcript ?? '');
+        const again = waiting || !wantsStop;
         speak(reply, () => {
           if (!live.current || mine !== turn.current) return;
-          // Keep the conversation going while something waits on a yes; otherwise rest until tapped.
-          if (waiting) void listenRef.current();
+          // Keep the conversation going until the person says stop; silence ends it.
+          if (again) void listenRef.current();
           else {
             live.current = false;
             setState('off');
           }
         });
         if (reply.spoken?.mode !== 'browser') {
-          if (waiting) void listenRef.current();
+          if (again) void listenRef.current();
           else {
             live.current = false;
             setState('off');

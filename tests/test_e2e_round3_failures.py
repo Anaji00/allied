@@ -185,7 +185,7 @@ def test_gmail_refusing_a_send_leaves_the_draft_to_retry_and_nothing_marked_done
     monkeypatch.setattr(outbound_email_service, "_deliver", refuse)
     r = rfqs.create({"customer": "Vulcan", "subject": "Chute", "contact_email": f"v{uuid.uuid4().hex[:5]}@vulcan.test"},
                     {"email": "intake"}, source="email")
-    [ack] = [a for a in agent.pending({"email": REVIEWER, "role": "MANAGER"}) if r["number"] in a["summary"]]
+    [ack] = [a for a in agent.pending({"email": REVIEWER, "role": "MANAGER"}) if r["number"] in a["summary"] and a.get("tool") == "send_email"]
     assert agent.decide(ack["id"], True, {"email": REVIEWER, "role": "MANAGER"})["status"] == "FAILED"
     assert rfqs.get(r["id"])["status"] == "NEW"                       # the customer heard nothing
     # Gmail is back. The next hourly run offers the draft again; a person sends it.
@@ -194,7 +194,8 @@ def test_gmail_refusing_a_send_leaves_the_draft_to_retry_and_nothing_marked_done
     again = [a for a in agent.pending({"email": REVIEWER, "role": "MANAGER"}) if a["id"] == ack["id"]]
     assert again, "a draft whose send failed must come back for a person to retry"
     assert agent.decide(ack["id"], True, {"email": REVIEWER, "role": "MANAGER"})["status"] == "DONE"
-    assert rfqs.get(r["id"])["status"] == "ACKNOWLEDGED" and len(day["sent"]) == 1
+    # the staff alert about the failed send ("[Behind] Email failed ...") is held until working hours and goes out whenever mail works again: only the customer's mail counts here
+    assert rfqs.get(r["id"])["status"] == "ACKNOWLEDGED" and len([s for s in day["sent"] if not str(s).startswith("[Behind]")]) == 1
 
 
 # ---------------------------------------------------------------------------

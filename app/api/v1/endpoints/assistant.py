@@ -162,7 +162,7 @@ def voice_command(file: Optional[UploadFile] = File(None, description="The recor
         audio = b"".join(chunks) or None
     try:
         history = json.loads(messages) if messages.strip() else []
-    except ValueError:
+    except (ValueError, RecursionError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="messages must be JSON.")
     try:
         return voice.command(user, audio, (file.filename if file else "") or "", transcript, history if isinstance(history, list) else [],

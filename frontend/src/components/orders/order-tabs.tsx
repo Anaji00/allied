@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { fetchInboxFeed, fetchReconciliationHistory, matchVendorInvoice, pollMailboxNow, simulateInboundEmail } from '@/lib/api';
-import { money } from '@/lib/format';
+import { kindWord, money } from '@/lib/format';
 import { useHealth } from '@/lib/queries';
 import { useSuppliers } from './use-orders';
 
@@ -31,19 +31,38 @@ type FeedRow = {
 };
 
 const poText = (pos: FeedRow['purchase_orders']) =>
-  Array.isArray(pos) ? pos.join(', ') : pos ? Object.entries(pos).map(([v, p]) => `${v} ${p}`).join(', ') : '';
+  Array.isArray(pos)
+    ? pos.join(', ')
+    : pos
+      ? Object.entries(pos)
+          .map(([v, p]) => `${v} ${p}`)
+          .join(', ')
+      : '';
 
 const feedCol = columnHelper<FeedRow>();
 const feedColumns = feedCol.columns([
   feedCol.accessor('customer_name', { header: 'Customer' }),
-  feedCol.accessor('customer_po_number', { header: 'Customer PO', cell: (c) => <span className="font-mono text-xs">{c.getValue() || '–'}</span> }),
-  feedCol.accessor('sales_order_number', { header: 'Sales order', cell: (c) => <span className="font-mono text-xs">{c.getValue() || '–'}</span> }),
-  feedCol.accessor('purchase_orders', { header: 'Supplier POs', cell: (c) => poText(c.getValue()) || <span className="text-muted-foreground">From stock</span> }),
+  feedCol.accessor('customer_po_number', {
+    header: 'Customer PO',
+    cell: (c) => <span className="font-mono text-xs">{c.getValue() || '–'}</span>,
+  }),
+  feedCol.accessor('sales_order_number', {
+    header: 'Sales order',
+    cell: (c) => <span className="font-mono text-xs">{c.getValue() || '–'}</span>,
+  }),
+  feedCol.accessor('purchase_orders', {
+    header: 'Supplier POs',
+    cell: (c) => poText(c.getValue()) || <span className="text-muted-foreground">From stock</span>,
+  }),
   feedCol.accessor('line_items_count', { header: 'Lines', meta: { align: 'right' } }),
   feedCol.accessor('status', {
     header: 'Result',
     cell: (c) =>
-      c.getValue() === 'PROCESSED_ORDER_CREATED' ? <ToneBadge tone="ok">Order created</ToneBadge> : <ToneBadge>{c.getValue() || '–'}</ToneBadge>,
+      c.getValue() === 'PROCESSED_ORDER_CREATED' ? (
+        <ToneBadge tone="ok">Order created</ToneBadge>
+      ) : (
+        <ToneBadge>{c.getValue() || '–'}</ToneBadge>
+      ),
   }),
 ]);
 
@@ -51,7 +70,11 @@ export function OrderEmails() {
   const { hasRole } = useAuth();
   const { data: health } = useHealth();
   const client = useQueryClient();
-  const feed = useQuery({ queryKey: ['orders', 'emails'], queryFn: () => fetchInboxFeed(50) as Promise<FeedRow[]>, refetchInterval: 60_000 });
+  const feed = useQuery({
+    queryKey: ['orders', 'emails'],
+    queryFn: () => fetchInboxFeed(50) as Promise<FeedRow[]>,
+    refetchInterval: 60_000,
+  });
   const [open, setOpen] = useState<FeedRow | null>(null);
 
   const poll = useMutation({
@@ -66,7 +89,9 @@ export function OrderEmails() {
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm text-muted-foreground">Customer POs that arrive by email become a sales order and supplier POs automatically.</p>
+        <p className="text-sm text-muted-foreground">
+          Customer POs that arrive by email become a sales order and supplier POs automatically.
+        </p>
         {hasRole('OPERATOR') && (
           <Button variant="outline" size="sm" className="ml-auto" onClick={() => poll.mutate()} disabled={poll.isPending}>
             {poll.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
@@ -88,7 +113,12 @@ export function OrderEmails() {
           empty={<EmptyState title="No order emails yet">Emails from customers with a PO attached show up here once read.</EmptyState>}
         />
       )}
-      <DetailPanel open={Boolean(open)} onClose={() => setOpen(null)} title={`Reply to ${open?.customer_name ?? ''}`} description="The order acknowledgment the system wrote">
+      <DetailPanel
+        open={Boolean(open)}
+        onClose={() => setOpen(null)}
+        title={`Reply to ${open?.customer_name ?? ''}`}
+        description="The order acknowledgment the system wrote"
+      >
         <pre className="font-sans text-sm whitespace-pre-wrap">{open?.customer_acknowledgment_email}</pre>
       </DetailPanel>
       {health?.simulation_mode && hasRole('OPERATOR') && <SampleEmail />}
@@ -113,7 +143,10 @@ function SampleEmail() {
     },
     onError: (e) => toast.error('The sample email failed', { description: e.message }),
   });
-  const field = (k: keyof typeof form) => ({ value: form[k], onChange: (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value }) });
+  const field = (k: keyof typeof form) => ({
+    value: form[k],
+    onChange: (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value }),
+  });
 
   return (
     <details className="rounded-lg border bg-card p-4">
@@ -172,6 +205,8 @@ const BILL_RESULT: Record<string, { label: string; tone: 'ok' | 'bad' | 'warn' }
   DISCREPANCY_QTY: { label: 'Quantity differs', tone: 'bad' },
   DISCREPANCY_FREIGHT: { label: 'Freight differs', tone: 'warn' },
   UNMATCHED_NO_PO: { label: 'No matching PO', tone: 'bad' },
+  DISCREPANCY_FLAGGED: { label: 'Needs a check', tone: 'warn' },
+  DUPLICATE_INVOICE: { label: 'Already entered', tone: 'warn' },
 };
 
 const billCol = columnHelper<Bill>();
@@ -199,7 +234,7 @@ const billColumns = billCol.columns([
   billCol.accessor('reconciliation_status', {
     header: 'Result',
     cell: (c) => {
-      const r = BILL_RESULT[c.getValue()] ?? { label: c.getValue(), tone: 'warn' as const };
+      const r = BILL_RESULT[c.getValue()] ?? { label: kindWord(c.getValue()), tone: 'warn' as const };
       return <ToneBadge tone={r.tone}>{r.label}</ToneBadge>;
     },
   }),
@@ -207,7 +242,11 @@ const billColumns = billCol.columns([
 
 export function SupplierBills() {
   const { hasRole } = useAuth();
-  const bills = useQuery({ queryKey: ['orders', 'bills'], queryFn: () => fetchReconciliationHistory(50) as Promise<Bill[]>, refetchInterval: 60_000 });
+  const bills = useQuery({
+    queryKey: ['orders', 'bills'],
+    queryFn: () => fetchReconciliationHistory(50) as Promise<Bill[]>,
+    refetchInterval: 60_000,
+  });
   const [open, setOpen] = useState<Bill | null>(null);
 
   return (
@@ -230,7 +269,12 @@ export function SupplierBills() {
           empty={<EmptyState title="No bills checked yet">Bills read from email or checked below appear here.</EmptyState>}
         />
       )}
-      <DetailPanel open={Boolean(open)} onClose={() => setOpen(null)} title={`Bill ${open?.invoice_number ?? ''}`} description={open?.vendor_name}>
+      <DetailPanel
+        open={Boolean(open)}
+        onClose={() => setOpen(null)}
+        title={`Bill ${open?.invoice_number ?? ''}`}
+        description={open?.vendor_name}
+      >
         {open?.dispute_email_draft ? (
           <div className="grid gap-2">
             <h3 className="text-xs font-medium text-muted-foreground">Dispute email (draft, not sent)</h3>
@@ -248,7 +292,16 @@ export function SupplierBills() {
 function CheckBill() {
   const client = useQueryClient();
   const { data: suppliers } = useSuppliers();
-  const empty = { invoice_number: '', vendor_name: '', po_number: '', item_id: '', quantity_billed: '', unit_cost_billed: '', freight_billed: '0', total_amount_billed: '' };
+  const empty = {
+    invoice_number: '',
+    vendor_name: '',
+    po_number: '',
+    item_id: '',
+    quantity_billed: '',
+    unit_cost_billed: '',
+    freight_billed: '0',
+    total_amount_billed: '',
+  };
   const [form, setForm] = useState(empty);
   const check = useMutation({
     mutationFn: () => {
@@ -272,7 +325,10 @@ function CheckBill() {
     },
     onError: (e) => toast.error('Couldn’t check the bill', { description: e.message }),
   });
-  const field = (k: keyof typeof empty) => ({ value: form[k], onChange: (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value }) });
+  const field = (k: keyof typeof empty) => ({
+    value: form[k],
+    onChange: (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value }),
+  });
 
   return (
     <details className="rounded-lg border bg-card p-4">

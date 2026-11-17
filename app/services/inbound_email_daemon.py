@@ -286,7 +286,7 @@ class InboundEmailDaemon:
             line_items=line_items,
             notes=(
                 f"Autonomous Email Ingestion from {email.sender_email} (Ref: {email.email_id})"
-                + (" -- no customer PO found in the email; needs a PO number." if po_number.startswith("PO-NOPO-") else "")
+                + (" -- no customer reference found in the email; needs the customer's order reference." if po_number.startswith("PO-NOPO-") else "")
             ),
             payment_terms=matched_cust.get("payment_terms", "Net 30 Days"),
         )
@@ -333,7 +333,7 @@ class InboundEmailDaemon:
             ack_body = (
                 f"From: Allied Welding Systems Orders <orders@alliedweldingsystems.com>\n"
                 f"To: {email.sender_email}\n"
-                f"Subject: Order Received - Under Review (Your PO: {po_number})\n\n"
+                f"Subject: Order Received - Under Review (Your reference: {po_number})\n\n"
                 f"Dear {customer_name} Team,\n\n"
                 f"We have received your purchase order #{po_number}. Our engineering and pricing desk "
                 f"is verifying current mill lead times and stock availability.\n\n"
@@ -712,9 +712,9 @@ class InboundEmailDaemon:
         return (
             f"From: Allied Welding Systems Orders <orders@alliedweldingsystems.com>\n"
             f"To: {recipient_email}\n"
-            f"Subject: Order Acknowledgment - Your PO {po_number}\n\n"
+            f"Subject: Order Acknowledgment - Your reference {po_number}\n\n"
             f"Dear {customer_name} Purchasing Team,\n\n"
-            f"Thank you for your order. We have successfully logged and processed your PO {po_number}.\n\n"
+            f"Thank you for your order. We have successfully logged and processed your order, reference {po_number}.\n\n"
             f"Order Breakdown:\n"
             f"{item_rows}\n\n"
             f"Our production scheduling team has verified material allocation and mill test certificates (MTR). "

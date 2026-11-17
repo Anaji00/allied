@@ -5,10 +5,16 @@ import { parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Check, Loader2, RefreshCw, X } from 'lucide-react';
-import { CarrierPrices } from './carrier-prices';
+import { FormsEditor } from './forms-editor';
+import { MondayChanges, useMondayStatus } from './monday-changes';
+import { TemplatesEditor } from './templates-editor';
 import { DataTable, columnHelper } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
-import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/components/data/filters';
+import { AutomationList } from './automation-list';
+import { BackupsCard } from './backups-card';
+import { SetupCard } from './setup-card';
+import { Field, FilterChips, NativeSelect, PanelHeading } from '@/components/data/filters';
+import { TabsWithMore } from '@/components/data/tabs-more';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
@@ -21,29 +27,44 @@ import { dateTime, since, words } from '@/lib/format';
 import { useAutomationStatus, useHealth } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
-const TABS = ['health', 'automation', 'monday', 'carriers', 'fedex'] as const;
+const TABS = ['health', 'automation', 'monday', 'changes', 'forms', 'templates'] as const;
 
 export function SystemView() {
   const { hasRole } = useAuth();
+  const mondayWaiting = useMondayStatus().data?.staged ?? 0;
   const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS).withDefault('health'));
   return (
     <div className="grid gap-4">
-      <SectionTabs
+      <TabsWithMore
         label="System sections"
+        show={hasRole('OPERATOR') ? 3 : 2}
         value={tab}
         onChange={(t) => void setTab(t === 'health' ? null : t)}
         tabs={[
           ['health', 'Health'],
           ['automation', 'What runs by itself'],
+          ...(hasRole('OPERATOR') ? ([['changes', mondayWaiting ? `monday changes (${mondayWaiting})` : 'monday changes']] as const) : []),
           ['monday', 'monday.com link'],
-          ['carriers', 'Carrier prices'],
-          ...(hasRole('MANAGER') ? ([['fedex', 'FedEx']] as const) : []),
+          ...(hasRole('MANAGER') ? ([['forms', 'Required forms']] as const) : []),
+          ...(hasRole('MANAGER') ? ([['templates', 'Job templates']] as const) : []),
         ]}
       />
-      {tab === 'carriers' && <CarrierPrices />}
-      {tab === 'fedex' && hasRole('MANAGER') && <FedEx />}
-      {tab === 'health' && <Health />}
-      {tab === 'automation' && <Automation />}
+      {tab === 'changes' && hasRole('OPERATOR') && <MondayChanges />}
+      {tab === 'forms' && hasRole('MANAGER') && <FormsEditor />}
+      {tab === 'templates' && hasRole('MANAGER') && <TemplatesEditor />}
+      {tab === 'health' && (
+        <>
+          <SetupCard />
+          <BackupsCard />
+          <Health />
+        </>
+      )}
+      {tab === 'automation' && (
+        <>
+          <AutomationList />
+          <Automation />
+        </>
+      )}
       {tab === 'monday' && <Monday />}
     </div>
   );
@@ -80,7 +101,7 @@ function Card({
 
 type FedExStatus = { enabled: boolean; env?: string; ready: boolean; missing?: string[]; detail?: string };
 
-function FedEx() {
+export function FedEx() {
   const status = useQuery({
     queryKey: ['fedex', 'status'],
     queryFn: async (): Promise<FedExStatus | null> => {
@@ -97,7 +118,8 @@ function FedEx() {
       if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : `The check failed (${res.status}).`);
       return body as { ok: boolean; detail?: string };
     },
-    onSuccess: (r) => (r.ok ? toast.success(r.detail || 'Connected to FedEx') : toast.warning('FedEx isn’t connected', { description: r.detail })),
+    onSuccess: (r) =>
+      r.ok ? toast.success(r.detail || 'Connected to FedEx') : toast.warning('FedEx isn’t connected', { description: r.detail }),
     onError: (e) => toast.error('The check failed', { description: e.message }),
   });
 
@@ -113,8 +135,8 @@ function FedEx() {
 
   return (
     <Card
-      title="FedEx"
-      description="Live shipping prices. This only looks up prices; it never books or buys anything."
+      title="FedEx live prices"
+      description="Asks FedEx for a real price alongside your own. This only looks up prices; it never books or buys anything."
       badge={<ToneBadge tone={s.ready ? 'ok' : 'neutral'}>{s.ready ? 'Ready' : s.enabled ? 'Not set up' : 'Off'}</ToneBadge>}
       className="max-w-xl"
     >
@@ -163,7 +185,7 @@ function Health() {
     <div className="grid gap-4">
       <div className={cn('flex flex-wrap items-center gap-3 rounded-lg p-3 text-sm', healthy ? 'bg-ok-soft' : 'bg-warn-soft')}>
         <span className={cn('font-medium', healthy ? 'text-ok' : 'text-warn')}>
-          {healthy ? 'Everything is working' : 'Something needs a look'}
+          {healthy ? 'The services are running' : 'Something needs a look'}
         </span>
         <span className="text-muted-foreground">
           {(data as any).simulation_mode
@@ -542,7 +564,7 @@ function Monday() {
       void client.invalidateQueries({ queryKey: ['monday'] });
       void client.invalidateQueries({ queryKey: ['inbox'] });
     },
-    onError: (e) => toast.error('The event didn’t replay', { description: e.message }),
+    onError: (e) => toast.error('It didn’t run again', { description: e.message }),
   });
 
   const rows = events.data?.events ?? [];

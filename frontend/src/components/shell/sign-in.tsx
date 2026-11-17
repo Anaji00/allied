@@ -15,7 +15,15 @@ export function SignIn() {
   const { loginEmployee } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  // Why they were signed out (for example the password was changed on another device), kept until they sign in.
+  const [error, setError] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return sessionStorage.getItem('allied.signin.notice') ?? '';
+    } catch {
+      return '';
+    }
+  });
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
@@ -25,6 +33,13 @@ export function SignIn() {
     try {
       const result = await loginEmployee(email.trim(), password);
       if (!result.ok) setError(result.error || 'Sign-in failed. Check your email and password.');
+      else {
+        try {
+          sessionStorage.removeItem('allied.signin.notice');
+        } catch {
+          // Nothing to clear.
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -64,6 +79,7 @@ export function SignIn() {
               id="allied-password"
               type="password"
               autoComplete="current-password"
+              maxLength={128}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required

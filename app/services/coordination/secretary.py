@@ -75,7 +75,7 @@ def delivery_reply(email_id: str, sender: str, subject: str, body: str) -> Optio
         for o in orders:
             where = _STATUS.get((o.status or "").upper(), (o.status or "in progress").lower())
             dates = _vendor_dates(o)
-            lines.append(f"- Your PO {o.customer_po_number} (our sales order {o.sales_order_number}) is {where}"
+            lines.append(f"- Your order {o.customer_po_number} is {where}"
                          + (f"; it {' and '.join(dates)}" if dates else "") + ".")
         text = ("Hello,\n\nThank you for checking in. Here is where things stand:\n\n" + "\n".join(lines)
                 + "\n\nWe will let you know as soon as anything changes." + _SIGN)
@@ -83,7 +83,7 @@ def delivery_reply(email_id: str, sender: str, subject: str, body: str) -> Optio
                "Every fact above is from our records (order status and the vendor's dates); check before sending"]
         to_review = reviewers()
     else:
-        text = ("Hello,\n\nThank you for your message. Could you send the PO number (or our sales order number) "
+        text = ("Hello,\n\nThank you for your message. Could you send the order reference number you gave us "
                 "so we can give you an exact update?" + _SIGN)
         why = [f"From {sender}; no PO or sales order number found in the email, so the reply asks for one"]
         to_review = reviewers()
@@ -148,6 +148,10 @@ def brief_for(email: str) -> List[str]:
         for m in p["milestones"]:
             if email in [e.lower() for e in m.get("owner_emails") or []] and m["state"] == "overdue":
                 lines.append(f"Drawing overdue: {m['name']} ({p['name']})")
+    from app.services.coordination import ball
+
+    for b in ball.waiting_on(email)[:6]:
+        lines.append(f"Waiting on you for {round(b['days_waiting'])} day(s): {b['label']}" + (f" ({b['note']})" if b["note"] else ""))
     if email in [r.lower() for r in autopilot.reviewers()]:
         waiting_mail = mail_log.for_summary(days=2)
         if waiting_mail:
@@ -164,6 +168,9 @@ def send_briefs() -> int:
     for p in projects.overview()["projects"]:
         for m in p["milestones"]:
             people |= {e.lower() for e in m.get("owner_emails") or []}
+    from app.services.coordination import ball
+
+    people |= {(b["ball_person"] or "").lower() for b in ball.list_open(include_derived=False) if b["ball_with"] in ball.INTERNAL}
     sent = 0
     today = alerts.today().isoformat()
     for email in sorted(e for e in people if "@" in e):

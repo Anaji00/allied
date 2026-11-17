@@ -470,7 +470,7 @@ class ExceptionQueueService:
                 return "No sender address on file to ask.", False
             entry = outbound_email_service.send(
                 to=sender, subject=f"Re: {source.get('subject') or 'your order'}",
-                body=("Thank you for your order. Before we enter it, could you confirm the PO number, "
+                body=("Thank you for your order. Before we enter it, could you confirm your order reference number, "
                       "the quantities and the prices? We want to be sure we ship exactly what you need."
                       "\n\nAllied Welding Systems"),
                 category="CUSTOMER_CLARIFICATION", reference=item.exception_id,

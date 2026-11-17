@@ -40,7 +40,9 @@ def test_read_only_is_the_default():
     assert type(settings).model_fields["MONDAY_READ_ONLY"].default is True
 
 
-def test_reads_go_out_and_every_write_is_blocked(live, monkeypatch):
+def test_reads_go_out_and_every_write_is_blocked(live, monkeypatch, client):   # (`client` makes sure the tables exist)
+    from app.services import monday_push
+
     monkeypatch.setattr(settings, "MONDAY_READ_ONLY", True)
     client, fake = live
     assert client.live and not client.writable
@@ -51,7 +53,9 @@ def test_reads_go_out_and_every_write_is_blocked(live, monkeypatch):
     assert result["data"]["read_only"] is True
     assert fake.sent == ["query { boards(ids: [1]) { id } }"]      # only the read left
     blocked = [c for c in client.simulated_calls if c.get("blocked") == "read-only"]
-    assert len(blocked) == 3
+    assert len(blocked) == 1                                       # the direct delete; the two ordinary writes were staged, not sent
+    staged = [c for c in monday_push.changes("STAGED") if c["item_id"] == "123"]
+    assert {c["kind"] for c in staged} == {"post_update", "update_columns"}
 
 
 def test_the_transport_refuses_a_write_even_if_called_directly(live, monkeypatch):
@@ -64,6 +68,7 @@ def test_the_transport_refuses_a_write_even_if_called_directly(live, monkeypatch
 
 def test_writes_go_out_only_when_switched_off_for_a_test_board(live, monkeypatch):
     monkeypatch.setattr(settings, "MONDAY_READ_ONLY", False)
+    monkeypatch.setattr(settings, "MONDAY_PUSH_MODE", "auto")          # (in the default "manual" mode they wait for a push: see test_monday_push.py)
     client, fake = live
     assert client.writable
     client.post_pulse_update(123, "on the test board")

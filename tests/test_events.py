@@ -52,9 +52,9 @@ def test_waiting_on_a_vendor_asks_for_the_price_and_a_win_tells_the_team(monkeyp
     r = rfqs.create({"customer": f"OC-Irving {tag}", "subject": "Bottom Hopper"}, USER)
     rfqs.update(r["id"], {"vendor": f"Duke{tag}, Nobody{tag}", "status": "WAITING_VENDOR"}, USER)
     ask = _actions(to=f"duke@{tag}.test")
-    assert len(ask) == 1 and "Price request" in ask[0].args["subject"]
+    assert len(ask) == 1 and ask[0].tool == "send_vendor_price_request" and "price" in ask[0].args["body"].lower() and "{po_number}" not in ask[0].args["body"]
     told = _alerts(f"autopilot:rfq-price-ask:{r['id']}:no-email")
-    assert len(told) == 1 and f"Nobody{tag}" in told[0].title and "Suggested message" in told[0].body  # one note, by hand
+    assert len(told) == 1 and f"Nobody{tag}" in told[0].title and "No email on file" in told[0].body and "price" in told[0].title.lower()  # one note, by hand
 
     rfqs.update(r["id"], {"quote_number": f"Q-{tag}", "status": "QUOTE_SENT"}, USER)
     rfqs.update(r["id"], {"status": "WON"}, USER)

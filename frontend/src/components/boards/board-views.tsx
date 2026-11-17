@@ -207,14 +207,14 @@ export function BoardCalendar({ board, items, onSelect }: { board: Board; items:
                         type="button"
                         onClick={() => onSelect(item)}
                         title={item.name}
-                        className="truncate rounded px-1.5 py-0.5 text-left text-[11px] font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                        className="truncate rounded px-1.5 py-0.5 text-left text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                         style={{ background: colour, color: inkOn(colour) }}
                       >
                         {item.name || '(no name)'}
                       </button>
                     );
                   })}
-                  {here.length > 4 && <span className="px-1 text-[11px] text-muted-foreground">+{here.length - 4} more</span>}
+                  {here.length > 4 && <span className="px-1 text-xs text-muted-foreground">+{here.length - 4} more</span>}
                 </div>
               </div>
             );

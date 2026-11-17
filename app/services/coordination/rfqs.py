@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.exc import IntegrityError
 
+from app.core import status_words
 from app.config import settings
 from app.core.audit import audit_log
 from app.core.database import SessionLocal
@@ -63,6 +64,7 @@ def _as_dict(r: RfqDB) -> Dict[str, Any]:
         d[k] = _iso(d.get(k))
     d["quote_amount"] = str(d["quote_amount"]) if d.get("quote_amount") is not None else None
     d["paused_hours"] = float(d.get("paused_hours") or 0)
+    d["status_word"] = status_words.word("rfq", d.get("status"))
     return d
 
 
@@ -301,6 +303,9 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
                 row.complexity = c
                 row.due_at = workdays.add_days(row.received_at, _quote_days(c))
                 notes.append(f"complexity {c}; quote due date moved")
+        if changes.get("monday_item_id") and str(changes["monday_item_id"]).strip()[:32] != (row.monday_item_id or ""):
+            row.monday_item_id = str(changes["monday_item_id"]).strip()[:32]
+            notes.append(f"added to the Open RFQs board (item {row.monday_item_id})")
         if changes.get("quote_number"):
             row.quote_number = str(changes["quote_number"]).strip()[:64]
         if changes.get("quote_amount") not in (None, ""):
@@ -384,6 +389,21 @@ def from_email(email_id: str, sender: str, sender_name: str, subject: str, body:
 # ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
+
+
+def board_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    """The row for the Open RFQs board, worked out from an RFQ that has just been read: what is being quoted, who for, and the
+    details in Notes. A person reviews and can change every part of it before anything goes to monday."""
+    items = r.get("items") or []
+    what = "; ".join(f"{i.get('quantity') or ''} {i.get('unit') or ''} {i.get('description') or ''}".replace("  ", " ").strip()
+                     for i in items[:6] if i.get("description"))
+    name = (r.get("subject") or what or r["number"]).strip()
+    due = r.get("due_at") or ""
+    lines = [r.get("summary") or "", f"Items: {what}" if what else "",
+             f"From: {r.get('customer') or ''} <{r.get('contact_email') or ''}>".replace(" <>", ""),
+             f"Received: {(r.get('received_at') or '')[:10]}   Quote due: {due[:10]}", f"Allied RFQ {r['number']}"]
+    return {"board_id": settings.MONDAY_RFQ_BOARD_ID or "", "item_name": name[:255], "customer": (r.get("customer") or "")[:120],
+            "status": settings.RFQ_BOARD_NEW_STATUS_LABEL or "", "notes": "\n".join(x for x in lines if x.strip())[:1800]}
 
 
 def _contacts_note(vendor: Optional[str]) -> str:

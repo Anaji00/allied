@@ -44,6 +44,7 @@ def _answer(content, finish="stop"):
 @pytest.fixture
 def groq(monkeypatch):
     monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk_test")
+    monkeypatch.setattr(settings, "GROQ_FALLBACK_MODELS", "")      # one model unless a test sets a list
     calls, replies = [], []
 
     def post(url, json=None, headers=None, timeout=None, **kw):
@@ -171,3 +172,58 @@ def test_recordings_are_transcribed_by_groq_whisper(monkeypatch):
     assert sent["name"] == "recording.wav" and sent["data"]["language"] == "en"
     with pytest.raises(AIUnavailableError, match="25 MB"):
         speech.transcribe(b"0" * (25 * 1024 * 1024 + 1))
+
+
+def _limit(wait="3600"):
+    return FakeResponse(429, {"error": {"message": "limit"}}, headers={"retry-after": wait})
+
+
+@pytest.fixture
+def chain(monkeypatch, groq):
+    monkeypatch.setattr(settings, "GROQ_TEXT_MODEL", "openai/gpt-oss-120b")
+    monkeypatch.setattr(settings, "GROQ_FALLBACK_MODELS", "openai/gpt-oss-20b, qwen/qwen3.8-27b, openai/gpt-oss-20b")
+    providers._cooling.clear()
+    yield groq
+    providers._cooling.clear()
+
+
+def test_a_model_that_hit_its_daily_limit_hands_over_to_the_next_and_is_then_left_alone(chain):
+    calls, replies = chain
+    replies += [_limit(), _answer("from 20b"), _answer("again from 20b")]
+    p = GroqProvider()
+    assert p.text("s", "u") == "from 20b"
+    assert [c["json"]["model"] for c in calls] == ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    assert p.text("s", "u") == "again from 20b"                       # the full model is skipped while it cools down
+    assert calls[-1]["json"]["model"] == "openai/gpt-oss-20b" and len(calls) == 3
+
+
+def test_every_model_out_of_quota_says_so_plainly_and_a_rested_model_is_used_again(chain, monkeypatch):
+    calls, replies = chain
+    replies += [_limit(), _limit(), _limit()]
+    p = GroqProvider()
+    with pytest.raises(AIRateLimitedError):
+        p.text("s", "u")
+    assert len(calls) == 3                                             # each model in the list tried once, duplicates dropped
+    now = providers.time.monotonic()
+    providers._cooling["openai/gpt-oss-120b"] = now - 1               # its wait is over
+    replies.append(_answer("back on the main one"))
+    assert p.text("s", "u") == "back on the main one" and calls[-1]["json"]["model"] == "openai/gpt-oss-120b"
+
+
+def test_chat_and_structured_answers_also_move_to_the_next_model(chain):
+    calls, replies = chain
+    replies += [_limit(), _answer(json.dumps({"po": "7", "lines": [], "confidence": 0.9}))]
+    out = GroqProvider().structured("s", "u", Order)
+    assert out.po == "7" and calls[-1]["json"]["model"] == "openai/gpt-oss-20b"
+    replies += [_answer("hello")]
+    assert GroqProvider().chat([{"role": "user", "content": "hi"}], [])["content"] == "hello"
+
+
+def test_a_single_model_list_behaves_exactly_as_before(groq, monkeypatch):
+    calls, replies = groq
+    monkeypatch.setattr(settings, "GROQ_FALLBACK_MODELS", "")
+    providers._cooling.clear()
+    replies.append(_limit("40"))
+    with pytest.raises(AIRateLimitedError):
+        GroqProvider().text("s", "u")
+    assert len(calls) == 1 and not providers._cooling

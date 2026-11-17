@@ -240,7 +240,9 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
             elif m["state"] == "waiting_review":
                 review.append(f"{line} (submitted by {m['latest_submission']['submitted_by']})")
     ships = [f"{shipments._label(s)}: {', '.join(s['flags'])}" for s in shipments.list_shipments(False) if s["flags"]]
-    open_alerts = [n for n in alerts.inbox(open_only=True, limit=200) if n["severity"] == "critical"]
+    open_all = alerts.inbox(open_only=True, limit=500)                       # the same list the Today screen and the badge count (snoozed ones left out)
+    open_alerts = [n for n in open_all if n["severity"] == "critical"]
+    alerts_behind = [f"{n['title']}" for n in open_all if n["severity"] == "warning"]
     vendor_risks = vendors.risks_for_summary(on)
     late_quotes = rfqs.for_summary()
     gaps = unplanned(data)
@@ -256,6 +258,7 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
     sections = [
         ("Behind schedule", behind), ("Vendors putting projects at risk", vendor_risks),
         ("Quotes overdue or not acknowledged", late_quotes), ("Shipments needing attention", ships),
+        ("Alerts marked Behind, open in the app", alerts_behind),
         ("Waiting for review", review), ("Due in the next 7 days", due_week),
         ("Open with no due date or owner", no_plan),
         ("Messages drafted, waiting for approval in the assistant", drafts),
@@ -273,14 +276,15 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
         lines.append(f"{len(open_alerts)} urgent alert(s) are not yet acknowledged in the app.")
     return {"behind": behind, "vendors": vendor_risks, "rfqs": late_quotes, "shipments": ships,
             "review": review, "due_week": due_week, "unplanned": len(gaps), "drafts": len(drafts),
-            "urgent_open": len(open_alerts), "mail": len(mail_waiting), "text": "\n".join(lines).strip()}
+            "urgent_open": len(open_alerts), "alerts_behind": len(alerts_behind), "alerts_open": len(open_all), "mail": len(mail_waiting), "text": "\n".join(lines).strip()}
 
 
 def send_summary(on: Optional[date] = None, force: bool = False) -> Optional[int]:
     on = on or alerts.today()
     s = build_summary(on)
-    headline = (f"{len(s['behind'])} behind, {len(s['vendors'])} vendor risk(s), {len(s['rfqs'])} late quote(s), "
-                f"{len(s['shipments'])} shipment issue(s), {len(s['review'])} waiting for review")
+    headline = (f"{len(s['behind'])} milestone(s) behind, {len(s['vendors'])} vendor risk(s), {len(s['rfqs'])} late quote(s), "
+                f"{len(s['shipments'])} shipment issue(s), {len(s['review'])} waiting for review, "
+                f"{s['alerts_behind']} alert(s) behind and {s['urgent_open']} urgent open in the app")
     return alerts.notify(
         "daily_summary", f"summary:{on}{':manual:' + str(time.time()) if force else ''}",
         f"Daily summary: {headline}", s["text"], to=alerts.summary_recipients(), link="/projects",
@@ -367,16 +371,37 @@ class CoordinationWorker:
             from app.services import packing_slip_queue
 
             self._step("packing_slips", packing_slip_queue.retry_due)   # slips whose retry wait is over
-            self._step("held", alerts.release_held)
-            local = alerts.now_local()
-            if local.weekday() < 5 and local.hour >= settings.DIGEST_HOUR and self._summary_date != local.date():
-                # The key per date also makes this once a day across restarts.
-                self._step("summary", send_summary)
-                from app.services.coordination import secretary
+            from app.services.coordination import ball
 
-                self._step("briefs", secretary.send_briefs)   # each person's own "your day" note
-                if "error" not in self.last.get("summary", {}):  # retried next loop if it failed
-                    self._summary_date = local.date()
+            from app.services import monday_push
+
+            self._step("monday_stage", monday_push.expire_old)          # staged changes nobody pushed for a month are dropped
+            self._step("ball_chase", ball.run)                          # climb the ladder on items waiting too long
+            self._step("held", alerts.release_held)
+            from app.services.coordination import purchase_orders as _pos
+
+            self._step("po_stuck_sends", _pos.alert_stuck_sends)
+            from app.services.outbound_email_service import outbound_email_service as _mail
+
+            self._step("mail_ledger_prune", _mail.prune_ledger)          # routine mail rows older than 180 days go; vendor mail rows never do        # a PO stuck in sending for ten minutes is told to leadership once a day
+            if settings.BACKUP_ENABLED:
+                from app.services import backups
+
+                if backups.due():
+                    self._step("backup", backups.run)      # at most one per BACKUP_EVERY_HOURS, even across restarts
+            local = alerts.now_local()
+            if local.weekday() < 5 and local.hour >= settings.DIGEST_HOUR:
+                if self._summary_date != local.date():
+                    # The key per date also makes this once a day across restarts.
+                    self._step("summary", send_summary)
+                    if "error" not in self.last.get("summary", {}):  # retried next loop if it failed
+                        self._summary_date = local.date()
+                if getattr(self, "_briefs_date", None) != local.date():
+                    from app.services.coordination import secretary
+
+                    self._step("briefs", secretary.send_briefs)   # each person's own "your day" note
+                    if "error" not in self.last.get("briefs", {}):  # retried next loop if it failed
+                        self._briefs_date = local.date()
             self._stop.wait(30)
 
 

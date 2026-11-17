@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, status
 
 from app.config import settings
 from app.core.container import get_entity_matcher
-from app.core.security import require_viewer
+from app.core.security import require_manager, require_viewer
 from app.services.sage_odbc import SageODBCReader
 from app.services.sage_sdk_writer import SageSDKWriter
 
@@ -70,3 +70,24 @@ def system_health(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
             },
         },
     }
+
+
+@router.get("/setup", summary="The few settings that must be right, what stops working while each is blank, and how to fix it")
+def setup(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services import setup_check
+
+    return setup_check.checklist()
+
+
+@router.get("/backups", summary="The database backups: when the last was made, whether it passed its restore check, and the list")
+def backups_status(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services import backups
+
+    return backups.status()
+
+
+@router.post("/backups/run", summary="Make a backup now (and check it can be restored)")
+def backups_run(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services import backups
+
+    return backups.run()

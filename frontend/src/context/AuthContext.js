@@ -1,8 +1,9 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
+import { toast } from 'sonner';
 
-import { loginUser, refreshAccessToken, setAuthToken, setUnauthorizedHandler } from '@/lib/api';
+import { authFetch, loginUser, refreshAccessToken, setAuthToken, setUnauthorizedHandler } from '@/lib/api';
 
 const STORAGE_KEY = 'allied_staff_auth';
 
@@ -89,6 +90,7 @@ function setSession(next) {
  * @property {boolean} isInitialized
  * @property {(email: string, password: string) => Promise<{ ok: boolean, error?: string }>} loginEmployee
  * @property {() => void} logoutEmployee
+ * @property {(accessToken: string, refreshToken: string) => void} replaceTokens Keeps this device signed in after a password change
  * @property {(minimumRole: string) => boolean} hasRole True at or above the given role
  */
 
@@ -101,6 +103,7 @@ const AuthContext = createContext(/** @type {AuthValue} */ ({
   isInitialized: false,
   loginEmployee: async () => ({ ok: false, error: 'not ready' }),
   logoutEmployee: () => {},
+  replaceTokens: () => {},
   hasRole: () => false,
 }));
 
@@ -115,19 +118,44 @@ export function AuthProvider({ children }) {
   // This only registers a callback on an external module, so it belongs in an
   // effect and performs no synchronous state update.
   useEffect(() => {
+    const syncProfile = async () => {
+      if (!_session?.access_token) return;
+      try {
+        const res = await authFetch('/api/v1/auth/profile', { cache: 'no-store' });
+        if (res.ok && _session) {
+          const profile = await res.json();
+          setSession({ ..._session, user: profile });
+        }
+      } catch {
+        // Non-fatal: keep existing cached profile.
+      }
+    };
+    void syncProfile();
+
     setUnauthorizedHandler(async () => {
       const refresh = _session?.refresh_token;
       if (!refresh) {
         setSession(EMPTY_SESSION);
+        toast.error('Your session expired — please sign in again.');
         return null;
       }
       try {
         const { access_token: accessToken } = await refreshAccessToken(refresh);
         setSession({ ..._session, access_token: accessToken });
+        void syncProfile();
         return accessToken;
-      } catch {
-        // Refresh token expired, or the account was disabled or deleted.
+      } catch (err) {
+        // Refresh token expired, the account was disabled or deleted, or the password was changed elsewhere.
         setSession(EMPTY_SESSION);
+        const why = 'Your session ended. Sign in again.';
+        if (why) {
+          try {
+            sessionStorage.setItem('allied.signin.notice', why);
+          } catch {
+            // Private windows refuse storage; the toast below still tells them.
+          }
+        }
+        toast.error(why || 'Your session expired — please sign in again.');
         return null;
       }
     });
@@ -150,6 +178,12 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  /** After a password change the server ends every older session and sends new tokens, so this device stays signed in. */
+  const replaceTokens = useCallback((accessToken, refreshToken) => {
+    if (!_session || !accessToken) return;
+    setSession({ ..._session, access_token: accessToken, refresh_token: refreshToken || _session.refresh_token });
+  }, []);
+
   /** True when the signed-in user is at or above the given role. */
   const hasRole = useCallback(
     (minimumRole) =>
@@ -170,6 +204,7 @@ export function AuthProvider({ children }) {
         isInitialized: true,
         loginEmployee,
         logoutEmployee,
+        replaceTokens,
         hasRole,
       }}
     >

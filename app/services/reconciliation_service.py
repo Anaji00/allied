@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 import re
 import threading
+import weakref
 import uuid
 from pydantic import BaseModel, Field
 
@@ -54,8 +55,30 @@ def _same_vendor(a: Optional[str], b: Optional[str]) -> bool:
     return long_[: len(short)] == short
 
 
+class _Gate:
+    """A lock that can be held weakly: it is dropped from its table as soon as nobody is using it, so the table never grows with every invoice number seen."""
+    __slots__ = ("lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+
+    def __enter__(self) -> "_Gate":
+        self.lock.acquire()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.lock.release()
+
+
+def _norm_invoice(number: Optional[str]) -> str:
+    """An invoice number as a duplicate check reads it: capitals and digits only, zeros after the letters dropped ("INV-1001", "INV1001", "inv 1001." and
+    "INV-01001" are one bill)."""
+    text = re.sub(r"[^A-Z0-9]", "", (number or "").upper())
+    return re.sub(r"(?<=[A-Z])0+(?=[0-9])", "", text)
+
+
 def _dispute_key(vendor_name: str, invoice_number: str) -> Tuple[str, str]:
-    return (" ".join(_vendor_tokens(vendor_name)), (invoice_number or "").strip().upper())
+    return (" ".join(_vendor_tokens(vendor_name)), _norm_invoice(invoice_number))
 
 
 class VendorInvoiceLine(BaseModel):
@@ -74,6 +97,7 @@ class VendorInvoice(BaseModel):
     po_number: str = Field(..., description="Referenced Allied PO Number")
     invoice_date: date = Field(default_factory=date.today)
     lines: List[VendorInvoiceLine] = Field(default_factory=list)
+    currency: str = Field(default="USD", description="The currency the vendor billed in (Allied's purchase orders are in US dollars)")
     freight_billed: Decimal = Field(default=Decimal("0.00"), description="Additional freight on vendor bill")
     total_amount_billed: Decimal = Field(..., description="Total payable requested by vendor")
 
@@ -105,7 +129,8 @@ class ReconciliationService:
         # (vendor, invoice), so a re-submitted invoice is not disputed twice.
         self._dispute_log: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._dispute_lock = threading.Lock()
-        self._invoice_locks: Dict[Tuple[str, str], threading.Lock] = {}
+        self._invoice_locks: "weakref.WeakValueDictionary" = weakref.WeakValueDictionary()      # one gate per bill in flight
+        self._po_locks: "weakref.WeakValueDictionary" = weakref.WeakValueDictionary()           # one gate per PO in flight (a different table: the keys can never collide)
         # Resolved lazily: the matcher loads the catalogues, and constructing
         # this service must not pay that cost when no dispute is ever sent.
         self._matcher = None
@@ -188,9 +213,11 @@ class ReconciliationService:
         duplicate check twice before either result is saved.
         """
         key = _dispute_key(invoice.vendor_name, invoice.invoice_number)
+        po_key = (invoice.po_number or "").strip().upper()
         with self._dispute_lock:
-            lock = self._invoice_locks.setdefault(key, threading.Lock())
-        with lock:
+            lock = self._invoice_locks.setdefault(key, _Gate())
+            po_lock = self._po_locks.setdefault(po_key, _Gate())
+        with po_lock, lock:           # one bill per PO at a time: the running total of approved bills is read and saved without another bill slipping between
             return self._reconcile(invoice)
 
     def _reconcile(self, invoice: VendorInvoice) -> ReconciliationResult:
@@ -291,6 +318,19 @@ class ReconciliationService:
                 f"approved ({prior_approved[0].get('reconciliation_id')})."
             )
 
+        # A bill Sage already holds (from an imported Sage file) is flagged too: paying it twice is the same mistake.
+        try:
+            from app.services import sage_import
+
+            held = sage_import.bill_in_sage(invoice.vendor_name, invoice.invoice_number)
+        except Exception:  # noqa: BLE001 - the Sage mirror is a help, never a reason to stop the check
+            held = None
+        if held:
+            discrepancies.append(
+                f"Already in Sage: bill #{held['bill_number']} from {held['vendor']} dated {held['date']} for {held['amount']} is already held in Sage"
+                + (f" (still due: {held['amount_due']})" if held.get("amount_due") is not None else "") + ". Check before paying it again."
+            )
+
         # Calculate Authorized PO Total from the billed items
         auth_lines_total = Decimal("0.00")
         auth_freight = po_data.get("authorized_freight", Decimal("0.00"))
@@ -328,8 +368,9 @@ class ReconciliationService:
             total_qty_billed = billed_info["total_qty"]
             auth_lines_total += (expected_qty * expected_cost)
 
-            # Check total quantity billed across all lines for this item
-            if total_qty_billed != expected_qty:
+            # Check total quantity billed across all lines for this item. Fewer pieces than the PO is a partial shipment (the running total over all bills
+            # is checked below); more pieces than the PO is a variance.
+            if total_qty_billed > expected_qty:
                 discrepancies.append(
                     f"Quantity Variance on {item_id}: Billed {total_qty_billed} vs PO {expected_qty}"
                 )
@@ -360,6 +401,28 @@ class ReconciliationService:
 
         authorized_total = auth_lines_total + auth_freight
         actual_total = invoice.total_amount_billed
+
+        # A credit memo or an empty bill is never approved by the machine: a person applies a credit, and a bill for nothing is not a bill.
+        if invoice.total_amount_billed < 0 or any(l.quantity_billed < 0 or l.total_amount < 0 for l in invoice.lines):
+            discrepancies.append("This is a credit memo (negative pieces or total). A person applies it; it is not approved for payment and does not change what the PO may still be billed.")
+        elif invoice.total_amount_billed == 0 and invoice.freight_billed == 0 and not any(l.quantity_billed > 0 for l in invoice.lines):
+            discrepancies.append("Nothing is billed on this invoice (no pieces and no amount). A person checks it.")
+
+        # A bill in another currency cannot be compared with a PO in dollars: 700 yuan is not 700 dollars. A person checks it.
+        if str(invoice.currency or "USD").strip().upper() != "USD":
+            discrepancies.append(
+                f"The bill is in {str(invoice.currency).strip().upper()[:10]} but the purchase order is in US dollars; the amounts cannot be compared as they stand. "
+                f"A person must convert and check before any payment."
+            )
+
+        # Every approved bill for this PO counts: a second bill under a new number for the same pieces would pay the PO twice.
+        if po_found and not prior_approved:
+            already = self._already_billed(invoice)
+            if already > Decimal("0.00") and already + actual_total > authorized_total + _AMOUNT_TOLERANCE:
+                discrepancies.append(
+                    f"PO #{invoice.po_number} has already been billed ${already:,.2f} on approved bills; this bill (${actual_total:,.2f}) takes it past the "
+                    f"authorised ${authorized_total:,.2f}. Possible second bill for the same goods."
+                )
         cost_variance = actual_total - authorized_total
         variance_pct = float((cost_variance / authorized_total) * 100) if authorized_total > Decimal("0.00") else 0.0
 
@@ -499,21 +562,44 @@ class ReconciliationService:
 
         return result
 
-    def _prior_reconciliations(self, invoice: VendorInvoice) -> List[Dict[str, Any]]:
-        """Earlier reconciliations of the same vendor + invoice number."""
-        number = (invoice.invoice_number or "").strip().upper()
-        rows: List[Dict[str, Any]] = []
+    def _already_billed(self, invoice: VendorInvoice) -> Decimal:
+        """The total of this PO's earlier APPROVED bills (any invoice number), from the saved reconciliations; the in-memory history when the database
+        cannot be read."""
+        po = (invoice.po_number or "").strip().upper()
         try:
             from sqlalchemy import func
+
             from app.models.db_models import ReconciliationDB
 
             with SessionLocal() as db:
-                found = (
-                    db.query(ReconciliationDB)
-                    .filter(func.upper(func.trim(ReconciliationDB.invoice_number)) == number)
-                    .order_by(ReconciliationDB.reconciled_at.desc())
-                    .all()
-                )
+                rows = (db.query(ReconciliationDB.actual_billed_total, ReconciliationDB.invoice_number)
+                        .filter(func.upper(func.trim(ReconciliationDB.po_number)) == po, ReconciliationDB.reconciliation_status == "RECONCILED_APPROVED").all())
+            return sum((Decimal(str(r[0] or 0)) for r in rows), Decimal("0.00"))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not read earlier bills for the PO; using in-memory history: {e}")
+            return sum((Decimal(str(r.get("actual_billed_total") or 0)) for r in self._history
+                        if str(r.get("po_number") or "").strip().upper() == po and r.get("reconciliation_status") == "RECONCILED_APPROVED"), Decimal("0.00"))
+
+    def _prior_reconciliations(self, invoice: VendorInvoice) -> List[Dict[str, Any]]:
+        """Earlier reconciliations of the same vendor + invoice number."""
+        number = (invoice.invoice_number or "").strip().upper()
+        want = _norm_invoice(invoice.invoice_number)
+        rows: List[Dict[str, Any]] = []
+        try:
+            from sqlalchemy import func, or_
+            from app.models.db_models import ReconciliationDB
+
+            with SessionLocal() as db:
+                found = [
+                    r for r in (
+                        db.query(ReconciliationDB)
+                        .filter(or_(func.upper(func.trim(ReconciliationDB.invoice_number)) == number,
+                                    func.upper(func.trim(ReconciliationDB.po_number)) == (invoice.po_number or "").strip().upper()))
+                        .order_by(ReconciliationDB.reconciled_at.desc())
+                        .all()
+                    )
+                    if _norm_invoice(r.invoice_number) == want                 # a re-keyed number is the same bill
+                ]
                 rows = [
                     {
                         "reconciliation_id": r.reconciliation_id,

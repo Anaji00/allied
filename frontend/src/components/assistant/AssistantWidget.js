@@ -1,260 +1,123 @@
 'use client';
 
-// The floating assistant. It answers through tools on the server; anything
-// that would change data comes back as a card the user confirms or cancels.
-// The shortcut buttons run lookups directly, so they work with the AI off.
+// The floating "Ask" button. It opens the assistant chat in a panel on whatever page you are on.
+// Other places (Ctrl+K) open it with a question ready by sending an "allied:ask" event.
+// The chat stays mounted while the panel is closed, so the conversation is still there on reopen.
 
-import { useEffect, useRef, useState } from 'react';
-import { askAssistant, assistantLookup, decideAssistantAction, fetchAssistantConnectors } from '@/lib/opsApi';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { Maximize2, Minimize2, Sparkles, Wrench, X } from 'lucide-react';
+import { AssistantChat } from '@/components/assistant/assistant-chat';
+import { useMondayStatus } from '@/components/admin/monday-changes';
 import { useAuth } from '@/context/AuthContext';
-import styles from './assistant.module.css';
 
-const SHORTCUTS = [
-  { label: 'What is late?', tool: 'schedule_status' },
-  { label: 'Vendor risks', tool: 'vendor_status' },
-  { label: 'Open RFQs', tool: 'rfq_status' },
-  { label: 'My alerts', tool: 'my_alerts' },
-];
-
-const STORE = 'allied.assistant.v1';
-
-function loadSaved() {
-  try {
-    const raw = sessionStorage.getItem(STORE);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
+const ICON_BUTTON =
+  'grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring outline-none';
 
 export default function AssistantWidget() {
   const { isAuthenticated } = useAuth() || {};
+  const staged = useMondayStatus().data?.staged ?? 0;
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([]);
-  const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [showConnectors, setShowConnectors] = useState(false);
-  const [connectors, setConnectors] = useState(null);
-  const endRef = useRef(null);
-  const loaded = useRef(false);
+  const [full, setFull] = useState(false);
+  // A new key starts the chat afresh with the question typed in Ctrl+K.
+  const [ask, setAsk] = useState({ key: 0, prompt: '' });
 
   useEffect(() => {
-    if (open && !loaded.current) {
-      loaded.current = true;
-      const saved = loadSaved();
-      // Restoring once on first open, not on every render.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (saved.length) setMessages(saved);
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!loaded.current) return;
-    try {
-      sessionStorage.setItem(STORE, JSON.stringify(messages.slice(-30)));
-    } catch {
-      // storage can be unavailable; the chat still works
-    }
-    endRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!showConnectors) return undefined;
-    let alive = true;
-    fetchAssistantConnectors()
-      .then((res) => alive && setConnectors(res.connectors))
-      .catch((e) => alive && setConnectors([{ id: 'err', name: 'Could not load', ready: false, detail: e.message }]));
-    return () => {
-      alive = false;
+    const onAsk = (e) => {
+      setAsk((a) => ({ key: a.key + 1, prompt: e.detail?.prompt || '' }));
+      setOpen(true);
     };
-  }, [showConnectors]);
+    window.addEventListener('allied:ask', onAsk);
+    return () => window.removeEventListener('allied:ask', onAsk);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    // Escape leaves full screen first, then closes the panel.
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (full) setFull(false);
+      else setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, full]);
 
   if (!isAuthenticated) return null;
 
-  const add = (m) => setMessages((list) => [...list, { id: `${Date.now()}-${Math.random()}`, ...m }]);
-
-  async function send(text) {
-    const question = (text ?? draft).trim();
-    if (!question || busy) return;
-    setDraft('');
-    const history = [...messages, { role: 'user', content: question }]
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map(({ role, content }) => ({ role, content }));
-    add({ role: 'user', content: question });
-    setBusy(true);
-    try {
-      const res = await askAssistant(history.slice(-12));
-      add({ role: 'assistant', content: res.reply, actions: res.actions, steps: res.steps });
-    } catch (e) {
-      add({ role: 'error', content: e.status === 503 ? `${e.message} The shortcut buttons below still work.` : e.message });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function shortcut(s) {
-    if (busy) return;
-    add({ role: 'user', content: s.label });
-    setBusy(true);
-    try {
-      const res = await assistantLookup(s.tool);
-      add({ role: 'assistant', content: res.reply, lookup: true });
-    } catch (e) {
-      add({ role: 'error', content: e.message });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function decide(messageId, action, confirm) {
-    const patch = (fields) =>
-      setMessages((list) =>
-        list.map((m) =>
-          m.id !== messageId
-            ? m
-            : {
-                ...m,
-                actions: m.actions.map((a) => (a.id === action.id ? { ...a, ...fields } : a)),
-              },
-        ),
-      );
-    patch({ status: 'WORKING' });
-    try {
-      const res = await decideAssistantAction(action.id, confirm);
-      patch({ status: res.status, result: res.result });
-    } catch (e) {
-      patch({ status: 'FAILED', result: { error: e.message } });
-    }
-  }
+  const close = () => {
+    setOpen(false);
+    setFull(false);
+  };
 
   return (
     <>
-      <button
-        type="button"
-        className={styles.launcher}
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-controls="allied-assistant"
-        aria-label={open ? 'Close the assistant' : 'Open the assistant'}
+      <section
+        aria-label="Assistant"
+        hidden={!open}
+        className={
+          full
+            ? 'fixed inset-0 z-50 flex flex-col bg-background duration-200 animate-in fade-in zoom-in-98'
+            : 'fixed right-3 bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-3 z-40 flex h-[min(40rem,calc(100svh-12rem-env(safe-area-inset-bottom)))] origin-bottom-right flex-col overflow-hidden rounded-3xl border border-border/70 bg-background shadow-[0_24px_64px_-16px_rgba(0,0,0,0.45)] ring-1 ring-black/5 duration-200 animate-in fade-in slide-in-from-bottom-3 zoom-in-95 md:right-5 md:bottom-24 md:left-auto md:h-[min(42rem,calc(100svh-8rem))] md:w-[27rem]'
+        }
       >
-        {open ? '×' : 'Ask'}
-      </button>
-      {open && (
-        <section id="allied-assistant" className={styles.panel} aria-label="Assistant">
-          <header className={styles.head}>
-            <div>
-              <strong>Assistant</strong>
-              <span className={styles.sub}>Looks things up for you. Changes need your OK.</span>
-            </div>
-            <div className={styles.headActions}>
-              <button type="button" className={styles.link} onClick={() => setShowConnectors((v) => !v)}>
-                {showConnectors ? 'Chat' : 'Connections'}
-              </button>
-              {messages.length > 0 && (
-                <button type="button" className={styles.link} onClick={() => setMessages([])}>
-                  Clear
-                </button>
-              )}
-            </div>
-          </header>
-
-          {showConnectors ? (
-            <div className={styles.body}>
-              {!connectors ? (
-                <p className={styles.muted}>Checking…</p>
-              ) : (
-                <ul className={styles.connectors}>
-                  {connectors.map((c) => (
-                    <li key={c.id}>
-                      <span className={c.ready ? styles.dotOn : styles.dotOff} aria-hidden="true" />
-                      <div>
-                        <strong>{c.name}</strong>
-                        {c.tools != null && <span className={styles.muted}> · {c.tools} tools</span>}
-                        <p className={styles.muted}>{c.detail}</p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className={styles.muted}>Other services connect through MCP servers listed in ASSISTANT_MCP_SERVERS.</p>
-            </div>
-          ) : (
-            <div className={styles.body} aria-live="polite">
-              {messages.length === 0 && (
-                <p className={styles.muted}>
-                  Ask about projects, vendor dates, RFQs, shipments or orders. For example: “Which vendors could make the Vulcan job late?”
-                  or “Mark RFQ-2026-0004 as waiting on Zibo for pricing.”
-                </p>
-              )}
-              {messages.map((m) => (
-                <div key={m.id} className={styles[m.role] || styles.assistant}>
-                  <p className={styles.text}>{m.content}</p>
-                  {m.steps?.length > 0 && (
-                    <p className={styles.steps}>Looked at: {[...new Set(m.steps.map((s) => s.tool.replace(/_/g, ' ')))].join(', ')}</p>
-                  )}
-                  {m.actions?.map((a) => (
-                    <div key={a.id} className={styles.action}>
-                      <p className={styles.actionTitle}>Waiting for your OK</p>
-                      <pre className={styles.summary}>{a.summary}</pre>
-                      {(!a.status || a.status === 'PENDING') && (
-                        <div className={styles.actionButtons}>
-                          <button type="button" className={styles.confirm} onClick={() => decide(m.id, a, true)}>
-                            Do it
-                          </button>
-                          <button type="button" className={styles.cancel} onClick={() => decide(m.id, a, false)}>
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                      {a.status === 'WORKING' && <p className={styles.muted}>Working…</p>}
-                      {a.status === 'DONE' && <p className={styles.ok}>Done. {a.result?.done}</p>}
-                      {a.status === 'CANCELLED' && <p className={styles.muted}>Cancelled. Nothing was changed.</p>}
-                      {a.status === 'FAILED' && <p className={styles.bad}>Not done: {a.result?.error}</p>}
-                    </div>
-                  ))}
-                </div>
-              ))}
-              {busy && <p className={styles.muted}>Thinking…</p>}
-              <div ref={endRef} />
-            </div>
+        <header
+          className={`flex items-center gap-3 border-b border-border/60 bg-gradient-to-b from-muted/50 to-transparent py-3 ${full ? 'px-[max(1rem,calc((100%-48rem)/2))]' : 'px-4'}`}
+        >
+          <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm">
+            <Sparkles className="size-4" />
+          </span>
+          <div className="grid min-w-0 flex-1 leading-tight">
+            <strong className="text-sm font-semibold">Assistant</strong>
+            <span className="truncate text-xs text-muted-foreground">Asks before it acts</span>
+          </div>
+          {staged > 0 && (
+            <Link
+              href="/health?tab=changes"
+              onClick={close}
+              className="rounded-full bg-info-soft px-2.5 py-1 text-xs text-info hover:underline"
+              title="Changes waiting for monday. Nothing is sent until someone sends them."
+            >
+              {staged} waiting for monday
+            </Link>
           )}
-
-          {!showConnectors && (
-            <footer className={styles.foot}>
-              <div className={styles.shortcuts}>
-                {SHORTCUTS.map((s) => (
-                  <button key={s.tool} type="button" className={styles.chip} disabled={busy} onClick={() => shortcut(s)}>
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-              <form
-                className={styles.form}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  send();
-                }}
-              >
-                <textarea
-                  className={styles.input}
-                  rows={2}
-                  value={draft}
-                  placeholder="Ask a question…"
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                />
-                <button type="submit" className={styles.send} disabled={busy || !draft.trim()}>
-                  Send
-                </button>
-              </form>
-            </footer>
-          )}
-        </section>
+          <Link
+            href="/chat"
+            onClick={close}
+            className={ICON_BUTTON}
+            aria-label="Other tools: read a document, translate, email"
+            title="Other tools"
+          >
+            <Wrench className="size-4" />
+          </Link>
+          <button
+            type="button"
+            className={ICON_BUTTON}
+            aria-label={full ? 'Back to the small window' : 'Make it full screen'}
+            title={full ? 'Smaller' : 'Full screen'}
+            onClick={() => setFull((f) => !f)}
+          >
+            {full ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+          </button>
+          <button type="button" className={ICON_BUTTON} aria-label="Close the assistant" title="Close" onClick={close}>
+            <X className="size-4" />
+          </button>
+        </header>
+        <div className={full ? 'min-h-0 flex-1 px-4 pt-4 pb-5 md:px-6 md:pb-8' : 'min-h-0 flex-1 px-3 pt-3 pb-3'}>
+          <AssistantChat key={ask.key} initialPrompt={ask.prompt} fill />
+        </div>
+      </section>
+      {!(open && full) && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={open ? 'Close the assistant' : 'Ask the assistant'}
+          className="fixed right-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-40 inline-flex h-12 items-center justify-center gap-2 rounded-full bg-primary px-5 max-md:size-12 max-md:px-0 text-sm font-medium text-primary-foreground shadow-[0_10px_30px_-8px_rgba(0,0,0,0.5)] outline-none transition-all hover:-translate-y-0.5 hover:shadow-[0_14px_34px_-8px_rgba(0,0,0,0.55)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-0 md:right-5 md:bottom-5"
+        >
+          {open ? <X className="size-4" /> : <Sparkles className="size-4" />}
+          <span className="max-md:sr-only">{open ? 'Close' : 'Ask'}</span>
+        </button>
       )}
     </>
   );

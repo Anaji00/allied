@@ -1,9 +1,10 @@
 """Projects and milestones (from monday), design-doc submissions, shipments, vendor jobs, RFQs, alerts."""
 
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -73,13 +74,25 @@ def submit_documents(
     item_id: str,
     files: List[UploadFile] = File(...),
     note: str = Form(""),
+    template_id: str = Form(""),
+    answers: str = Form("", description="The filled-in form, as JSON"),
     user: dict = Depends(require_operator),
 ):
+    from app.services.coordination import forms
+
     if len(files) > _MAX_FILES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Attach at most {_MAX_FILES} files at once.")
     payload = [(f.filename or "document", _read_capped(f)) for f in files]
+    if len(answers) > 100_000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The form answers are too large.")
     try:
-        return projects.submit(item_id, payload, note, user)
+        filled = json.loads(answers) if answers.strip() else {}
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The form answers weren't readable. Try again.")
+    try:
+        return projects.submit(item_id, payload, note, user, template_id, filled)
+    except forms.FormError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"message": str(exc), "fields": exc.fields})
     except Exception as exc:  # noqa: BLE001
         _fail(exc)
 
@@ -338,6 +351,13 @@ def rfq_detail(rfq_id: str, _user: dict = Depends(require_viewer)):
         _fail(exc)
 
 
+class RfqItemIn(BaseModel):
+    description: str = Field(..., min_length=1, max_length=500)
+    quantity: Optional[float] = Field(None, ge=0, le=1_000_000)
+    unit: Optional[str] = Field(None, max_length=20)
+    revision: Optional[str] = Field(None, max_length=20)
+
+
 class RfqIn(BaseModel):
     customer: str = ""
     contact_email: Optional[str] = None
@@ -347,12 +367,16 @@ class RfqIn(BaseModel):
     owner_email: Optional[str] = None
     received_at: Optional[datetime] = None
     notes: Optional[str] = None
+    items: List[RfqItemIn] = Field(default_factory=list, max_length=100, description="What is asked for: description, quantity, unit. A new purchase order starts with these lines.")
+    vendor: Optional[str] = Field(None, max_length=256, description="The vendor(s) asked to price it, comma separated")
 
 
 @rfqs_router.post("", summary="Log an RFQ")
 def add_rfq(body: RfqIn, user: dict = Depends(require_operator)):
     try:
-        return rfqs.create(body.model_dump(), user)
+        data = body.model_dump(exclude_none=True)
+        data["items"] = [{k: v for k, v in i.items() if v is not None} for i in data.get("items", [])]
+        return rfqs.create(data, user)
     except Exception as exc:  # noqa: BLE001
         _fail(exc)
 
@@ -393,6 +417,20 @@ def my_alerts(
     return {"items": items, "open": sum(1 for n in items if not n["acknowledged_at"]), "channels": alerts.channel_status()}
 
 
+@alerts_router.get("/rollup", summary="My open alerts as a few groups (count, worst, oldest, first few), instead of one long list")
+def alert_rollup(everyone: bool = False, user: dict = Depends(require_viewer)):
+    see_all = everyone and user.get("role") in ("ADMIN", "MANAGER")
+    return alerts.rollup(None if see_all else user.get("email"))
+
+
+@alerts_router.post("/rollup/acknowledge", summary="Mark every open alert in one group as handled")
+def alert_rollup_ack(body: Dict[str, Any] = Body(...), user: dict = Depends(require_viewer)):
+    group = str(body.get("group") or "")
+    if not group:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Say which group.")
+    return {"acknowledged": alerts.acknowledge_group(group, user.get("email", "unknown"), any_alert=user.get("role") in ("ADMIN", "MANAGER"))}
+
+
 @alerts_router.post("/{notification_id}/acknowledge", summary="Mark an alert as seen and handled")
 def acknowledge(notification_id: int, user: dict = Depends(require_viewer)):
     result = alerts.acknowledge(notification_id, user.get("email", "unknown"),
@@ -404,6 +442,38 @@ def acknowledge(notification_id: int, user: dict = Depends(require_viewer)):
     if result == "done":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already acknowledged.")
     return {"acknowledged": notification_id}
+
+
+def _alert_result(result: Any, ok: Any) -> Any:
+    if result == "missing":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such alert.")
+    if result == "forbidden":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This alert was sent to someone else.")
+    if result == "done":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already acknowledged.")
+    if result == "bad":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="That time or person is not valid (a time in the next 30 days, or a real email address).")
+    return ok
+
+
+@alerts_router.post("/{notification_id}/snooze", summary="Hide an alert until a time (until, or hours from now; at most 30 days)")
+def snooze_alert(notification_id: int, body: Dict[str, Any] = Body(...), user: dict = Depends(require_viewer)):
+    until = None
+    if body.get("until") not in (None, ""):
+        try:
+            until = datetime.fromisoformat(str(body["until"]).replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Give the time as a date and time, like 2026-11-20T09:00.")
+    result = alerts.snooze(notification_id, user.get("email", "unknown"), until=until, hours=body.get("hours"),
+                           any_alert=user.get("role") in ("ADMIN", "MANAGER"))
+    return _alert_result(result, {"snoozed_until": result.isoformat() if hasattr(result, "isoformat") else None, "id": notification_id})
+
+
+@alerts_router.post("/{notification_id}/assign", summary="Hand an alert to one person")
+def assign_alert(notification_id: int, body: Dict[str, Any] = Body(...), user: dict = Depends(require_viewer)):
+    to = str(body.get("email") or "")
+    result = alerts.assign(notification_id, user.get("email", "unknown"), to, any_alert=user.get("role") in ("ADMIN", "MANAGER"))
+    return _alert_result(result, {"assignee": to.strip().lower(), "id": notification_id})
 
 
 class ContactIn(BaseModel):
@@ -473,6 +543,116 @@ def board_list(_user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
     from app.services.coordination import boards
 
     return boards.boards()
+
+
+@boards_router.post("/{board_id}/items/{item_id}/owner", summary="Stage 'this person owns this item' for the next push to monday (nothing is sent)")
+def stage_item_owner(board_id: str, item_id: str, body: Dict[str, Any] = Body(...), user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services.coordination import owners
+
+    try:
+        return {"staged": True, "change_id": owners.stage_owner_to_monday(board_id, item_id, str(body.get("email") or ""), user)}
+    except LookupError as exc:
+        _fail(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@boards_router.get("/{board_id}/summary", summary="One small record per item (drafts waiting, unread notes, problems, automations on, who holds the ball): one call for a whole board")
+def board_summary(board_id: str, user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import board_health as bh
+
+    try:
+        return bh.summary(board_id, user.get("email", ""))
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/{board_id}/health", summary="What is wrong with the data on a board (no owner, no deadline, stale, duplicate PO) and what to do")
+def board_health(board_id: str, _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services.coordination import board_health as bh
+
+    try:
+        return bh.health(board_id)
+    except LookupError as exc:
+        _fail(exc)
+
+
+@boards_router.get("/available", summary="Every board in the monday account (a read), so any of them can be read into the app")
+def boards_available(_user: dict = Depends(require_operator)) -> List[Dict[str, Any]]:
+    from app.core.container import get_monday_client
+
+    client = get_monday_client()
+    if not client.live:
+        return []
+    data = client.execute_query("query { boards(limit: 100, state: active) { id name board_kind items_count } }")
+    return [{"id": str(b["id"]), "name": b["name"], "items": b.get("items_count"), "kind": b.get("board_kind")}
+            for b in ((data or {}).get("data") or {}).get("boards") or [] if not str(b["name"]).startswith("Subitems of")]
+
+
+@boards_router.post("/{board_id}/refresh", summary="Read this board from monday into the app now (a read; nothing is written)")
+def board_refresh(board_id: str, _user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services.coordination import boards
+
+    if not board_id.isdigit() or len(board_id) > 20:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="board_id must be a board number.")
+    return _reread(board_id)
+
+
+def _reread(board_id: str) -> Dict[str, Any]:
+    """A board the app already tracks keeps its own role and reader; it is read the same way as the hourly read."""
+    from app.config import settings
+    from app.services.coordination import autopilot, boards, projects, vendors
+
+    if board_id == str(settings.MONDAY_VENDOR_BOARD_ID or ""):
+        return vendors.sync_vendor_board()
+    if board_id == str(settings.MONDAY_PROJECTS_BOARD_ID or ""):
+        return projects.sync_projects()
+    if board_id == str(settings.MONDAY_RFQ_BOARD_ID or ""):
+        return autopilot.run("rfq_board")
+    return boards.read_reference(board_id)
+
+
+@boards_router.post("/{board_id}/items/{item_id}/changes", summary="Stage edits to cells of one item on this board (checked against its columns; nothing is sent)")
+def board_edit(board_id: str, item_id: str, body: Dict[str, Any] = Body(...), user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services import monday_push
+
+    try:
+        return {"staged": True, "change_id": monday_push.stage_edit(board_id, item_id, body.get("columns") or {}, user)}
+    except LookupError as exc:
+        _fail(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@boards_router.post("/{board_id}/items", summary="Stage a new row on this board (nothing is sent)")
+def board_new_item(board_id: str, body: Dict[str, Any] = Body(...), user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services import monday_push
+
+    try:
+        return {"staged": True, "change_id": monday_push.stage_new_item(board_id, str(body.get("item_name") or ""), body.get("fields") or {}, user)}
+    except LookupError as exc:
+        _fail(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@boards_router.post("/{board_id}/items/{item_id}/comments", summary="Stage a comment on an item of this board (nothing is sent)")
+def board_comment(board_id: str, item_id: str, body: Dict[str, Any] = Body(...), user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services import monday_push
+
+    try:
+        return {"staged": True, "change_id": monday_push.stage_comment(board_id, item_id, str(body.get("text") or ""), user)}
+    except LookupError as exc:
+        _fail(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@boards_router.get("/{board_id}/pending", summary="This board's staged changes as a diff: what monday showed when each was made, what it shows now, what it would become")
+def board_pending(board_id: str, _user: dict = Depends(require_operator)) -> List[Dict[str, Any]]:
+    from app.services import monday_push
+
+    return monday_push.preview(None, board_id)
 
 
 @boards_router.get("/{board_id}", summary="A monday board exactly as monday shows it, with the app's view of each row")

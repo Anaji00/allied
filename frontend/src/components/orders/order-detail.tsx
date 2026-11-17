@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Download, Loader2, Truck } from 'lucide-react';
+import { UpdatesPanel } from '@/components/data/updates-panel';
 import { Facts } from '@/components/data/detail-panel';
 import { ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge } from '@/components/data/tone-badge';
@@ -28,6 +29,7 @@ const TABS = [
   ['lines', 'Lines'],
   ['quality', 'Mill certs'],
   ['documents', 'Documents'],
+  ['comments', 'Comments'],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
@@ -71,7 +73,7 @@ export function OrderDetail({ so }: { so: string }) {
         ]}
       />
 
-      <div role="tablist" aria-label="Order sections" className="flex gap-1 border-b">
+      <div role="tablist" aria-label="Order sections" className="flex gap-1 overflow-x-auto border-b">
         {TABS.map(([key, label]) => (
           <button
             key={key}
@@ -80,7 +82,7 @@ export function OrderDetail({ so }: { so: string }) {
             aria-selected={tab === key}
             onClick={() => setTab(key)}
             className={cn(
-              '-mb-px border-b-2 px-3 py-1.5 text-[13px]',
+              '-mb-px shrink-0 border-b-2 px-3 py-1.5 text-[13px] whitespace-nowrap',
               tab === key ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
           >
@@ -92,6 +94,7 @@ export function OrderDetail({ so }: { so: string }) {
       {tab === 'lines' && <Lines order={order} />}
       {tab === 'quality' && <Quality order={order} />}
       {tab === 'documents' && <Documents order={order} />}
+      {tab === 'comments' && <UpdatesPanel itemType="order" itemRef={order.sales_order_number} />}
     </div>
   );
 }
@@ -224,7 +227,7 @@ function ShippingPrices({ address, currency }: { address?: string | null; curren
   const cur = (currency || 'USD').toUpperCase();
   const price = (r: Rate) => {
     const v = cur === 'CAD' ? r.cad : cur === 'CNY' ? r.cny : r.usd;
-    return v == null ? '–' : `${money(v)} ${cur === 'CAD' || cur === 'CNY' ? cur : 'USD'}`;
+    return v == null ? '–' : money(v, cur === 'CAD' || cur === 'CNY' ? cur : 'USD');
   };
 
   return (

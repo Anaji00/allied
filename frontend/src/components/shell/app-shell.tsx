@@ -7,6 +7,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { useAuth } from '@/context/AuthContext';
 import { AppSidebar } from './app-sidebar';
 import { CommandMenu } from './command-menu';
+import { PageHint } from './page-hint';
 import { PhoneTabBar } from './phone-tab-bar';
 import { SignIn } from './sign-in';
 import { TopBar } from './top-bar';
@@ -64,7 +65,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           {/* A quick crossfade when moving between areas; filters and rows change in place. */}
           <ViewTransition key={pathname} enter="page-in" exit="page-out" default="none">
-            <div>{children}</div>
+            <div>
+              <PageHint />
+              {children}
+            </div>
           </ViewTransition>
         </main>
       </SidebarInset>

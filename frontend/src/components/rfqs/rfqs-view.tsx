@@ -7,6 +7,11 @@ import { toast } from 'sonner';
 import { Loader2, Plus } from 'lucide-react';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
+import { OpenJob } from '@/components/jobs/open-job';
+import { UpdatesPanel } from '@/components/data/updates-panel';
+import { CommentCount, useCommentCounts } from '@/components/data/updates-panel';
+import { SavedViews } from '@/components/data/saved-views';
+import { DownloadMenu } from '@/components/data/download-menu';
 import { Field, FilterChips, NativeSelect, PanelHeading } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
@@ -21,6 +26,8 @@ import { useListNav } from '@/hooks/use-list-nav';
 import { dateTime, money, person, words } from '@/lib/format';
 import { addRfq, fetchRfqs, updateRfq } from '@/lib/opsApi';
 import { BulkBar } from '@/components/data/bulk-bar';
+import { PersonSelect, SuggestInput, useAppPeople, useKnownCustomers } from '@/components/data/pick';
+import { useSuppliers } from '@/components/orders/use-orders';
 import { RowActions } from '@/components/data/row-actions';
 import { cn } from '@/lib/utils';
 
@@ -78,7 +85,7 @@ export const STATE: Record<string, { label: string; tone: Tone }> = {
   overdue: { label: 'Overdue', tone: 'bad' },
   ack_overdue: { label: 'Not acknowledged', tone: 'bad' },
   due_soon: { label: 'Due soon', tone: 'warn' },
-  chase_vendor: { label: 'Chase vendor', tone: 'warn' },
+  chase_vendor: { label: 'Follow up with vendor', tone: 'warn' },
   paused: { label: 'Clock paused', tone: 'info' },
   open: { label: 'On time', tone: 'ok' },
   quoted: { label: 'Quoted', tone: 'info' },
@@ -87,17 +94,19 @@ export const STATE: Record<string, { label: string; tone: Tone }> = {
 const NEXT = ['ACKNOWLEDGED', 'CLARIFYING', 'WAITING_VENDOR', 'PRICING', 'QUOTE_SENT', 'WON', 'LOST', 'NO_BID'];
 const CLOSED = ['WON', 'LOST', 'NO_BID'];
 const pct = (v?: number | null) => (v == null ? '–' : `${Math.round(v * 100)}%`);
+// Working hours as a person says them: whole working days (8 hours) once it is a day or more.
+const workTime = (h: number) =>
+  h >= 8
+    ? `${Math.round(h / 8)} working day${Math.round(h / 8) === 1 ? '' : 's'}`
+    : `${Math.round(h)} working hour${Math.round(h) === 1 ? '' : 's'}`;
 const hoursLeft = (r: Rfq) =>
-  r.hours_left == null
-    ? ''
-    : r.hours_left <= 0
-      ? `${Math.abs(r.hours_left).toFixed(0)} working h late`
-      : `${r.hours_left.toFixed(0)} working h left`;
+  r.hours_left == null ? '' : r.hours_left <= 0 ? `${workTime(Math.abs(r.hours_left))} late` : `${workTime(r.hours_left)} left`;
 
 const SHOW = ['open', 'mine', 'all'] as const;
 const col = columnHelper<Rfq>();
 
 export function RfqsView() {
+  useAppPeople(); // warm the people list so the Log an RFQ dialog opens with it ready
   const { hasRole, employeeEmail } = useAuth();
   const canEdit = hasRole('OPERATOR');
   const wide = useMediaQuery('(min-width: 1280px)');
@@ -151,17 +160,29 @@ export function RfqsView() {
     onSettled: () => client.invalidateQueries({ queryKey: ['rfqs'] }),
   });
 
+  const comments = useCommentCounts(
+    'rfq',
+    rows.map((r) => String(r.id)),
+  ).data;
   const columns = col.columns([
-    col.accessor('number', { header: 'RFQ', cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span> }),
-    col.accessor('customer', { header: 'Customer', meta: { className: 'max-w-48 truncate' }, cell: (c) => c.getValue() || 'Unknown' }),
-    col.accessor('subject', { header: 'What to quote', meta: { className: 'max-w-72 truncate' }, cell: (c) => c.getValue() || '–' }),
-    col.accessor('status', { header: 'Status', cell: (c) => STATUS_LABEL[c.getValue()] ?? words(c.getValue()) }),
+    col.accessor('number', {
+      header: 'RFQ',
+      cell: (c) => (
+        <span className="whitespace-nowrap">
+          <span className="font-mono text-xs">{c.getValue()}</span>
+          <CommentCount n={comments?.[String(c.row.original.id)]} />
+        </span>
+      ),
+    }),
+    col.accessor('customer', { header: 'Customer', meta: { className: 'max-w-28 truncate' }, cell: (c) => c.getValue() || 'Unknown' }),
+    col.accessor('subject', { header: 'What to quote', meta: { className: 'max-w-40 truncate' }, cell: (c) => c.getValue() || '–' }),
+    col.accessor('status', { header: 'Status', meta: { hideBelow: 'xl' }, cell: (c) => STATUS_LABEL[c.getValue()] ?? words(c.getValue()) }),
     col.accessor('effective_due_at', {
       header: 'Quote due',
       cell: (c) => (
         <span className="grid">
           <span className="whitespace-nowrap">{dateTime(c.getValue())}</span>
-          {hoursLeft(c.row.original) && <span className="text-[11px] text-muted-foreground">{hoursLeft(c.row.original)}</span>}
+          {hoursLeft(c.row.original) && <span className="text-xs text-muted-foreground">{hoursLeft(c.row.original)}</span>}
         </span>
       ),
     }),
@@ -172,7 +193,7 @@ export function RfqsView() {
         return <ToneBadge tone={s.tone}>{s.label}</ToneBadge>;
       },
     }),
-    col.accessor('owner_email', { header: 'Owner', cell: (c) => person(c.getValue(), employeeEmail) || '–' }),
+    col.accessor('owner_email', { header: 'Owner', meta: { hideBelow: '2xl' }, cell: (c) => person(c.getValue(), employeeEmail) || '–' }),
     col.display({
       id: 'next',
       header: () => <span className="sr-only">Next step</span>,
@@ -185,7 +206,7 @@ export function RfqsView() {
             main={
               canEdit && r.status === 'NEW'
                 ? {
-                    label: 'Got it',
+                    label: 'Confirm receipt',
                     busy: acknowledge.isPending && acknowledge.variables?.id === r.id,
                     onClick: () => acknowledge.mutate(r),
                   }
@@ -213,20 +234,30 @@ export function RfqsView() {
             { value: 'all', label: 'All, incl. closed' },
           ]}
         />
-        {canEdit && (
-          <Button size="sm" className="ml-auto" onClick={() => setAdding(true)}>
-            <Plus /> Log an RFQ
-          </Button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          <SavedViews screen="rfqs" />
+          {hasRole('OPERATOR') && <DownloadMenu list="rfqs" />}
+          {canEdit && (
+            <Button size="sm" className="ml-1" onClick={() => setAdding(true)}>
+              <Plus /> Log an RFQ
+            </Button>
+          )}
+        </div>
       </div>
       {m && (
         <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
           {[
             ['Overdue', String(m.overdue ?? 0), Boolean(m.overdue)],
-            ['Median time to quote', m.turnaround_median_days != null ? `${m.turnaround_median_days} d` : '–', false],
-            ['Quoted on time', pct(m.on_time_pct), false],
-            ['Win rate', pct(m.win_rate), false],
-            ['Open by age', ['0-1 days', '2-3 days', '4-5 days', 'over 5 days'].map((b) => m.open_by_age?.[b] ?? 0).join(' / '), false],
+            ['Median time to quote', m.turnaround_median_days != null ? `${m.turnaround_median_days} d` : 'Not enough yet', false],
+            ['Quoted on time', m.on_time_pct == null ? 'Not enough yet' : pct(m.on_time_pct), false],
+            ['Win rate', m.win_rate == null ? 'Not enough yet' : pct(m.win_rate), false],
+            [
+              'Open by age',
+              ['0-1 days', '2-3 days', '4-5 days', 'over 5 days']
+                .map((b) => `${b.replace(' days', 'd').replace('over 5 d', '5d+').replace('over 5d', '5d+')} ${m.open_by_age?.[b] ?? 0}`)
+                .join(' · '),
+              false,
+            ],
           ].map(([label, value, bad]) => (
             <div key={String(label)} className="grid gap-0.5 rounded-lg border bg-card px-3 py-2">
               <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -236,13 +267,16 @@ export function RfqsView() {
         </dl>
       )}
       {t && (
-        <p className="text-xs text-muted-foreground">
-          Acknowledge within {t.ack_hours} working hours. Quote within {t.simple_days} day for a repeat part, {t.standard_days} days
-          standard, or {t.complex_days} days for a new design or vendor pricing.
-          {m?.win_rate_by_speed &&
-            ` Win rate when quoted within 2 days: ${pct(m.win_rate_by_speed['within 2 days'])}; slower: ${pct(m.win_rate_by_speed.slower)}.`}{' '}
-          Open by age counts business days: 0-1 / 2-3 / 4-5 / over 5.
-        </p>
+        <details className="text-xs text-muted-foreground">
+          <summary className="w-fit cursor-pointer hover:text-foreground">How these numbers are counted</summary>
+          <p className="mt-1.5 max-w-3xl">
+            Acknowledge within {t.ack_hours} working hours. Quote within {t.simple_days} day for a repeat part, {t.standard_days} days
+            standard, or {t.complex_days} days for a new design or vendor pricing.
+            {m?.win_rate_by_speed &&
+              ` Win rate when quoted within 2 days: ${pct(m.win_rate_by_speed['within 2 days'])}; slower: ${pct(m.win_rate_by_speed.slower)}.`}{' '}
+            Open by age counts business days: 0-1 / 2-3 / 4-5 / over 5.
+          </p>
+        </details>
       )}
 
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_26rem]')}>
@@ -256,7 +290,7 @@ export function RfqsView() {
               <BulkBar
                 count={tickedRows.length}
                 noun="request"
-                actionLabel="Got it"
+                actionLabel="Confirm receipt"
                 busy={gotItMany.isPending}
                 onAction={() => gotItMany.mutate(tickedRows)}
                 onClear={() => setTicked(new Set())}
@@ -322,6 +356,7 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
   const { employeeEmail } = useAuth();
   const blank = { status: '', reason: '', owner_email: '', vendor: '', quote_number: '', quote_amount: '', note: '' };
   const [form, setForm] = useState(blank);
+  const suppliers = useSuppliers();
   const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const changes = Object.fromEntries(Object.entries(form).filter(([, v]) => v.trim()));
   const needsReason = ['LOST', 'NO_BID'].includes(form.status);
@@ -338,6 +373,7 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
 
   return (
     <div className="grid gap-4">
+      <OpenJob rfqId={r.id} />
       <div className="flex flex-wrap gap-1.5">
         <ToneBadge tone={st.tone}>{st.label}</ToneBadge>
         {(r.reasons ?? []).map((x) => (
@@ -374,15 +410,19 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
         ]}
       />
 
-      {canEdit && !CLOSED.includes(r.status) && (
+      {canEdit && (
         <form
           className="grid gap-3 rounded-md border p-3"
           onSubmit={(e) => {
             e.preventDefault();
+            if (form.status === 'QUOTE_SENT' && !form.quote_number.trim() && !form.quote_amount.trim()) {
+              toast.error('Give the quote number or amount when marking it sent.');
+              return;
+            }
             if (Object.keys(changes).length && (!needsReason || form.reason.trim())) save.mutate();
           }}
         >
-          <PanelHeading>Move it along</PanelHeading>
+          <PanelHeading>{CLOSED.includes(r.status) ? 'Reopen or update' : 'Move it along'}</PanelHeading>
           <Field label="Status">
             <NativeSelect value={form.status} onChange={set('status')}>
               <option value="">Keep: {STATUS_LABEL[r.status] ?? r.status}</option>
@@ -400,7 +440,11 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
           )}
           {form.status === 'WAITING_VENDOR' && (
             <Field label="Vendor asked for a price">
-              <Input value={form.vendor} onChange={set('vendor')} />
+              <SuggestInput
+                value={form.vendor}
+                onChange={(v) => setForm({ ...form, vendor: v })}
+                options={(suppliers.data ?? []).map((s) => s.name)}
+              />
             </Field>
           )}
           <div className="grid grid-cols-2 gap-3">
@@ -412,11 +456,10 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
             </Field>
           </div>
           <Field label="Owner">
-            <Input
-              type="email"
-              placeholder={r.owner_email || 'name@alliedweldingsystems.com'}
+            <PersonSelect
               value={form.owner_email}
-              onChange={set('owner_email')}
+              onChange={(v) => setForm({ ...form, owner_email: v })}
+              none={r.owner_email ? 'Keep the current owner' : 'Nobody yet'}
             />
           </Field>
           <Field label="Note">
@@ -433,6 +476,8 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
           </Button>
         </form>
       )}
+
+      <UpdatesPanel itemType="rfq" itemRef={String(r.id)} />
 
       {(r.history?.length ?? 0) > 0 && (
         <div className="grid gap-2">
@@ -457,6 +502,7 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
 function AddRfq({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (open: boolean) => void; onAdded: (id: number) => void }) {
   const client = useQueryClient();
   const blank = { customer: '', contact_email: '', subject: '', summary: '', complexity: 'STANDARD', owner_email: '' };
+  const customers = useKnownCustomers();
   const [form, setForm] = useState(blank);
   const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const add = useMutation({
@@ -490,7 +536,12 @@ function AddRfq({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: 
         >
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Customer">
-              <Input value={form.customer} onChange={set('customer')} />
+              <SuggestInput
+                value={form.customer}
+                onChange={(v) => setForm({ ...form, customer: v })}
+                options={customers.data ?? []}
+                placeholder="e.g. Owens Corning Edmonton"
+              />
             </Field>
             <Field label="Contact email">
               <Input type="email" value={form.contact_email} onChange={set('contact_email')} />
@@ -511,7 +562,7 @@ function AddRfq({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: 
               </NativeSelect>
             </Field>
             <Field label="Owner">
-              <Input type="email" value={form.owner_email} onChange={set('owner_email')} placeholder="Who will quote it" />
+              <PersonSelect value={form.owner_email} onChange={(v) => setForm({ ...form, owner_email: v })} none="Who will quote it" />
             </Field>
           </div>
         </form>

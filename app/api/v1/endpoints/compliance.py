@@ -10,6 +10,7 @@ from app.models.compliance_mtr import (
     MTRVerifyRequest,
     NCRRecord,
 )
+from app.core.logging import logger
 from app.core.security import require_operator, require_viewer
 from app.services.mtr_service import mtr_service
 
@@ -56,9 +57,10 @@ def verify_supplier_mtr(
             actor_role=current_user.get("role", "SYSTEM"),
         )
     except Exception as exc:
+        logger.exception(f"Compliance request failed: {exc}")     # the detail goes to the log, not to the screen
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"MTR verification failed: {str(exc)}",
+            detail="The material test report could not be verified. Check the file and try again.",
         )
 
 
@@ -86,9 +88,10 @@ def get_order_certificate_of_conformance(
             heat_numbers=heats,
         )
     except Exception as exc:
+        logger.exception(f"Compliance request failed: {exc}")     # the detail goes to the log, not to the screen
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"CofC generation failed: {str(exc)}",
+            detail="The certificate of conformance could not be generated. Check the details and try again.",
         )
 
 
@@ -150,7 +153,8 @@ def disposition_ncr(
             detail=f"NCR {ncr_id} not found",
         )
     except Exception as exc:
+        logger.exception(f"Compliance request failed: {exc}")     # the detail goes to the log, not to the screen
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to disposition NCR: {str(exc)}",
+            detail="The non-conformance report could not be updated. Check the details and try again.",
         )

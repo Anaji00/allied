@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Download, Loader2 } from 'lucide-react';
 import { DataTable, columnHelper } from '@/components/data/data-table';
+import { DownloadMenu } from '@/components/data/download-menu';
 import { FilterChips } from '@/components/data/filters';
 import { EmptyState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
@@ -52,8 +53,8 @@ export function usePackingQueue(state?: State) {
     queryKey: ['packing-slips', state ?? 'all'],
     queryFn: async (): Promise<Queue | null> => {
       const res = await authFetch(`/api/v1/packing-slips/queue${state ? `?state=${state}` : ''}`, { cache: 'no-store' });
-      // Until the database update is applied the route fails; show "not available yet" rather than an error.
-      if (res.status === 404 || res.status >= 500) return null;
+      // Until the database update is applied the route returns 404; show "not available yet" rather than an error.
+      if (res.status === 404) return null;
       if (!res.ok) throw new Error(await problem(res));
       return (await res.json()) as Queue;
     },
@@ -67,9 +68,12 @@ const col = columnHelper<Job>();
 export function PackingSlips() {
   const { hasRole } = useAuth();
   const client = useQueryClient();
-  const [state, setState] = useState<State>('READY');
+  const [picked, setPicked] = useState<State | null>(null);
+  const summary = usePackingQueue();
+  const allCounts = summary.data?.counts ?? {};
+  const state: State = picked ?? ((allCounts.FAILED ?? 0) > 0 ? 'FAILED' : 'READY');
   const queue = usePackingQueue(state);
-  const counts = usePackingQueue().data?.counts ?? queue.data?.counts ?? {};
+  const counts = summary.data?.counts ?? queue.data?.counts ?? {};
 
   const act = useMutation({
     mutationFn: async ({ so, what }: { so: string; what: 'retry' | 'printed' }) => {
@@ -110,12 +114,17 @@ export function PackingSlips() {
                 {j.last_error}
               </span>
             )}
-            {j.status === 'QUEUED' && j.attempts > 0 && <span className="text-xs text-muted-foreground">Try {j.attempts}, will try again</span>}
+            {j.status === 'QUEUED' && j.attempts > 0 && (
+              <span className="text-xs text-muted-foreground">Try {j.attempts}, will try again</span>
+            )}
           </span>
         );
       },
     }),
-    col.accessor('created_at', { header: 'Queued', cell: (c) => (c.getValue() ? since(c.getValue()!) : '–') }),
+    col.accessor('created_at', {
+      header: 'Queued',
+      cell: (c) => (c.getValue() ? since(c.getValue()!) : '–'),
+    }),
     col.display({
       id: 'actions',
       header: '',
@@ -146,8 +155,7 @@ export function PackingSlips() {
   ]);
 
   if (queue.isPending) return <RowsSkeleton />;
-  if (queue.isError)
-    return <EmptyState title="Couldn’t load packing slips">{queue.error.message}</EmptyState>;
+  if (queue.isError) return <EmptyState title="Couldn’t load packing slips">{queue.error.message}</EmptyState>;
   if (queue.data === null)
     return (
       <EmptyState title="Not available yet">
@@ -160,17 +168,20 @@ export function PackingSlips() {
       <p className="text-sm text-muted-foreground">
         Each new order gets its packing slip made right away. If one can’t be made, it tries again, then asks for a person.
       </p>
-      <FilterChips
-        label="Show"
-        value={state}
-        onChange={setState}
-        options={FILTERS.map((f) => ({
-          value: f,
-          label: LABEL[f].label,
-          count: counts[f],
-          tone: f === 'FAILED' ? ('bad' as const) : undefined,
-        }))}
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <FilterChips
+          label="Show"
+          value={state}
+          onChange={setPicked}
+          options={FILTERS.map((f) => ({
+            value: f,
+            label: LABEL[f].label,
+            count: counts[f],
+            tone: f === 'FAILED' ? ('bad' as const) : undefined,
+          }))}
+        />
+        {hasRole('OPERATOR') && <DownloadMenu list="packing-slips" className="ml-auto" />}
+      </div>
       <DataTable
         label="Packing slips"
         columns={columns}

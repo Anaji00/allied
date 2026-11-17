@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import { RowsSkeleton } from '@/components/data/states';
 import { AssistantView } from '@/components/tools/assistant-view';
 
-export const metadata = { title: 'Assistant' };
+export const metadata = { title: 'Document tools' };
 
 export default function AssistantPage() {
   return (

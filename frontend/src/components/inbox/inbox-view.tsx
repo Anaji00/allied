@@ -3,18 +3,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { parseAsBoolean, parseAsStringLiteral, useQueryState } from 'nuqs';
+import Link from 'next/link';
+import { SavedViews } from '@/components/data/saved-views';
+import { RowDraft } from './row-draft';
+import { AlertGroups } from './alert-groups';
+import { AssignAlert } from './assign-alert';
+import { TodayHeader } from './today-header';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Pencil, Sparkles } from 'lucide-react';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { useFreshKeys } from '@/components/data/motion';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Kbd } from '@/components/ui/kbd';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
+import { editDraft } from '@/lib/assistant-api';
 import { ago, dateTime, words } from '@/lib/format';
 import { AiOutput } from '@/components/tools/ai-output';
 import { useUndoQueue } from '@/lib/undo';
@@ -36,7 +44,11 @@ const SOURCE_LABEL = {
   monday: 'monday.com events',
 };
 
-const STRIPE = { critical: 'bg-bad', warning: 'bg-warn', info: 'bg-info' } as const;
+const STRIPE = {
+  critical: 'bg-bad',
+  warning: 'bg-warn',
+  info: 'bg-info',
+} as const;
 
 // How long a decided item takes to fold away; matches the CSS duration below.
 const FOLD_MS = 200;
@@ -49,7 +61,7 @@ const without = (set: Set<string>, key: string) => {
 
 export function InboxView() {
   const router = useRouter();
-  const { hasRole } = useAuth();
+  const { hasRole, employeeName } = useAuth();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [shown0, setShow] = useQueryState('show', parseAsStringLiteral(GROUPS).withDefault('all'));
   // Notification links say ?filter=drafts; drafts to send sit under Approvals.
@@ -57,7 +69,12 @@ export function InboxView() {
   const show = filter === 'drafts' && shown0 === 'all' ? 'approvals' : shown0;
   const [everyone, setEveryone] = useQueryState('everyone', parseAsBoolean.withDefault(false));
   const [selectedKey, setSelectedKey] = useQueryState('item');
-  const { items, isPending, failed, canSeeAll, refetch } = useInbox({ everyone });
+  const inbox = useInbox({ everyone });
+  const { isPending, failed, canSeeAll, refetch } = inbox;
+  // The daily summary and personal brief are noise on a busy day: folded away until someone asks for them.
+  const [showBriefs, setShowBriefs] = useState(false);
+  const briefCount = inbox.items.filter((i) => i.quiet).length;
+  const items = useMemo(() => inbox.items.filter((i) => showBriefs || !i.quiet), [inbox.items, showBriefs]);
   const refresh = useRefreshSource();
   const queue = useUndoQueue();
 
@@ -94,7 +111,7 @@ export function InboxView() {
   const togglePick = (item: InboxItem) => setPicked((p) => (p.has(item.key) ? without(p, item.key) : new Set(p).add(item.key)));
   const pickedItems = shown.filter((i) => picked.has(i.key));
   // The open draft's whole kind ("all vendor follow-ups"), for deciding a group at once.
-  const sameKind = selected?.draft ? shown.filter((i) => i.draft?.kind === selected.draft!.kind) : [];
+  const sameKind = selected?.draft && !selected.draft.row ? shown.filter((i) => i.draft?.kind === selected.draft!.kind) : [];
 
   // Each item's fold timer, so an Undo during the fold can stop it hiding the item after all.
   const folding = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -145,7 +162,9 @@ export function InboxView() {
         await refresh('drafts');
         if (failed.length) {
           restore(failed.map((f) => byId.get(f.id)!).filter(Boolean));
-          toast.error(`${failed.length} of ${n} didn’t go through`, { description: failed[0].error });
+          toast.error(`${failed.length} of ${n} didn’t go through`, {
+            description: failed[0].error,
+          });
         }
       },
       onUndo: () => restore(),
@@ -190,7 +209,7 @@ export function InboxView() {
   useHotkeys(['k', 'ArrowUp'], () => shown[index - 1] && select(shown[index - 1]), { preventDefault: true }, [shown, index]);
   useHotkeys('e', () => selected && primary && decide(selected, primary), [selected, primary]);
   useHotkeys(
-    ['a', 'r', 'x'],
+    ['a', 'r', 'x', 'h'],
     (e) => {
       const action = allowed(selected).find((a) => a.hotkey === e.key.toLowerCase());
       if (selected && action) decide(selected, action);
@@ -207,36 +226,29 @@ export function InboxView() {
     },
     [selected, primary],
   );
-  useHotkeys('space', () => selected?.draft && togglePick(selected), { preventDefault: true }, [selected]);
+  useHotkeys('space', () => selected?.draft && !selected.draft.row && togglePick(selected), { preventDefault: true }, [selected]);
   // Shift+Enter: the picked drafts, or else every draft of the open one's kind.
   useHotkeys('shift+enter', () => decideMany(pickedItems.length ? pickedItems : sameKind, true), [pickedItems, sameKind]);
 
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 gap-4">
+      <TodayHeader
+        name={employeeName}
+        value={show}
+        onPick={(g) => {
+          void setShow(g === 'all' ? null : (g as (typeof GROUPS)[number]));
+          select(undefined);
+        }}
+        tiles={GROUPS.map((g) => ({
+          key: g,
+          label: g === 'all' ? 'Waiting on you' : GROUP_LABEL[g],
+          count: counts[g],
+          tone: g === 'problems' ? ('bad' as const) : g === 'schedule' ? ('warn' as const) : undefined,
+        }))}
+      />
       <div className="flex flex-wrap items-center gap-2">
-        <div role="tablist" aria-label="Show" className="flex flex-wrap gap-1.5">
-          {GROUPS.map((g) => (
-            <button
-              key={g}
-              role="tab"
-              type="button"
-              aria-selected={show === g}
-              onClick={() => {
-                void setShow(g === 'all' ? null : g);
-                select(undefined);
-              }}
-              className={cn(
-                'inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors',
-                show === g ? 'border-foreground bg-foreground text-background' : 'bg-card text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {GROUP_LABEL[g]}
-              <span className="tabular-nums opacity-70">{counts[g]}</span>
-            </button>
-          ))}
-        </div>
         {canSeeAll && (
-          <label className="ml-1 inline-flex items-center gap-2 text-xs text-muted-foreground">
+          <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
               checked={everyone}
@@ -246,14 +258,23 @@ export function InboxView() {
             Everyone’s alerts
           </label>
         )}
-        <p className="ml-auto hidden items-center gap-1.5 text-xs text-muted-foreground lg:flex">
+        <SavedViews screen="inbox" className="ml-auto" />
+        <p className="hidden items-center gap-1.5 text-xs text-muted-foreground lg:flex">
           <Kbd>J</Kbd>
-          <Kbd>K</Kbd> move · <Kbd>E</Kbd> do the first action · <Kbd>A</Kbd>
-          <Kbd>R</Kbd> approve or reject · <Kbd>Enter</Kbd> open or send · <Kbd>X</Kbd> cancel a draft · <Kbd>Space</Kbd> pick ·{' '}
-          <Kbd>Shift</Kbd>
-          <Kbd>Enter</Kbd> send picked
+          <Kbd>K</Kbd> move · <Kbd>E</Kbd> do the first action
         </p>
       </div>
+
+      <AlertGroups everyone={everyone && canSeeAll} />
+      {briefCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowBriefs(!showBriefs)}
+          className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          {showBriefs ? 'Hide' : 'Show'} {briefCount} older summar{briefCount === 1 ? 'y' : 'ies'}
+        </button>
+      )}
 
       {(pickedItems.length > 0 || sameKind.length > 1) && (
         <div
@@ -299,6 +320,13 @@ export function InboxView() {
         </p>
       )}
 
+      <p className="text-xs text-muted-foreground">
+        Looking for something you already handled?{' '}
+        <Link href="/alerts" className="underline">
+          Older alerts
+        </Link>
+      </p>
+
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]')}>
         <section aria-label="Waiting on you" className="overflow-hidden rounded-lg border bg-card">
           {isPending && items.length === 0 ? (
@@ -307,7 +335,10 @@ export function InboxView() {
             <ErrorState error={failed[0].error} onRetry={() => void refetch()} />
           ) : listed.length === 0 ? (
             <EmptyState title={show === 'all' ? 'Nothing waiting on you' : `No ${GROUP_LABEL[show].toLowerCase()} waiting`}>
-              New problems, approvals and schedule warnings show up here as they happen.
+              New problems, approvals and schedule warnings show up here as they happen.{' '}
+              <Link href="/alerts" className="underline">
+                Older alerts
+              </Link>
             </EmptyState>
           ) : (
             <ul role="listbox" aria-label="Inbox items" className="rows-enter">
@@ -331,7 +362,7 @@ export function InboxView() {
                       picked.has(item.key) && 'bg-accent/60',
                     )}
                   >
-                    {item.draft && (
+                    {item.draft && !item.draft.row && (
                       <label className="grid shrink-0 cursor-pointer place-items-center pl-3" title="Pick to send or cancel with others">
                         <input
                           type="checkbox"
@@ -391,8 +422,12 @@ function ItemDetail({
   actions: InboxAction[];
   onDecide: (item: InboxItem, action: InboxAction, commit?: InboxAction['commit']) => void;
 }) {
-  const [explanation, setExplanation] = useState<{ explanation?: string; suggested_fix?: string } | null>(null);
+  const [explanation, setExplanation] = useState<{
+    explanation?: string;
+    suggested_fix?: string;
+  } | null>(null);
   const [explaining, setExplaining] = useState(false);
+  const refresh = useRefreshSource();
   const viewOnly = actions.every((a) => a.href);
 
   async function explain() {
@@ -401,15 +436,17 @@ function ItemDetail({
     try {
       setExplanation(await explainProblem(item.explainId));
     } catch (error) {
-      toast.error('No explanation this time', { description: error instanceof Error ? error.message : undefined });
+      toast.error('No explanation this time', {
+        description: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setExplaining(false);
     }
   }
 
   return (
-    <div className="grid gap-4">
-      {item.body && <p className="text-sm leading-relaxed text-pretty whitespace-pre-line text-foreground/90">{item.body}</p>}
+    <div className="grid min-w-0 gap-4">
+      {item.body && <p className="text-sm leading-relaxed text-pretty break-words whitespace-pre-line text-foreground/90">{item.body}</p>}
 
       {item.explainId && (
         <div className="grid gap-2 border-l-2 border-info pl-3">
@@ -432,13 +469,15 @@ function ItemDetail({
         </div>
       )}
 
-      {item.draft?.email?.body && (
-        <div className="grid gap-1.5">
-          <h3 className="text-xs font-medium text-muted-foreground">What will be sent</h3>
-          <pre className="max-h-80 overflow-auto rounded-md border bg-muted/40 p-3 font-sans text-[13px] leading-relaxed whitespace-pre-wrap">
-            {item.draft.email.body}
-          </pre>
-        </div>
+      {item.draft?.row && <RowDraft key={item.draft.id} id={item.draft.id} row={item.draft.row} onDone={() => void refresh('drafts')} />}
+      {item.draft?.email?.body !== undefined && (
+        <EmailDraftEditor key={item.draft.id} id={item.draft.id} email={item.draft.email} onSaved={() => void refresh('drafts')} />
+      )}
+      {item.draft?.attachments && item.draft.attachments.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Attached: </span>
+          {item.draft.attachments.map((a) => a.name).join(', ')}
+        </p>
       )}
       {item.draft && item.draft.why.length > 0 && (
         <div className="grid gap-1.5">
@@ -452,6 +491,7 @@ function ItemDetail({
       )}
 
       <div className="rounded-md border p-3">
+        {item.source === 'alerts' && item.key.startsWith('alerts:') && <AssignAlert alertId={item.key.slice(7)} />}
         <Facts items={item.facts} />
       </div>
 
@@ -475,7 +515,81 @@ function ItemDetail({
           </Button>
         ))}
       </div>
-      {viewOnly && item.source !== 'alerts' && <p className="text-xs text-muted-foreground">Your role can see this but not act on it.</p>}
+      {viewOnly && item.source !== 'alerts' && (
+        <p className="text-xs text-muted-foreground">Nothing to approve here. Use Open to go to it.</p>
+      )}
+    </div>
+  );
+}
+
+function EmailDraftEditor({
+  id,
+  email,
+  onSaved,
+}: {
+  id: string;
+  email: { to?: string; subject?: string; body?: string };
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [to, setTo] = useState(email.to ?? '');
+  const [subject, setSubject] = useState(email.subject ?? '');
+  const [body, setBody] = useState(email.body ?? '');
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await editDraft(id, { to, subject, body });
+      toast.success('Draft updated');
+      setEditing(false);
+      onSaved();
+    } catch (e) {
+      toast.error('Could not save draft', { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-medium text-muted-foreground">What will be sent</h3>
+        {!editing && (
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setEditing(true)}>
+            <Pencil className="mr-1 size-3" /> Edit
+          </Button>
+        )}
+      </div>
+      {editing ? (
+        <div className="grid gap-2 rounded-md border bg-muted/30 p-3">
+          <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="To" aria-label="To" />
+          <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" aria-label="Subject" />
+          <Textarea rows={6} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Email body" />
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving}
+              onClick={() => {
+                setTo(email.to ?? '');
+                setSubject(email.subject ?? '');
+                setBody(email.body ?? '');
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" disabled={saving} onClick={save}>
+              {saving && <Loader2 className="animate-spin" />} Save
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <pre className="max-h-80 overflow-auto rounded-md border bg-muted/40 p-3 font-sans text-[13px] leading-relaxed whitespace-pre-wrap">
+          {email.body}
+        </pre>
+      )}
     </div>
   );
 }

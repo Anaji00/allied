@@ -114,7 +114,7 @@ export function WearView() {
       cell: (c) => (
         <span className="grid">
           <span className="truncate font-medium">{c.getValue()}</span>
-          <span className="font-mono text-[11px] text-muted-foreground">{c.row.original.equipment_tag}</span>
+          <span className="font-mono text-xs text-muted-foreground">{c.row.original.equipment_tag}</span>
         </span>
       ),
     }),
@@ -124,7 +124,7 @@ export function WearView() {
       cell: (c) => (
         <span className="grid">
           <span className="truncate">{c.getValue()}</span>
-          <span className="truncate text-[11px] text-muted-foreground">{c.row.original.plant_location}</span>
+          <span className="truncate text-xs text-muted-foreground">{c.row.original.plant_location}</span>
         </span>
       ),
     }),

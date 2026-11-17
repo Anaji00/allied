@@ -6,16 +6,10 @@ import { toast } from 'sonner';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { SuggestInput, useKnownCustomers } from '@/components/data/pick';
 import { api, ok } from '@/lib/api/client';
 import { useHealth } from '@/lib/queries';
 
@@ -25,6 +19,11 @@ type Preview = {
   customer_confidence: number;
   matched_items: { raw_text: string; matched_sku: string; description: string; confidence: number; preferred_vendor: string }[];
   vendor_po_splits: Record<string, string[]>;
+  /** Vendors that already have a purchase order on an open job of this customer. */
+  existing_pos?: { vendor: string; po_number: string; job: string }[];
+  suggested_job?: string | null;
+  /** The customer's PO is already an open order or purchase order in Sage. */
+  already_in_sage?: { kind: 'SO' | 'PO'; number: string; party?: string; open_amount?: number | string }[];
 };
 
 const EMPTY_LINE: Line = { text: '', qty: '1', price: '' };
@@ -46,6 +45,7 @@ export function NewOrderDialog({
 }) {
   const client = useQueryClient();
   const { data: health } = useHealth();
+  const customers = useKnownCustomers();
   const [customer, setCustomer] = useState(initial?.customer ?? '');
   const [po, setPo] = useState('');
   const [shipTo, setShipTo] = useState('');
@@ -53,6 +53,8 @@ export function NewOrderDialog({
     initial?.part ? { text: initial.part, qty: '1', price: initial.price ?? '' } : { ...EMPTY_LINE },
   ]);
   const [preview, setPreview] = useState<{ key: string; data: Preview } | null>(null);
+  // Which job the order joins. Until someone chooses, it is the job the check suggested (if any); "" means none.
+  const [jobChoice, setJobChoice] = useState<string | null>(null);
 
   const payload = () => ({
     customer_name: customer.trim(),
@@ -62,6 +64,9 @@ export function NewOrderDialog({
   });
   const key = JSON.stringify(payload());
   const checked = preview?.key === key;
+  const existing = preview?.data.existing_pos ?? [];
+  const jobOptions = [...new Set([...(preview?.data.suggested_job ? [preview.data.suggested_job] : []), ...existing.map((p) => p.job)])];
+  const job = jobChoice ?? preview?.data.suggested_job ?? '';
 
   const check = useMutation({
     mutationFn: async () => (await ok(api.POST('/api/v1/orders/dry-run', { body: payload() as never }))) as unknown as Preview,
@@ -70,7 +75,10 @@ export function NewOrderDialog({
   });
   const create = useMutation({
     mutationFn: async () =>
-      (await ok(api.POST('/api/v1/orders/process', { body: payload() as never }))) as { sales_order_number: string; messages?: string[] },
+      (await ok(api.POST('/api/v1/orders/process', { body: { ...payload(), ...(job ? { job } : {}) } as never }))) as {
+        sales_order_number: string;
+        messages?: string[];
+      },
     onSuccess: (res) => {
       toast.success(`Created sales order ${res.sales_order_number}`, { description: res.messages?.[0] });
       void client.invalidateQueries({ queryKey: ['orders'] });
@@ -87,6 +95,7 @@ export function NewOrderDialog({
     setShipTo('');
     setLines([{ ...EMPTY_LINE }]);
     setPreview(null);
+    setJobChoice(null);
   }
 
   const setLine = (i: number, patch: Partial<Line>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -117,7 +126,13 @@ export function NewOrderDialog({
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">Customer</span>
-              <Input value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="e.g. Owens Corning Edmonton" required />
+              <SuggestInput
+                value={customer}
+                onChange={setCustomer}
+                options={customers.data ?? []}
+                placeholder="e.g. Owens Corning Edmonton"
+                required
+              />
             </label>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">Customer PO</span>
@@ -140,8 +155,25 @@ export function NewOrderDialog({
                   onChange={(e) => setLine(i, { text: e.target.value })}
                   required
                 />
-                <Input aria-label={`Line ${i + 1} quantity`} type="number" min="1" step="any" value={line.qty} onChange={(e) => setLine(i, { qty: e.target.value })} required />
-                <Input aria-label={`Line ${i + 1} unit price`} type="number" min="0" step="0.01" placeholder="Price" value={line.price} onChange={(e) => setLine(i, { price: e.target.value })} required />
+                <Input
+                  aria-label={`Line ${i + 1} quantity`}
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={line.qty}
+                  onChange={(e) => setLine(i, { qty: e.target.value })}
+                  required
+                />
+                <Input
+                  aria-label={`Line ${i + 1} unit price`}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Price"
+                  value={line.price}
+                  onChange={(e) => setLine(i, { price: e.target.value })}
+                  required
+                />
                 <Button
                   type="button"
                   variant="ghost"
@@ -154,7 +186,13 @@ export function NewOrderDialog({
                 </Button>
               </div>
             ))}
-            <Button type="button" variant="ghost" size="sm" className="justify-self-start" onClick={() => setLines((ls) => [...ls, { ...EMPTY_LINE }])}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="justify-self-start"
+              onClick={() => setLines((ls) => [...ls, { ...EMPTY_LINE }])}
+            >
               <Plus /> Add line
             </Button>
           </fieldset>
@@ -169,8 +207,7 @@ export function NewOrderDialog({
             <ul className="grid gap-1">
               {preview.data.matched_items.map((m, i) => (
                 <li key={i} className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="text-muted-foreground">{m.raw_text}</span>→
-                  <span className="font-mono text-xs">{m.matched_sku}</span>
+                  <span className="text-muted-foreground">{m.raw_text}</span>→<span className="font-mono text-xs">{m.matched_sku}</span>
                   <span className="text-xs text-muted-foreground">{m.preferred_vendor}</span>
                   <Confidence value={m.confidence} />
                 </li>
@@ -178,8 +215,50 @@ export function NewOrderDialog({
             </ul>
             <p className="text-muted-foreground">
               Supplier POs:{' '}
-              {Object.keys(preview.data.vendor_po_splits).filter((v) => v !== 'STOCK').join(', ') || 'none, all from stock'}
+              {Object.keys(preview.data.vendor_po_splits)
+                .filter((v) => v !== 'STOCK')
+                .join(', ') || 'none, all from stock'}
             </p>
+            {existing.length > 0 && (
+              <div className="grid gap-2 rounded-md bg-warn-soft p-3 text-warn">
+                <p className="font-medium">A purchase order already exists for this customer’s job.</p>
+                <ul className="grid gap-0.5 text-[13px]">
+                  {existing.map((p) => (
+                    <li key={`${p.vendor}-${p.po_number}`}>
+                      {p.vendor} already has PO {p.po_number} on {p.job}.
+                    </li>
+                  ))}
+                </ul>
+                <label className="grid gap-1 text-[13px]">
+                  <span>Attach this order to a job, so those vendors keep their PO number and no second one is issued:</span>
+                  <select
+                    value={job}
+                    onChange={(e) => setJobChoice(e.target.value)}
+                    className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    {jobOptions.map((j) => (
+                      <option key={j} value={j}>
+                        Attach to {j} (keep the PO numbers)
+                      </option>
+                    ))}
+                    <option value="">Don’t attach (issue new PO numbers)</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            {(preview.data.already_in_sage ?? []).length > 0 && (
+              <div className="rounded-md bg-warn-soft px-3 py-2 text-warn">
+                <p className="font-medium">This is already open in Sage. Don’t make it twice.</p>
+                <ul className="text-[13px]">
+                  {preview.data.already_in_sage!.map((a) => (
+                    <li key={`${a.kind}-${a.number}`}>
+                      {a.kind === 'SO' ? 'Sales order' : 'Purchase order'} {a.number}
+                      {a.party ? ` for ${a.party}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {!checked && <p className="text-warn">The order changed since this check. Check it again before creating it.</p>}
           </div>
         )}

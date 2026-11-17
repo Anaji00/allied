@@ -14,6 +14,7 @@ that keep people reading them rather than filtering them out:
 """
 
 import json
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -21,10 +22,11 @@ from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, cast, func, or_
 
 from app.config import settings
 from app.core.database import SessionLocal
+from app.core import status_words
 from app.core.logging import logger
 from app.models.db_models import NotificationDB, StaffContactDB
 
@@ -85,6 +87,13 @@ def contacts() -> Dict[str, Dict[str, Any]]:
     return value
 
 
+PLACEHOLDER_DOMAIN = "placeholder.invalid"      # reserved TLD (RFC 2606): a stand-in for a person whose email is not known yet
+
+
+def is_placeholder(email: Optional[str]) -> bool:
+    return bool(email) and str(email).strip().lower().endswith("@" + PLACEHOLDER_DOMAIN)
+
+
 def leadership() -> List[str]:
     people = [c["email"] for c in contacts().values() if c["active"] and c["role_tag"] == "leadership"]
     people += [e.strip() for e in (settings.LEADERSHIP_EMAILS or "").split(",") if e.strip()]
@@ -132,10 +141,11 @@ def notify(
     moving deadline leaves one live alert, not a pile. If the problem moves back to a date
     already alerted, that alert simply reopens; nobody is told twice."""
     severity = severity if severity in SEVERITIES else "info"
-    recipients = _unique(list(to) + (leadership() if include_leadership else []))
+    recipients = [e for e in _unique(list(to) + (leadership() if include_leadership else [])) if not is_placeholder(e)]
     if not recipients:
-        # Never drop an alert because a monday column was empty.
-        recipients = leadership()
+        # Never drop an alert because a monday column was empty or its owner has no real email yet; with no leadership
+        # configured either, the admin is told, so an alert is never left with nobody.
+        recipients = leadership() or [settings.ADMIN_EMAIL]
     cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.NOTIFY_COOLDOWN_HOURS)
     with _lock, SessionLocal() as db:
         # Still open, handled by a person, or recent: all count as already said.
@@ -354,22 +364,146 @@ def _as_dict(r: NotificationDB) -> Dict[str, Any]:
         "deliveries": r.deliveries, "created_at": r.created_at.isoformat() if r.created_at else None,
         "acknowledged_at": r.acknowledged_at.isoformat() if r.acknowledged_at else None,
         "acknowledged_by": r.acknowledged_by,
+        "severity_word": status_words.word("alert", r.severity),
+        "snoozed_until": r.snoozed_until.isoformat() if r.snoozed_until else None,
+        "assignee": r.assignee,
     }
 
 
-def inbox(email: Optional[str] = None, open_only: bool = False, limit: int = 100) -> List[Dict[str, Any]]:
+def _aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """A time with no zone is read as local business time (so 9am typed in Chicago is 9am Chicago, not UTC)."""
+    return dt if dt is None or dt.tzinfo else dt.replace(tzinfo=ZoneInfo(settings.BUSINESS_TZ))
+
+
+def _like_safe(text: str) -> str:
+    """The text with LIKE wildcards made literal (escape character is a backslash), so an address with _ or % matches only itself."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def inbox(email: Optional[str] = None, open_only: bool = False, limit: int = 100, include_snoozed: bool = False) -> List[Dict[str, Any]]:
+    """Alerts, newest first. Snoozed ones are left out until their time passes (include_snoozed shows them)."""
     with SessionLocal() as db:
         q = db.query(NotificationDB).order_by(NotificationDB.id.desc())
         if open_only:
             q = q.filter(NotificationDB.acknowledged_at.is_(None))
+        if not include_snoozed:
+            q = q.filter(or_(NotificationDB.snoozed_until.is_(None), NotificationDB.snoozed_until <= datetime.now(timezone.utc)))
         if email:
             # Narrow in SQL (the JSON list as text, case-insensitive), then check exactly below.
-            q = q.filter(cast(NotificationDB.recipients, String).ilike(f'%"{email.strip()}"%'))
+            q = q.filter(or_(cast(NotificationDB.recipients, String).ilike('%"' + _like_safe(email.strip()) + '"%', escape="\\"), func.lower(NotificationDB.assignee) == email.strip().lower()))
         out = [_as_dict(r) for r in q.limit(limit).all()]
     if email:
         e = email.strip().lower()
-        out = [n for n in out if e in {r.lower() for r in n["recipients"] or []}]
+        out = [n for n in out if e in {r.lower() for r in n["recipients"] or []} or (n["assignee"] or "").lower() == e]
     return out
+
+
+def group_of(kind: str) -> str:
+    """The plain-words group an alert kind belongs to (about eight groups instead of twenty kinds)."""
+    k = kind or ""
+    if k == "autopilot_drafts":
+        return "Drafts to approve"
+    for prefix, group in (("vendor_", "Vendors"), ("rfq_", "RFQs"), ("autopilot_rfq", "RFQs"), ("shipment_", "Shipments"), ("ship-", "Shipments"),
+                          ("milestone_", "Projects"), ("project", "Projects"), ("autopilot_order", "Orders"), ("order", "Orders"),
+                          ("daily_summary", "Briefs"), ("personal_brief", "Briefs"), ("autopilot_", "Automations")):
+        if k.startswith(prefix):
+            return group
+    return "Other"
+
+
+def rollup(email: Optional[str] = None, top: int = 5) -> List[Dict[str, Any]]:
+    """The open alerts as a few groups: how many, the worst severity, how old the oldest is, and the first few. Worst and oldest first."""
+    now = datetime.now(timezone.utc)
+    rank = {"critical": 0, "warning": 1, "info": 2}
+    groups: Dict[str, Dict[str, Any]] = {}
+    for n in inbox(email, open_only=True, limit=500):
+        g = groups.setdefault(group_of(n["kind"]), {"group": group_of(n["kind"]), "count": 0, "worst": "info", "oldest_days": 0, "items": []})
+        g["count"] += 1
+        if rank.get(n["severity"], 2) < rank[g["worst"]]:
+            g["worst"] = n["severity"]
+        made = datetime.fromisoformat(n["created_at"]) if n["created_at"] else now
+        made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
+        age = max(0, (now - made).days)
+        g["oldest_days"] = max(g["oldest_days"], age)
+        g["items"].append({"id": n["id"], "title": n["title"], "severity": n["severity"], "link": n["link"], "age_days": age, "assignee": n["assignee"]})
+    for g in groups.values():
+        g["items"].sort(key=lambda i: (rank.get(i["severity"], 2), -i["age_days"]))
+        g["items"] = g["items"][:top]
+    return sorted(groups.values(), key=lambda g: (rank[g["worst"]], -g["count"]))
+
+
+MAX_SNOOZE_HOURS = 24 * 30
+MAX_CRITICAL_SNOOZE_HOURS = 24
+_PLAIN_ADDRESS = re.compile(r"[^@\s;,<>\"()\[\]\\\x00-\x1f\x7f]+@[^@\s;,<>\"()\[\]\\\x00-\x1f\x7f]+\.[^@\s;,<>\"()\[\]\\\x00-\x1f\x7f.]+")
+
+
+def _may_touch(row: NotificationDB, email: str, any_alert: bool) -> bool:
+    mine = {r.lower() for r in row.recipients or []} | ({row.assignee.lower()} if row.assignee else set())
+    return any_alert or (email or "").lower() in mine
+
+
+def snooze(nid: int, email: str, until: Optional[datetime] = None, hours: Optional[float] = None, any_alert: bool = False) -> Any:
+    """Hides an open alert until a time (a date and time, or hours from now, at most 30 days). Returns the time, or "missing", "done", "forbidden", "bad"."""
+    now = datetime.now(timezone.utc)
+    if isinstance(hours, bool):
+        return "bad"
+    if until is None and hours is not None:
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError):
+            return "bad"
+        if not (hours > 0) or hours > MAX_SNOOZE_HOURS:
+            return "bad"
+        until = now + timedelta(hours=hours)
+    until = _aware(until)
+    until = until.astimezone(timezone.utc) if until is not None else None          # stored as UTC: SQLite keeps no zone, and the inbox compares against UTC
+    if until is None or until <= now or until > now + timedelta(hours=MAX_SNOOZE_HOURS):
+        return "bad"
+    with SessionLocal() as db:
+        row = db.get(NotificationDB, nid)
+        if row is None:
+            return "missing"
+        if row.acknowledged_at is not None:
+            return "done"
+        if not _may_touch(row, email, any_alert):
+            return "forbidden"
+        if row.severity == "critical" and until > now + timedelta(hours=MAX_CRITICAL_SNOOZE_HOURS):
+            return "bad"          # snooze is shared by everyone the alert went to, so an urgent one can only be put off briefly
+        row.snoozed_until = until
+        db.commit()
+    return until
+
+
+def assign(nid: int, email: str, to: str, any_alert: bool = False) -> str:
+    """Hands an open alert to one person. Returns "ok", "missing", "done", "forbidden" or "bad" (not a real address)."""
+    to = (to or "").strip().lower()
+    if len(to) > 254 or not _PLAIN_ADDRESS.fullmatch(to) or is_placeholder(to):
+        return "bad"
+    from app.core.security import _account
+    with SessionLocal() as db:
+        row = db.get(NotificationDB, nid)
+        if row is None:
+            return "missing"
+        if row.acknowledged_at is not None:
+            return "done"
+        if not _may_touch(row, email, any_alert):
+            return "forbidden"
+        found = _account(to)
+        if found is None or not found[0]:
+            return "bad"          # only an active staff account can be handed an alert
+        row.assignee = to
+        row.snoozed_until = None          # handing it over wakes it up for them
+        db.commit()
+    return "ok"
+
+
+def acknowledge_group(group: str, email: str, any_alert: bool = False) -> int:
+    """Closes every open alert in a group that this person may close. Returns how many."""
+    closed = 0
+    for n in inbox(None if any_alert else email, open_only=True, limit=500):
+        if group_of(n["kind"]) == group and acknowledge(n["id"], email, any_alert) == "ok":
+            closed += 1
+    return closed
 
 
 def acknowledge(nid: int, email: str, any_alert: bool = False) -> str:
@@ -383,7 +517,7 @@ def acknowledge(nid: int, email: str, any_alert: bool = False) -> str:
             return "missing"
         if row.acknowledged_at is not None:
             return "done"
-        if not any_alert and email.lower() not in {r.lower() for r in row.recipients or []}:
+        if not _may_touch(row, email, any_alert):
             return "forbidden"
         row.acknowledged_at = datetime.now(timezone.utc)
         row.acknowledged_by = email

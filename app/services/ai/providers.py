@@ -42,6 +42,10 @@ class AIUnavailableError(Exception):
 class AIRateLimitedError(AIUnavailableError):
     """The engine's usage limit is reached for now; another engine may still answer."""
 
+    def __init__(self, message: str = "", retry_after: float = 0.0):
+        super().__init__(message)
+        self.retry_after = retry_after
+
 
 class AIEngineDownError(AIUnavailableError):
     """The engine failed for a reason another engine may not share: an outage, a timeout,
@@ -278,6 +282,30 @@ class GroqProvider(AIProvider):
     def model(self) -> str:
         return settings.GROQ_TEXT_MODEL
 
+    @staticmethod
+    def _chain() -> List[str]:
+        """The text models to try, in order: the main one, then GROQ_FALLBACK_MODELS. Groq counts the free
+        tier's daily limit per model, so when one is used up the next still has its own."""
+        names = [settings.GROQ_TEXT_MODEL] + [m.strip() for m in (settings.GROQ_FALLBACK_MODELS or "").split(",")]
+        return list(dict.fromkeys(m for m in names if m))
+
+    def _across(self, call):
+        """Run `call(model)` on the first model that isn't out of quota. A model that reports a limit is left
+        alone for as long as Groq said to wait (at most an hour), so later calls don't each waste a try on it."""
+        chain = self._chain()
+        now = time.monotonic()
+        order = [m for m in chain if _cooling.get(m, 0) <= now] or chain[:1]
+        last: Optional[AIRateLimitedError] = None
+        for model in order:
+            try:
+                return call(model)
+            except AIRateLimitedError as exc:
+                last = exc
+                if len(chain) > 1:
+                    _cooling[model] = time.monotonic() + min(max(exc.retry_after, 30.0), 3600.0)
+                    logger.warning(f"Groq limit reached on {model}; trying the next model.")
+        raise last
+
     @property
     def can_see_images(self) -> bool:
         return bool(settings.GROQ_VISION_MODEL)
@@ -321,8 +349,7 @@ class GroqProvider(AIProvider):
                     time.sleep(wait + random.uniform(0, 1))  # jitter, so parallel callers don't retry together
                     continue
                 raise AIRateLimitedError(
-                    f"Groq's free-tier limit is reached; try again in about {max(1, round(wait))}s."
-                )
+                    f"Groq's free-tier limit is reached; try again in about {max(1, round(wait))}s.", retry_after=wait)
             if status in (500, 502, 503, 498):  # Groq's documented transient errors: retry, then fall back
                 pause = min(8.0, 0.5 * 2 ** attempt) * random.uniform(0.5, 1.0)
                 if attempt < 3 and time.monotonic() + pause < deadline:
@@ -362,17 +389,20 @@ class GroqProvider(AIProvider):
     def text(self, system: str, prompt: str) -> str:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         try:
-            return self._content(self._post(self._body(self.model, messages)))
+            return self._across(lambda m: self._content(self._post(self._body(m, messages))))
         except _GroqBadRequest as exc:
             raise AIUnavailableError(f"Groq returned HTTP {exc.status}: {exc.detail}")
 
     def structured(self, system: str, prompt: str, schema: Type[T], images: Optional[List[bytes]] = None) -> T:
-        model = self.model
-        content: Any = prompt
         if images:
             if not settings.GROQ_VISION_MODEL:
                 raise AIUnavailableError("Reading images needs GROQ_VISION_MODEL set.")
-            model = settings.GROQ_VISION_MODEL
+            return self._structured_on(settings.GROQ_VISION_MODEL, system, prompt, schema, images)   # one vision model: no chain
+        return self._across(lambda m: self._structured_on(m, system, prompt, schema, None))
+
+    def _structured_on(self, model: str, system: str, prompt: str, schema: Type[T], images: Optional[List[bytes]]) -> T:
+        content: Any = prompt
+        if images:
             content = [{"type": "text", "text": prompt}] + [
                 {"type": "image_url", "image_url": {
                     "url": f"data:{_media_type(img)};base64,{base64.b64encode(img).decode('ascii')}"}}
@@ -407,12 +437,15 @@ class GroqProvider(AIProvider):
 
     def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         # gpt-oss on Groq makes one tool call per turn; parallel calls are not offered.
-        body = self._body(self.model, messages)
-        if tools:
-            body["tools"] = tools
-            body["tool_choice"] = "auto"
+        def one(model: str) -> Dict[str, Any]:
+            body = self._body(model, messages)
+            if tools:
+                body["tools"] = tools
+                body["tool_choice"] = "auto"
+            return self._post(body)
+
         try:
-            data = self._post(body)
+            data = self._across(one)
         except _GroqBadRequest as exc:
             raise AIUnavailableError(f"Groq returned HTTP {exc.status}: {exc.detail}")
         choice = (data.get("choices") or [{}])[0]
@@ -423,6 +456,7 @@ class GroqProvider(AIProvider):
 
 
 _strict_refused: set = set()  # (model, schema) pairs Groq would not constrain; skip straight to JSON mode
+_cooling: Dict[str, float] = {}  # Groq model -> time.monotonic() until which it is out of quota
 
 
 class _GroqBadRequest(Exception):
@@ -512,6 +546,7 @@ class ClaudeProvider(AIProvider):
             "provider": self.name,
             "model": self.model,
             "ready": has_key,
+            "tools": False,
             "detail": (
                 f"Anthropic API ({self.model}). Every call is billed."
                 if has_key else "Set ANTHROPIC_API_KEY to use the Anthropic API."

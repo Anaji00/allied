@@ -1,0 +1,3 @@
+Customer ID,Customer Name,Reference,Date,Payment Method,Cash Account,Cash Amount(X),Number of Distributions,Invoice Paid,Amount
+10195,Owens Corning Starr Composites,R-J-1,11/25/2026,Check,1000-00,"1,500.00",2,INV-J-1,"1,000.00"
+10195,Owens Corning Starr Composites,R-J-1,11/25/2026,Check,1000-00,"1,500.00",2,INV-J-9,500.00

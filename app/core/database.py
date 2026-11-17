@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker, DeclarativeBase
@@ -151,7 +151,40 @@ def _sync_schema(db_url: str) -> None:
         logger.info(f"Existing schema predates migrations; stamping at baseline {baseline}")
         command.stamp(cfg, baseline)
 
+    from alembic.script import ScriptDirectory as _Scripts
+
+    head = _Scripts.from_config(cfg).get_current_head()
+    if has_version:
+        with _engine.begin() as conn:
+            current = MigrationContext.configure(conn).get_current_revision()
+        if current != head:
+            _backup_before_migrating(current)
     command.upgrade(cfg, "head")
+
+
+def _backup_before_migrating(current: Optional[str]) -> None:
+    """Copies the database file before a pending migration changes it, so a migration that fails partway can be undone. Never stops start-up."""
+    import sqlite3
+    from datetime import datetime
+
+    try:
+        path = _engine.url.database
+        if not path or path == ":memory:" or not Path(path).exists():
+            return
+        folder = Path(path).resolve().parent / "pre-migrate"
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"pre-migrate-{current}-{datetime.now():%Y%m%d-%H%M%S}.db"
+        src, dst = sqlite3.connect(f"file:{Path(path).resolve().as_posix()}?mode=ro", uri=True), sqlite3.connect(str(target))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        logger.info(f"Backed up the database to {target.name} before migrating from {current}")
+        for old in sorted(folder.glob("pre-migrate-*.db"))[:-5]:          # keep the five newest
+            old.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 - a failed backup must not stop the app from starting; the migration itself is unchanged
+        logger.warning(f"Could not back up the database before migrating: {exc}")
 
 
 def get_db() -> Generator[Session, None, None]:

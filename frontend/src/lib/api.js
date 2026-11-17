@@ -499,7 +499,8 @@ export async function loginUser(email, password) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || 'Login failed');
+    // A plain sentence from the server (for example "Too many wrong passwords. Try again in 4 minutes"); anything else is a general message.
+    throw new Error(typeof err.detail === 'string' && err.detail ? err.detail : 'Login failed');
   }
   return res.json();
 }
@@ -764,7 +765,14 @@ async function call(path, { method = 'GET', json, form } = {}) {
     try {
       const body = await res.json();
       if (typeof body.detail === 'string') detail = body.detail;
-    } catch {
+      else if (body.detail && typeof body.detail.message === 'string') {
+        // A form that isn't complete: keep the sentence for each field.
+        const err = new Error(body.detail.message);
+        err.fields = body.detail.fields;
+        throw err;
+      }
+    } catch (e) {
+      if (e && e.fields) throw e;
       // keep the generic message
     }
     throw new Error(detail);
@@ -774,10 +782,12 @@ async function call(path, { method = 'GET', json, form } = {}) {
 
 export const fetchProjects = () => call('/projects');
 export const syncProjects = () => call('/projects/sync', { method: 'POST' });
-export function submitDesignDocs(milestoneItemId, files, note) {
+export function submitDesignDocs(milestoneItemId, files, note, answers, templateId) {
   const form = new FormData();
   for (const f of files) form.append('files', f);
   form.append('note', note || '');
+  if (answers) form.append('answers', JSON.stringify(answers));
+  if (templateId) form.append('template_id', templateId);
   return call(`/projects/milestones/${encodeURIComponent(milestoneItemId)}/submissions`, { method: 'POST', form });
 }
 export const reviewSubmission = (id, approve, note) =>

@@ -2,7 +2,7 @@
 
 from typing import Dict, List
 import uuid
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, Response, UploadFile, File, HTTPException
 from app.core.logging import logger
 from app.core.security import require_operator, require_viewer
 from app.core.uploads import ensure_upload_dir, resolve_upload_path, safe_upload_name
@@ -14,7 +14,13 @@ from app.services.sales_service import SalesService
 from app.core.container import get_orchestrator
 from app.models.orders import InboundOrderRequest, OrderLineItem
 
-router = APIRouter()
+def _deprecated(response: Response) -> None:
+    """The assistant widget is the one AI entry point (it can search the same documents). These routes still work, and say so."""
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</api/v1/assistant>; rel="successor-version"'
+
+
+router = APIRouter(dependencies=[Depends(_deprecated)])
 lead_agent = LeadAgent()
 monday_client = MondayClient()
 sales_service = SalesService()
@@ -283,13 +289,13 @@ def run_action(action_type: str, payload: dict, current_user: dict) -> dict:
 
 
 @router.get("/sources", response_model=KnowledgeBaseSummary)
-def get_knowledge_base_sources() -> KnowledgeBaseSummary:
+def get_knowledge_base_sources(_user: dict = Depends(require_viewer)) -> KnowledgeBaseSummary:
     """Returns document counts across all indexed knowledge bases."""
     return rag_service.get_summary()
 
 
 @router.get("/templates")
-def get_business_prompt_templates() -> List[Dict[str, str]]:
+def get_business_prompt_templates(_user: dict = Depends(require_viewer)) -> List[Dict[str, str]]:
     """Returns one-touch prompt starters for estimators, sales reps, and operations."""
     return [
         {

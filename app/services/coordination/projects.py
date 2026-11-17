@@ -374,7 +374,8 @@ def _write_back(m: Dict[str, Any], label: str, update: str, idem: str) -> None:
         )
 
 
-def submit(milestone_item_id: str, files: List[Tuple[str, bytes]], note: str, user: Dict[str, Any]) -> Dict[str, Any]:
+def submit(milestone_item_id: str, files: List[Tuple[str, bytes]], note: str, user: Dict[str, Any],
+           template_id: str = "", answers: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not files:
         raise ValueError("Attach at least one design document.")
     allowed = {e.strip().lower() for e in settings.SUBMISSION_EXTENSIONS.split(",") if e.strip()}
@@ -390,6 +391,14 @@ def submit(milestone_item_id: str, files: List[Tuple[str, bytes]], note: str, us
 
     m, p = _milestone(milestone_item_id)
     who = user.get("email", "unknown")
+    # A form that matches this milestone must be filled in properly before anything is submitted.
+    from app.services.coordination import forms
+
+    form = forms.for_milestone(m.get("name") or "", template_id)
+    clean = None
+    if form:
+        clean = forms.validate(form, answers or {})          # raises FormError: one plain sentence per field
+        note = forms.render_note(form, clean, note)
     # One submission at a time, so two uploads cannot both become the same version.
     with _submit_lock, SessionLocal() as db:
         open_sub = (
@@ -406,6 +415,8 @@ def submit(milestone_item_id: str, files: List[Tuple[str, bytes]], note: str, us
             safe = _stored_name(name, taken)
             (folder / safe).write_bytes(data)
             stored.append({"name": name, "stored": str(folder / safe), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+        if form:
+            (folder / "answers.json").write_text(json.dumps({"form": form["id"], "answers": clean}, indent=2, ensure_ascii=False), encoding="utf-8")
         row = SubmissionDB(
             milestone_item_id=milestone_item_id, project_item_id=m["project_item_id"], version=version,
             files=stored, note=note or None, submitted_by=who,

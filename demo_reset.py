@@ -5,8 +5,12 @@ It deletes the SQLite file only. Master catalogues, generated packing slips
 and source code are untouched, and the schema is rebuilt from migrations the
 next time the service starts.
 
-    python demo_reset.py           # ask first
-    python demo_reset.py --yes     # no prompt
+    python demo_reset.py --delete-real-database          # ask first
+    python demo_reset.py --delete-real-database --yes    # no prompt
+
+THIS DELETES THE REAL DATABASE (data/allied_enterprise.db; a .bak copy is kept beside it). It refuses to run unless --delete-real-database is
+given, so a stray run, or a run with only --yes, cannot do it. For a demonstration use scripts/demo_seed.py instead: it builds a separate demo
+database in a folder you choose and never touches the real one.
 """
 
 import json
@@ -49,6 +53,11 @@ def reanchor_equipment() -> int:
 
 
 def main() -> int:
+    if "--delete-real-database" not in sys.argv:
+        print("Refused: this script deletes the REAL database (data/allied_enterprise.db) and nothing was changed.")
+        print("For a demonstration use:  python scripts/demo_seed.py --db <a path outside data/>   (a separate demo database).")
+        print("If you really mean to reset the real database, run:  python demo_reset.py --delete-real-database")
+        return 2
     if not DB.exists():
         print(f"No database at {DB} — already clean.")
         return 0

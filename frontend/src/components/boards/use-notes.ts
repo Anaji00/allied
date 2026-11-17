@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { authFetch } from '@/lib/api';
 import { api, ok } from '@/lib/api/client';
+import { fetchAppPeople } from '@/components/data/pick';
+import { withEngineers } from '@/lib/engineers';
 import { postForm } from '@/components/data/voice';
 import type { Recording } from '@/hooks/use-recorder';
 import { optimistic } from '@/lib/optimistic';
@@ -94,18 +96,39 @@ export function useMarkRead(boardId: string, me: string) {
   });
 }
 
-/** People who can be sent a note: the board's people with an email (from the rule options). */
+export type NotePerson = { email: string; name: string; role: string; label: string };
+
+/**
+ * People who can be sent a note, each with a name. The board's own rule options only list reviewers, leadership and alert
+ * contacts, so the app's users are added too; a person's role comes from the alert contacts ("engineer").
+ * `boardRead` says whether the app has read the board from monday yet (until then a job's owners can't be named).
+ */
 export function useNotePeople(role: string, enabled: boolean) {
   return useQuery({
     queryKey: ['autopilot', 'recipe-options', role],
-    queryFn: async () =>
-      (
-        (await ok(api.GET('/api/v1/autopilot/recipes/options', { params: { query: { board_role: role } } }))) as unknown as {
-          people?: { value: string; label: string }[];
-        }
-      ).people?.filter((p) => p.value.includes('@')) ?? [],
+    queryFn: async () => {
+      const options = (await ok(api.GET('/api/v1/autopilot/recipes/options', { params: { query: { board_role: role } } }))) as unknown as {
+        people?: { value: string; label: string }[];
+        board_people?: { name: string; email?: string | null }[];
+        board_read?: boolean;
+      };
+      const byEmail = new Map<string, NotePerson>();
+      const add = (p: NotePerson) => byEmail.set(p.email.trim().toLowerCase(), p);
+      const named = (email: string, name: string) => ({ email, name, role: '', label: name ? `${name} (${email})` : email });
+      // Everyone named on this board in monday; only those with an email on file can be picked (the rest still match by name).
+      (options.board_people ?? []).forEach((p) => p.email && !p.email.endsWith('.invalid') && add(named(p.email, p.name)));
+      (options.people ?? [])
+        .filter((p) => !p.value.endsWith('.invalid'))
+        .forEach((p) => add(named(p.value, p.label.replace(/\s*\(.*\)\s*$/, ''))));
+      // The app's own contacts and users know more (role, a fuller name), so they win.
+      (await fetchAppPeople()).filter((p) => p.email).forEach(add);
+      return {
+        people: withEngineers([...byEmail.values()]),
+        boardRead: options.board_read !== false,
+      };
+    },
     enabled,
-    staleTime: 10 * 60_000,
+    staleTime: 60_000,
   });
 }
 

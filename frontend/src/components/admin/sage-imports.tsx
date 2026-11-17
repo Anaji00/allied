@@ -21,14 +21,16 @@ import {
   uploadCSVFile,
 } from '@/lib/api';
 import { money } from '@/lib/format';
+import { BringInFromSage } from './sage-bring-in';
 import { useHealth } from '@/lib/queries';
 
-const TABS = ['sage', 'lists'] as const;
+const TABS = ['sage', 'lists', 'bring'] as const;
 
 export function SageImports() {
   const { hasRole } = useAuth();
   const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS).withDefault('sage'));
-  if (!hasRole('MANAGER')) return <EmptyState title="Managers only">Sage import files and list imports are open to managers and admins.</EmptyState>;
+  if (!hasRole('MANAGER'))
+    return <EmptyState title="Managers only">Sage import files and list imports are open to managers and admins.</EmptyState>;
   return (
     <div className="grid gap-4">
       <SectionTabs
@@ -38,9 +40,10 @@ export function SageImports() {
         tabs={[
           ['sage', 'Sage files'],
           ['lists', 'Update lists'],
+          ['bring', 'Bring in from Sage'],
         ]}
       />
-      {tab === 'sage' ? <SageFiles /> : <ListImports />}
+      {tab === 'sage' ? <SageFiles /> : tab === 'lists' ? <ListImports /> : <BringInFromSage />}
     </div>
   );
 }
@@ -49,10 +52,28 @@ type Summary = { sales_orders_count?: number; total_sales_volume?: number; purch
 type Kind = 'sales-orders' | 'purchase-orders';
 const FILE: Record<Kind, string> = { 'sales-orders': 'SO_IMPORT.CSV', 'purchase-orders': 'PO_IMPORT.CSV' };
 
+const SAGE_LAST_KEY = 'allied.sage.last';
+
 function SageFiles() {
   const client = useQueryClient();
   const { data: health } = useHealth();
-  const [last, setLast] = useState<{ kind: Kind; orders: string[] } | null>(null);
+  const [last, setLastState] = useState<{ kind: Kind; orders: string[] } | null>(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? sessionStorage.getItem(SAGE_LAST_KEY) : null;
+      return raw ? (JSON.parse(raw) as { kind: Kind; orders: string[] }) : null;
+    } catch {
+      return null;
+    }
+  });
+  const setLast = (next: { kind: Kind; orders: string[] } | null) => {
+    setLastState(next);
+    try {
+      if (next) sessionStorage.setItem(SAGE_LAST_KEY, JSON.stringify(next));
+      else sessionStorage.removeItem(SAGE_LAST_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  };
   const summary = useQuery({
     queryKey: ['sage', 'summary'],
     queryFn: async () => (await fetchSageExportSummary()) as Summary,
@@ -65,7 +86,9 @@ function SageFiles() {
     onSuccess: ({ kind, marked }) => {
       setLast(marked.length ? { kind, orders: marked } : null);
       toast.success(
-        marked.length ? `${FILE[kind]} downloaded: ${marked.length} order(s), now marked as sent to Sage` : `${FILE[kind]} downloaded. Nothing new since the last file.`,
+        marked.length
+          ? `${FILE[kind]} downloaded: ${marked.length} order(s), now marked as sent to Sage`
+          : `${FILE[kind]} downloaded. Nothing new since the last file.`,
       );
       refresh();
     },
@@ -147,7 +170,7 @@ function SageFiles() {
             {Object.entries(FILE).map(([, name]) => (
               <div key={name} className="grid gap-1">
                 <span className="font-mono text-xs">{name}</span>
-                <pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px]">{preview.data[name] || 'Empty'}</pre>
+                <pre className="max-h-72 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-xs">{preview.data[name] || 'Empty'}</pre>
               </div>
             ))}
           </div>
@@ -191,7 +214,14 @@ const LIST_TYPES = [
   ['ORDERS_BATCH', 'A batch of customer orders'],
 ] as const;
 
-type ImportResult = { status: string; message?: string; rows_processed?: number; records_created?: number; records_updated?: number; errors?: string[] };
+type ImportResult = {
+  status: string;
+  message?: string;
+  rows_processed?: number;
+  records_created?: number;
+  records_updated?: number;
+  errors?: string[];
+};
 
 function ListImports() {
   const client = useQueryClient();
@@ -232,7 +262,9 @@ function ListImports() {
     >
       <div className="grid gap-0.5">
         <h2 className="text-sm font-semibold">Update lists from a spreadsheet</h2>
-        <p className="text-xs text-muted-foreground">Add or change products, customers or suppliers, or bring in a batch of orders, from a CSV file.</p>
+        <p className="text-xs text-muted-foreground">
+          Add or change products, customers or suppliers, or bring in a batch of orders, from a CSV file.
+        </p>
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <Field label="What are you updating?" className="min-w-56">
@@ -244,7 +276,14 @@ function ListImports() {
             ))}
           </NativeSelect>
         </Field>
-        <Button type="button" variant="outline" size="sm" className="h-8" disabled={!templates.data?.[type]} onClick={() => setText(templates.data?.[type] ?? '')}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8"
+          disabled={!templates.data?.[type]}
+          onClick={() => setText(templates.data?.[type] ?? '')}
+        >
           Load sample rows
         </Button>
         <Button type="button" variant="outline" size="sm" className="h-8" disabled={busy} onClick={() => fileRef.current?.click()}>
@@ -263,7 +302,14 @@ function ListImports() {
         />
       </div>
       <Field label="Rows (the first line is the column headings)">
-        <Textarea rows={10} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste rows from your spreadsheet here…" spellCheck={false} className="font-mono text-xs" />
+        <Textarea
+          rows={10}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Paste rows from your spreadsheet here…"
+          spellCheck={false}
+          className="font-mono text-xs"
+        />
       </Field>
       <Button type="submit" className="justify-self-start" disabled={!text.trim() || busy}>
         {busy && <Loader2 className="animate-spin" />}
@@ -277,7 +323,8 @@ function ListImports() {
       {result && (
         <div className="grid gap-1.5 rounded-md bg-muted/40 p-3 text-[13px]">
           <p className={result.status === 'SUCCESS' ? 'font-medium text-ok' : 'font-medium text-warn'}>
-            {result.message} {result.rows_processed ?? 0} rows read, {result.records_created ?? 0} added, {result.records_updated ?? 0} updated.
+            {result.message} {result.rows_processed ?? 0} rows read, {result.records_created ?? 0} added, {result.records_updated ?? 0}{' '}
+            updated.
           </p>
           {(result.errors?.length ?? 0) > 0 && (
             <ul className="grid list-disc gap-0.5 pl-5 text-bad">

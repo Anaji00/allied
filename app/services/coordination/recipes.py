@@ -400,7 +400,7 @@ STARTERS: List[Dict[str, Any]] = [
      "recipe": {"name": "Customer drawing approval overdue", "board_role": "vendors", "trigger": "status_for",
                 "column": "WAITING ON DRAWING APPROVAL", "value": "7", "action": "notify", "recipients": "reviewers",
                 "subject": "{item} has not approved the drawing for {Description} ({days} days)",
-                "body": "{item} has had the drawing for {Description} for {days} days (customer PO {Customer PO#}). "
+                "body": "{item} has had the drawing for {Description} for {days} days (customer ref {Customer PO#}). "
                         "Every day here moves the ship date. Chase the approval."}},
     {"slug": "orders-long-fabrication",
      "why": "Fabrication runs a median of 15 days, but a NOL-TEC order has sat there 73 days and an OC-IRVING one 67.",
@@ -418,7 +418,7 @@ STARTERS: List[Dict[str, Any]] = [
      "saves": "The message telling Jane an order is hers.", "needs": "recipients",
      "recipe": {"name": "Order is for Jane", "board_role": "vendors", "trigger": "status_is", "value": "SEND TO JANE",
                 "action": "notify", "subject": "For you: {item} {Description} (PO {Allied PO#})",
-                "body": "{item} {Description} is marked SEND TO JANE. Vendor {Vendor}, customer PO {Customer PO#}."}},
+                "body": "{item} {Description} is marked SEND TO JANE. Vendor {Vendor}, customer ref {Customer PO#}."}},
     {"slug": "eng-review-waiting", "why": "Drawings sit in Sent for Review for a median of 26 days, the longest for 52.",
      "saves": "Reviews that wait because nobody was reminded.",
      "recipe": {"name": "Drawing waiting for review", "board_role": "projects", "trigger": "status_for",
@@ -599,6 +599,12 @@ def options(role: str) -> Dict[str, Any]:
             seen.add(email.lower())
             name = (alerts.contacts().get(email.lower()) or {}).get("name")
             people.append({"value": email, "label": f"{name} ({email})" if name else email})
+    board_people = []
+    if view:
+        by_name = {str(c.get("name") or "").strip().casefold(): e for e, c in alerts.contacts().items() if c.get("name")}
+        names = sorted({n.strip() for c in view["columns"] if c["type"] in ("people", "multiple-person") for r in view["items"]
+                        for n in (r["values"].get(c["id"]) or "").split(",") if n.strip()}, key=str.casefold)
+        board_people = [{"name": n, "email": by_name.get(n.casefold())} for n in names]       # email only where a staff contact has that name
     email_to = [{"value": "vendor", "label": "The order's vendor"}] if role == "vendors" else []
     if role == "rfqs":
         email_to.append({"value": "customer", "label": "The RFQ's customer contact"})
@@ -616,5 +622,5 @@ def options(role: str) -> Dict[str, Any]:
         "modes": [{"value": "suggest", "label": "A person sends each email"},
                   {"value": "auto", "label": "Send on its own (only once trusted)"}],
         "labels": labels, "dates": dates, "fields": ["item", "board", "status", "date", "days"] + fields,
-        "people": people, "email_to": email_to,
+        "people": people, "board_people": board_people, "email_to": email_to,
     }

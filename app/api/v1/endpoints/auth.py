@@ -1,6 +1,7 @@
 """Authentication API endpoints: login, refresh, profile, and user management."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -18,6 +19,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.audit import audit_event
+from app.core import login_guard
 from app.config import settings
 from app.models.auth import (
     CreateUserRequest,
@@ -32,18 +34,92 @@ from app.services.database_service import DatabaseService
 
 router = APIRouter()
 
+_DUMMY = {}
+
+
+def _dummy_hash() -> str:
+    if "h" not in _DUMMY:
+        _DUMMY["h"] = hash_password("not-a-real-account-password")
+    return _DUMMY["h"]
+
+
+def _trusted(ip: str) -> bool:
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped                      # what a dual-stack listener reports for an IPv4 caller
+    for net in str(settings.TRUSTED_PROXY_NETS or "").split(","):
+        try:
+            if net.strip() and addr in ipaddress.ip_network(net.strip(), strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _client_address(http: Request) -> str:
+    """The caller's address. The forwarded-for header is only believed for the hops our own
+    proxies added: the rightmost entry that is not one of them. Anything the caller put at
+    the front of the header is ignored, so it cannot be used to dodge the sign-in lock."""
+    peer = http.client.host if http.client else ""
+    if not _trusted(peer):
+        return peer
+    for entry in reversed([e.strip() for e in (http.headers.get("x-forwarded-for") or "").split(",") if e.strip()]):
+        if not _trusted(entry):
+            return entry[:100]
+    return peer
+
+
+def _refuse_if_locked(email: str, address: str) -> None:
+    wait = login_guard.seconds_locked(email, address)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many wrong passwords. Try again in {max(1, wait // 60)} minute(s).",
+            headers={"Retry-After": str(wait)},
+        )
+
+
+def _checked(password: str) -> str:
+    _refuse_weak(password)
+    return password
+
+
+def _refuse_weak(new_password: str, current_password: str = None) -> None:
+    problem = login_guard.password_problem(new_password, current_password)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+
 
 @router.post("/login", response_model=TokenResponse, summary="Authenticate and obtain JWT tokens")
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(request: LoginRequest, http: Request, db: Session = Depends(get_db)):
     """Authenticates a user with email/password and returns JWT access + refresh tokens."""
     email = request.email.strip().lower()
+    address = _client_address(http)
+    _refuse_if_locked(email, address)
     user = DatabaseService.get_user_by_email(db, email)
     if not user and email == settings.ADMIN_EMAIL.strip().lower():
         from app.core.security import seed_admin_user
         seed_admin_user()
         user = DatabaseService.get_user_by_email(db, email)
 
-    if not user or not verify_password(request.password, user.hashed_password):
+    # An unknown account is hashed against a dummy too, so it takes as long to refuse.
+    password_ok = verify_password(request.password, user.hashed_password if user else _dummy_hash())
+    if not user or not password_ok:
+        login_guard.record_failure(email, address)
+        audit_event(
+            db=db,
+            action="LOGIN_FAILED",
+            resource_type="USER",
+            resource_id=email,
+            actor_email=email,
+            actor_role=user.role if user else "GUEST",
+            facility=user.facility if user else "",
+            detail="Invalid email or password",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -55,11 +131,13 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Account is disabled. Contact your administrator.",
         )
 
+    login_guard.record_success(email, address)
     token_data = {
         "sub": user.email,
         "name": user.full_name,
         "role": user.role,
         "facility": user.facility,
+        "pv": login_guard.password_stamp(user.hashed_password),
     }
 
     access_token = create_access_token(token_data)
@@ -115,11 +193,20 @@ def refresh_token(request: RefreshRequest, db: Session = Depends(get_db)):
 
     # Re-read role and facility from the database so that a demotion takes
     # effect immediately instead of persisting for the life of the token.
+    stamp = payload.get("pv")
+    # A refresh token made before tokens carried a password stamp cannot be checked against a
+    # password change, so it is not renewed: the person signs in once more.
+    if stamp is None or stamp != login_guard.password_stamp(user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="The password was changed. Sign in again.",
+        )
     token_data = {
         "sub": user.email,
         "name": user.full_name,
         "role": user.role,
         "facility": user.facility,
+        "pv": login_guard.password_stamp(user.hashed_password),
     }
     new_access = create_access_token(token_data)
     return {"access_token": new_access, "token_type": "Bearer"}
@@ -156,12 +243,12 @@ def create_user(
     facility = request.facility.strip().upper()
     if role not in VALID_ROLES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=f"Invalid role '{request.role}'. Must be one of: {VALID_ROLES}",
         )
     if facility not in VALID_FACILITIES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=f"Invalid facility '{request.facility}'. Must be one of: {VALID_FACILITIES}",
         )
 
@@ -175,7 +262,7 @@ def create_user(
     user = DatabaseService.create_user(
         db=db,
         email=request.email,
-        hashed_password=hash_password(request.password),
+        hashed_password=hash_password(_checked(request.password)),
         full_name=request.full_name,
         role=role,
         facility=facility,
@@ -242,12 +329,12 @@ def update_user(
     active = request.is_active if request.is_active is not None else bool(user.is_active)
     if role not in VALID_ROLES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=f"Invalid role '{request.role}'. Must be one of: {VALID_ROLES}",
         )
     if facility not in VALID_FACILITIES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=f"Invalid facility '{request.facility}'. Must be one of: {VALID_FACILITIES}",
         )
 
@@ -280,7 +367,8 @@ def update_user(
         user.is_active = active
     if request.new_password:
         changes.append("password reset")
-        user.hashed_password = hash_password(request.new_password)
+        user.hashed_password = hash_password(_checked(request.new_password))
+        login_guard.unlock(user.email)
 
     if changes:
         db.commit()
@@ -298,3 +386,43 @@ def update_user(
             detail=f"Changed {user.email}: " + "; ".join(changes),
         )
     return _profile(user)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+@router.post("/change-password", summary="Change your own password")
+def change_password(
+    request: ChangePasswordRequest,
+    http: Request,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Allows any signed-in staff member to update their own password."""
+    email = (current_user.get("email") or "").strip().lower()
+    address = _client_address(http)
+    _refuse_if_locked(email, address)
+    user = DatabaseService.get_user_by_email(db, email)
+    if not user or not verify_password(request.current_password, user.hashed_password):
+        login_guard.record_failure(email, address)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect.")
+    _refuse_weak(request.new_password, request.current_password)
+    user.hashed_password = hash_password(request.new_password)
+    db.commit()
+    forget_account(user.email)
+    audit_event(
+        db=db,
+        action="PASSWORD_CHANGED",
+        resource_type="USER",
+        resource_id=user.email,
+        actor_email=user.email,
+        actor_role=user.role,
+        facility=user.facility,
+        detail="User changed their own password",
+    )
+    token_data = {"sub": user.email, "name": user.full_name, "role": user.role, "facility": user.facility,
+                  "pv": login_guard.password_stamp(user.hashed_password)}
+    # Every older session ended with the old password; these two keep this one going.
+    return {"ok": True, "access_token": create_access_token(token_data), "refresh_token": create_refresh_token(token_data)}

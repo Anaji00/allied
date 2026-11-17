@@ -1,14 +1,19 @@
 'use client';
 
+import { BoardChanges } from './board-changes';
+import { BoardHealth } from './board-health';
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from 'nuqs';
 import { Loader2, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
+import { UpdatesPanel } from '@/components/data/updates-panel';
 import { DetailPanel } from '@/components/data/detail-panel';
+import Link from 'next/link';
 import { FilterChips, NativeSelect, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DownloadMenu } from '@/components/data/download-menu';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { since } from '@/lib/format';
@@ -71,7 +76,11 @@ export function BoardsView() {
   if (!list.length)
     return (
       <EmptyState title="No monday boards have been read yet">
-        Boards show up here once the app reads them from monday. In practice mode nothing is read, so this stays empty.
+        Boards show up here once the app reads them from monday. In practice mode nothing is read, so this stays empty.{' '}
+        <Link href="/health?tab=monday" className="underline underline-offset-2">
+          Check the monday connection
+        </Link>{' '}
+        to see whether it is connected and read the boards.
       </EmptyState>
     );
 
@@ -163,6 +172,7 @@ function BoardScreen({
               Read from monday<span className="max-sm:hidden"> now</span>
             </Button>
           )}
+          <DownloadMenu list={`boards/${board.board_id}`} />
           {tracked && <AutomateButton data={automations.data} onOpen={() => void setAutomate(true)} />}
         </div>
       </div>
@@ -245,6 +255,9 @@ function BoardScreen({
         next read.
       </p>
 
+      <BoardChanges boardId={board.board_id} />
+      <BoardHealth boardId={board.board_id} onOpenItem={(id) => select(id)} />
+
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_24rem]')}>
         <div className="min-w-0">
           {items.length === 0 ? (
@@ -278,7 +291,12 @@ function BoardScreen({
           title={selected?.name || 'Item'}
           description={selected?.group_title ?? undefined}
         >
-          {selected && <ItemCard board={board} item={selected} automations={automations.data} />}
+          {selected && (
+            <div className="grid gap-4">
+              <ItemCard board={board} item={selected} automations={automations.data} />
+              <UpdatesPanel itemType="board_item" itemRef={String(selected.id)} />
+            </div>
+          )}
         </DetailPanel>
       </div>
       {tracked && (

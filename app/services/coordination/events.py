@@ -65,30 +65,59 @@ def acknowledge_rfq(e: Dict[str, Any]) -> List[Intent]:
                          "_rfq_id": r["id"]})]
 
 
+def new_board_row(e: Dict[str, Any]) -> List[Intent]:
+    """A request for a quote arrived by email, phone or the web form: queue its row for the Open RFQs board, filled in from
+    what the AI read, for a person to check and add. Requests that came from the board itself already have their row."""
+    r = e["rfq"]
+    if r.get("monday_item_id") or r.get("source") == "board":
+        return []
+    from app.services.coordination import rfqs
+
+    row = rfqs.board_row(r)
+    return [Intent("draft", f"rfq-row:{r['id']}", f"Add {r['number']} to the Open RFQs board ({r['customer'] or r['subject']})",
+                   to=reviewers(r.get("owner_email")), tool="add_rfq_to_monday", args={**row, "_rfq_id": r["id"]})]
+
+
 def ask_vendors_for_price(e: Dict[str, Any]) -> List[Intent]:
-    """An RFQ moved to waiting on a vendor: ask each bidding vendor at once, not two days later."""
+    """An RFQ moved to waiting on a vendor: draft a PRICE REQUEST to each bidding vendor, with the RFQ's drawings attached, for a person to approve.
+    The purchase order comes later, after the vendor's quotation is in and the price is agreed (see jobs.record_vendor_quote)."""
+    from app.services.coordination import files as item_files
+
     r = e["rfq"]
     if e.get("to") != "WAITING_VENDOR":
         return []
+    items = [i for i in (r.get("items") or []) if isinstance(i, dict) and i.get("description")]
+    lines = "\n".join(f"  - {i.get('quantity') or ''} {i.get('unit') or ''} {i['description']}".replace("  ", " ") for i in items) \
+        or f"  - {r['subject'] or 'as described in the attached drawings'}"
+    try:
+        files = item_files.listing("rfq", r["number"])
+    except Exception:  # noqa: BLE001 - no files is not an error; the draft says so
+        files = []
+    files = [f for f in files if f.get("design")]       # only files marked as design files go to a vendor; the customer's own papers never do
+    ids = [f["id"] for f in files]
+    shown = [{"name": f["filename"], "size": f.get("size")} for f in files]
+    why = ([f"Drawings attached: {', '.join(f['filename'] for f in files)}."] if files else
+           ["No drawings are marked for the vendor on this RFQ, so nothing is attached. Mark the design files in the RFQ's files before you send."])
     out, missing = [], []
-    ask = (f"Could you price {r['subject'] or 'the attached request'} for us (our ref {r['number']})? "
-           "Please include lead time and freight to our customer.\n\nThank you,\nAllied Welding Systems")
     for name in [n.strip() for n in (r.get("vendor") or "").split(",") if n.strip()]:
         email = vendor_email(name)
         if not email:
             missing.append(name)
             continue
+        body = (f"Hello {name},\n\nWe would like a price to make the part below, to the attached drawing(s).\n\nItems:\n{lines}\n\n"
+                "Please send your quotation with the price, the lead time and freight to our destination, and tell us the drawing revision you are "
+                "quoting.\n\nThank you,\nAllied Welding Systems")
         out.append(Intent("draft", f"rfq-price-ask:{r['id']}:{name.casefold()}",
-                          f"Ask {name} to price {r['number']} ({r['customer']})",
-                          to=reviewers(r.get("owner_email")), tool="send_email",
-                          args={"to": email, "subject": f"Price request: {r['subject'] or r['number']}",
-                                "body": f"Hello {name},\n\n{ask}"}))
+                          f"Price request to {name} for {r['number']} ({r['customer']})",
+                          to=reviewers(r.get("owner_email")), tool="send_vendor_price_request",
+                          args={"to": email, "vendor_name": name, "rfq_number": r["number"], "subject": f"Price request for {r['number']}",
+                                "body": body, "attach_file_ids": ids, "_attachments": shown, "_why": why, "_rfq_id": r["id"]}))
     if missing:  # one note for the RFQ, not one per vendor
         out.append(Intent("alert", f"rfq-price-ask:{r['id']}:no-email",
-                          f"Ask {', '.join(missing)} by hand (no email on file)",
-                          to=reviewers(r.get("owner_email")), title=f"Ask {', '.join(missing)} to price {r['number']}",
-                          body=f"No email on file for {', '.join(missing)}, so nothing was drafted.\n\n"
-                               f"Suggested message:\nHello,\n\n{ask}"))
+                          f"Ask {', '.join(missing)} for a price by hand (no email on file)",
+                          to=reviewers(r.get("owner_email")), title=f"Ask {', '.join(missing)} for a price on {r['number']}",
+                          body=f"No email on file for {', '.join(missing)}, so no price request was drafted. Add the address, or ask by hand.\n\n"
+                               f"Items:\n{lines}"))
     return out
 
 
@@ -100,7 +129,7 @@ def rfq_won(e: Dict[str, Any]) -> List[Intent]:
     return [Intent("alert", f"rfq-won:{r['id']}", f"{r['number']} won: tell the team to raise the order",
                    to=reviewers(r.get("owner_email")), leadership=True,
                    title=f"Won: {r['customer']} - {r['subject'] or r['number']}{amount}",
-                   body=f"{r['customer']} accepted {r.get('quote_number') or 'the quote'}. Next: the customer's PO, "
+                   body=f"{r['customer']} accepted {r.get('quote_number') or 'the quote'}. Next: the customer's order and its reference number, "
                         "the sales order, and the vendor PO on the orders board.")]
 
 
@@ -116,7 +145,7 @@ def track_shipped_order(e: Dict[str, Any]) -> List[Intent]:
         if any(s.get("reference") == ref for s in shipments.list_shipments(include_finished=True)):
             return
         due = j.get("customer_due")
-        eta = due if due and due > alerts.today().isoformat() else None  # a past date would read as late at once
+        eta = due if due and shipments._date_ok(str(due)) and due > alerts.today().isoformat() else None  # a past date would read as late at once; an unreadable one is left out
         shipments.create({"reference": ref, "mode": j.get("mode") or "SEA", "status": "DEPARTED",
                           "etd": alerts.today().isoformat(), "eta": eta,
                           "origin": j.get("vendor"), "destination": (j.get("description") or "").split(" - ")[0] or None,
@@ -162,15 +191,17 @@ def drawing_ready(e: Dict[str, Any]) -> List[Intent]:
 REACTIONS: Dict[str, Reaction] = {
     "rfq_acknowledge": Reaction("rfq.received", acknowledge_rfq, "suggest",
                                 "Tells the customer a request arrived and when the quote is due."),
+    "rfq_board_row": Reaction("rfq.received", new_board_row, "suggest",
+                              "Fills in a row for the Open RFQs board from the request, for a person to check and add."),
     "rfq_ask_vendors": Reaction("rfq.status_changed", ask_vendors_for_price, "suggest",
-                                "When an RFQ goes to waiting on a vendor, asks each bidding vendor for a price."),
+                                "When an RFQ goes to waiting on a vendor, drafts a price request (with the drawings) to each bidding vendor."),
     "rfq_won": Reaction("rfq.status_changed", rfq_won, "auto", "When a quote is won, tells the team and leadership."),
     "order_shipped": Reaction("order.status_changed", track_shipped_order, "auto",
                               "When an order goes to SHIPPED on the orders board, starts tracking the shipment."),
     "order_photos": Reaction("order.status_changed", photos_waiting, "auto",
                              "When an order is waiting on photos, tells staff to check them."),
     "vendor_late_chase": Reaction("vendor_job.late", chase_late_vendor, "suggest",
-                                  "When an order turns late and its wait after the PO is over, drafts the follow-up."),
+                                  "When an order turns late and the waiting time after the PO is over, drafts the follow-up."),
     "drawing_ready": Reaction("milestone.status_changed", drawing_ready, "auto",
                               "When a drawing job is finished, tells the owners of the vendor orders linked to it."),
 }
@@ -183,6 +214,9 @@ def modes() -> Dict[str, str]:
         name, _, mode = part.partition("=")
         if name.strip() in REACTIONS and mode.strip().lower() in autopilot.MODES:
             out[name.strip()] = mode.strip().lower()
+    from app.services.coordination import automations
+
+    out.update({k: v for k, v in automations.overrides("reaction").items() if k in REACTIONS})
     return out
 
 

@@ -166,6 +166,7 @@ def test_a_po_released_while_mail_was_off_is_sent_once_mail_is_on(monkeypatch):
     monkeypatch.setattr(monday_events, "_orchestrator", lambda: Orch())
     monkeypatch.setattr(monday_events, "_monday", lambda: Board())
     sends = []
+    monkeypatch.setattr(settings, "VENDOR_PO_MODE", "auto")        # this test is about the send itself; the default is a draft
     monkeypatch.setattr(outbound_email_service, "get_outbox", lambda limit=500: [])
 
     def run(status):

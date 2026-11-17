@@ -76,7 +76,7 @@ def test_hecla_rfq_through_acknowledgement_vendor_pricing_quote_and_win(monkeypa
     assert not _open(f"rfq-ack:{r['id']}:")
     # Waiting on Helen and Duke for prices: Helen is asked by email, Duke (no email) by hand.
     rfqs.update(r["id"], {"status": "WAITING_VENDOR", "vendor": "Helen, Duke"}, {"email": DOUG})
-    asks = _drafts(f"price {r['number']}")
+    asks = _drafts(f"Price request to Helen for {r['number']} (")
     assert len(asks) == 1 and asks[0].args["to"].startswith("helen@")   # Helen's address from the vendor list
     assert len(_all(f"autopilot:rfq-price-ask:{r['id']}:no-email")) == 1
     # Three working days later Helen hasn't priced it: a reminder once this week, and the team is told.

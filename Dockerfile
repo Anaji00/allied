@@ -21,8 +21,9 @@ FROM python:3.11-slim-bookworm AS runtime
 
 # tesseract-ocr: pytesseract reads scanned POs and drawings through it.
 # tini: passes stop signals on, so the workers shut down cleanly.
+# fonts-dejavu-core: PDF downloads need a font with Vietnamese accents (Chinese uses reportlab's built-in font).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tini \
+    && apt-get install -y --no-install-recommends tesseract-ocr tini fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Fixed uid/gid, so host folders mounted at /app/data and /app/output can be

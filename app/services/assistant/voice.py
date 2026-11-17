@@ -20,22 +20,35 @@ from app.core.database import SessionLocal
 from app.models.db_models import AssistantActionDB
 from app.services.assistant import agent
 
-_CONFIRM = re.compile(r"^\W*(?:yes|yeah|yep|ok(?:ay)?|sure|confirm(?:ed)?|do it|go ahead|approve|send it|please do|that'?s right|"
-                      r"xác nhận|đồng ý|được|vâng|确认|好的|可以|是的)\b", re.I)
-_CANCEL = re.compile(r"^\W*(?:no|nope|cancel|stop|never ?mind|don'?t|hủy|huỷ|không|thôi|取消|不要|不)\b", re.I)
+_BARE_YES = re.compile(r"^\W*(?:yes|yeah|yep|yup|ok(?:ay)?|sure|confirm(?:ed)?|do it|go ahead|approve|approved|send it|please do|that'?s right|correct|"
+                       r"xác nhận|đồng ý|được|vâng|确认|好的|可以|是的)(?:[\W]+(?:please|it|that|thanks|thank you|now))?\W*$", re.I)
+_CANCEL = re.compile(r"(?:^|\W)(?:no|nope|nah|cancel|stop|never ?mind|don'?t|do not|wait|hold on|hủy|huỷ|không|thôi|取消|不要|不)(?:\W|$)", re.I)
+_STOP = re.compile(r"^\W*(?:stop(?: listening)?|quiet|enough|that'?s all|goodbye|bye|done for now|dừng|dừng lại|停止|够了|再见)\W*$", re.I)
 _PRINT = re.compile(r"\bprint\b|\bin ra\b|打印", re.I)
 
 
+_YES_WORDS = {"yes", "yeah", "yep", "yup", "ok", "okay", "sure", "confirm", "confirmed", "approve", "approved", "send", "push"}
+_FILLER = {"go", "ahead", "do", "it", "that", "that's", "thats", "right", "correct", "please", "and", "to", "monday", "now"}
+
+
+def _only_confirming_words(text: str) -> bool:
+    """"send it and confirm push to monday": at least one real yes-word, and every other word is filler that goes with it. Thanks, "you", "and" or
+    any word naming something else ("approve PO 5 for HELEN") is not a yes: a silent recording is often transcribed as "Thank you." """
+    words = re.findall(r"[\w']+", text.casefold())
+    return bool(words) and any(w in _YES_WORDS for w in words) and all(w in _YES_WORDS or w in _FILLER for w in words)
+
+
 def voice_intent(transcript: str) -> Optional[str]:
-    """confirm, cancel or print when the words are plainly that; otherwise None (a new request)."""
+    """confirm, cancel or print when the words are plainly that; otherwise None (a new request). Only a BARE yes confirms: "yes but don't send it"
+    cancels, and "yes or no?" or "ok what is the total" is neither (it is asked again as a new request)."""
     text = (transcript or "").strip()
-    if not text or len(text.split()) > 14:        # a long sentence is a task, not an answer
+    if not text or len(text.split()) > 14 or re.search("[?？؟¿]", text):        # a long sentence or a question is a task, not an answer
         return None
     if _CANCEL.search(text):
         return "cancel"
     if _PRINT.search(text) and len(text.split()) <= 6:
         return "print"
-    return "confirm" if _CONFIRM.search(text) else None
+    return "confirm" if _BARE_YES.search(text) or _only_confirming_words(text) else None
 
 
 def _plain(text: str) -> str:
@@ -72,6 +85,9 @@ def spoken(reply: str, actions: List[Dict[str, Any]]) -> str:
     return text
 
 
+_MONEY_TOOLS = {"approve_po", "send_vendor_po", "send_vendor_price_request", "create_sales_order", "approve_design"}
+
+
 def _need_phrase(tool: str, transcript: str) -> Optional[str]:
     """For the high-impact kinds, the word the user must have said; None when nothing extra is needed."""
     low = (transcript or "").lower()
@@ -79,6 +95,8 @@ def _need_phrase(tool: str, transcript: str) -> Optional[str]:
         return 'say "confirm push to monday"'
     if tool == "send_email" and not re.search(r"\bsend\b|gửi|发送|發送", low):
         return 'say "send it"'
+    if tool in _MONEY_TOOLS and not re.search(r"\b(?:yes|yeah|yep|yup|confirm(?:ed)?|approve[d]?|send|go ahead|do it|proceed|oui|sí|si)\b|vâng|是的?|确认|確認", low):
+        return 'say "yes" or "confirm"'          # a bare "okay" / "sure" is a common noise transcription: it never approves money or a vendor mail
     return None
 
 
@@ -135,8 +153,15 @@ def command(user: Dict[str, Any], audio: Optional[bytes] = None, filename: str =
     transcript = (transcript or "").strip()
     if not transcript:
         raise ValueError("I couldn't hear anything. Try again, or type it.")
+    if isinstance(confirm_ids, str):
+        confirm_ids = [confirm_ids]
+    if confirm_ids is not None:
+        if not isinstance(confirm_ids, (list, tuple)) or len(confirm_ids) > 50:
+            raise ValueError("Too many things are waiting to be confirmed at once (at most 50). Confirm them in the app.")
+        confirm_ids = [str(i) for i in confirm_ids if i]
+    messages = [m for m in (messages if isinstance(messages, (list, tuple)) else []) if isinstance(m, dict)]
 
-    intent = voice_intent(transcript) if confirm_ids else None
+    intent = voice_intent(transcript) if confirm_ids else ("stop" if len(transcript.split()) <= 4 and _STOP.search(transcript) else None)
     base: Dict[str, Any] = {"transcript": transcript, "voice_intent": intent, "language": language or "en"}
     if intent in ("confirm", "cancel"):
         results = _decide_by_voice(confirm_ids or [], intent, transcript, user)
@@ -144,6 +169,9 @@ def command(user: Dict[str, Any], audio: Optional[bytes] = None, filename: str =
         return {**base, "reply_text": text, "spoken_text": _short(text, settings.VOICE_REPLY_MAX_WORDS),
                 "tool_actions_executed": results["done"], "held": results["held"], "action_cards": [], "plan": None,
                 "audio_base64": None, "spoken": _spoken_block(text, base["language"])}
+    if intent == "stop":                                  # hands-free: nothing is waiting, so "stop" ends the listening loop
+        return {**base, "reply_text": "Okay, I've stopped listening.", "spoken_text": "Okay.", "tool_actions_executed": [], "action_cards": [], "plan": None,
+                "audio_base64": None, "spoken": _spoken_block("Okay.", base["language"])}
     if intent == "print":
         text = "Printing it now."
         return {**base, "reply_text": text, "spoken_text": text, "tool_actions_executed": [], "action_cards": [], "plan": None,

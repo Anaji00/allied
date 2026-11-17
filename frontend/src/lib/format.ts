@@ -1,6 +1,9 @@
 // Formatting shared by the rebuilt screens. Money arrives from the API as exact
 // decimal strings ("1234.50"); it is only turned into a number for display.
 
+/** Dates are shown in the business's own time zone, so everyone sees the same day. */
+const BUSINESS_TZ = 'America/Chicago';
+
 const moneyCache = new Map<string, Intl.NumberFormat>();
 
 export function money(value: unknown, currency = 'USD') {
@@ -24,13 +27,15 @@ export function dateTime(iso?: string | null) {
   if (!iso) return '–';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '–';
-  return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: BUSINESS_TZ });
 }
 
 export function date(iso?: string | null) {
   if (!iso) return '–';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '–' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return Number.isNaN(d.getTime())
+    ? '–'
+    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: BUSINESS_TZ });
 }
 
 /** "8m", "3h", "Yesterday", or a date: how long ago, for list rows. */
@@ -44,14 +49,17 @@ export function ago(iso?: string | null, now = Date.now()) {
   const hours = Math.round(mins / 60);
   if (hours < 24) return `${hours}h`;
   if (hours < 48) return 'Yesterday';
-  return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: BUSINESS_TZ });
 }
 
 /** SNAKE_CASE codes from the API, as words: "SAGE_ERROR" → "Sage error". */
 export function words(code?: string | null) {
   if (!code) return '';
   const s = code.replace(/_/g, ' ').toLowerCase();
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  return (s.charAt(0).toUpperCase() + s.slice(1))
+    .replace(/\bRfq\b/g, 'RFQ')
+    .replace(/\bPo\b/g, 'PO')
+    .replace(/\bSku\b/g, 'part number');
 }
 
 /**
@@ -107,4 +115,56 @@ export function since(iso?: string | null, now = Date.now()) {
   if (short === 'now') return 'just now';
   if (short === 'Yesterday') return 'yesterday';
   return /^\d+[mh]$/.test(short) ? `${short} ago` : `on ${short}`;
+}
+
+const KNOWN_CODES: Record<string, string> = {
+  VENDOR_CHECKIN: 'Check in with the vendor',
+  AUTOPILOT_DRAFTS: 'Drafts waiting for you',
+  BOARD_ROW: 'Add to the monday board',
+  RFQ_OVERDUE: 'RFQ overdue',
+  VENDOR_LATE: 'Vendor is late',
+  SHIPMENT_FREE_TIME: 'Port free time is running out',
+  UNMATCHED_SKU: 'Part not matched',
+  INVOICE_COST_VARIANCE: 'Bill costs more than expected',
+  STALE_VENDOR_PRICE: 'Vendor price is old',
+  VENDOR_NOACK: 'Vendor hasn’t confirmed',
+  vendor_noack: 'Vendor hasn’t confirmed',
+  DISCREPANCY_FLAGGED: 'Needs a check',
+  DUPLICATE_INVOICE: 'Already entered',
+  NEW: 'New',
+  SYNCED_TO_SAGE: 'Made; not in a Sage file yet',
+  VALIDATION_ERROR: 'Needs a check',
+  SAGE_ERROR: 'Sage problem',
+  no_ack: 'PO not confirmed',
+  will_miss: 'Will miss its date',
+  at_risk: 'At risk',
+};
+
+/** Turns a raw code inside a line of text (SYNCED_TO_SAGE, no_ack, NEW) into plain words. Ordinary words are left alone. */
+/** A raw code as a short plain phrase. */
+export function kindWord(code?: string | null) {
+  if (!code) return '';
+  return KNOWN_CODES[code] ?? KNOWN_CODES[code.toUpperCase()] ?? words(code);
+}
+
+export function plain(text?: string | null) {
+  if (!text) return '';
+  // A full date such as 2026-11-08 reads "Nov 8".
+  text = text.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (m, y, mo, d) => {
+    const dt = new Date(Number(y), Number(mo) - 1, Number(d));
+    return Number.isNaN(dt.getTime()) ? m : dt.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+  });
+  if (/^[A-Z][A-Z0-9]*$/.test(text)) return KNOWN_CODES[text] ?? words(text);
+  // A code standing alone between dots ("NEW · E2E test", "SYNCED_TO_SAGE · CAD 1640.00").
+  text = text.replace(
+    /(^|·\s*)([A-Z][A-Z0-9_]{2,})(?=\s*(·|$))/g,
+    (m, lead, code) => `${lead}${KNOWN_CODES[code] ?? (/^(CAD|USD|CNY|EUR|GBP|JPY|RFQ|PO|SO)$/.test(code) ? code : words(code))}`,
+  );
+  return text.replace(/\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g, (m) => KNOWN_CODES[m] ?? words(m));
+}
+
+/** monday's "simulation" message in plain words. */
+export function practice(text?: string | null) {
+  if (!text) return '';
+  return /simulat|practice/i.test(text) ? 'Practice mode: the app is not connected to monday, so nothing is read.' : text;
 }

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.logging import logger
+from app.core.login_guard import password_stamp
 
 # ---------------------------------------------------------------------------
 # Password Hashing
@@ -116,7 +117,7 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
     email = payload.get("sub", "")
-    role = await run_in_threadpool(_live_role, email)  # may query the database on a cache miss
+    role = await run_in_threadpool(_live_role, email, payload.get("pv"))  # may query the database on a cache miss
 
     return {
         "email": email,
@@ -130,12 +131,18 @@ async def get_current_user(
 # removed or re-roled user loses access within that time, not when their
 # 8-hour token runs out, without a database query on every request.
 _ACCOUNT_TTL = 30.0
-_accounts: Dict[str, Tuple[float, Optional[Tuple[bool, str]]]] = {}
+_accounts: Dict[str, Tuple[float, Optional[Tuple[bool, str, str]]]] = {}
 _accounts_lock = threading.Lock()
 
 
 def _account(email: str) -> Optional[Tuple[bool, str]]:
     """(is_active, role) for the account, or None if it does not exist."""
+    full = _account_full(email)
+    return None if full is None else (full[0], full[1])
+
+
+def _account_full(email: str) -> Optional[Tuple[bool, str, str]]:
+    """(is_active, role, password stamp) for the account, or None if it does not exist."""
     key = (email or "").strip().lower()
     now = time.monotonic()
     with _accounts_lock:
@@ -147,7 +154,7 @@ def _account(email: str) -> Optional[Tuple[bool, str]]:
 
     with SessionLocal() as db:
         user = DatabaseService.get_user_by_email(db, key)
-        found = (bool(user.is_active), user.role or "VIEWER") if user is not None else None
+        found = (bool(user.is_active), user.role or "VIEWER", password_stamp(user.hashed_password)) if user is not None else None
     with _accounts_lock:
         _accounts[key] = (now, found)
     return found
@@ -159,24 +166,32 @@ def forget_account(email: str) -> None:
         _accounts.pop((email or "").strip().lower(), None)
 
 
-def _live_role(email: str) -> str:
+def _live_role(email: str, stamp: Optional[str] = None) -> str:
     """The account's current role. Refuses removed and disabled accounts.
 
     Token claims are a snapshot taken at login, so the role is read from the
     account itself: a demoted user does not keep their old role for 8 hours.
     """
-    account = _account(email)
+    account = _account_full(email)
     if account is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="This account no longer exists.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    active, role = account
+    active, role, current_stamp = account
     if not active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled. Contact your administrator.",
+        )
+    # A token made before the password last changed no longer works. Tokens made
+    # before this check existed carry no stamp and are left to expire.
+    if stamp is not None and stamp != current_stamp:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="The password was changed. Sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     return role
 

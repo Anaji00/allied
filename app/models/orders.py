@@ -163,6 +163,7 @@ class InboundOrderRequest(BaseModel):
     line_items: List[OrderLineItem]
     notes: Optional[str] = None
     blind_shipping: bool = True
+    job: Optional[str] = None      # the job (JOB-2026-0001) this order belongs to; its vendors keep the PO numbers they already have
 
     model_config = ConfigDict(extra="ignore")
 

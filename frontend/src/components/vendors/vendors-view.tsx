@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { parseAsBoolean, parseAsInteger, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +9,9 @@ import { toast } from 'sonner';
 import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
+import { UpdatesPanel } from '@/components/data/updates-panel';
+import { SavedViews } from '@/components/data/saved-views';
+import { DownloadMenu } from '@/components/data/download-menu';
 import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
@@ -21,7 +25,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
-import { dateTime, day, person, since } from '@/lib/format';
+import { dateTime, day, person, practice, since } from '@/lib/format';
 import { api, ok } from '@/lib/api/client';
 import { addVendorJob, fetchVendorJobs, syncVendorBoard, updateVendorJob } from '@/lib/opsApi';
 import { cn } from '@/lib/utils';
@@ -176,7 +180,7 @@ function Jobs({
     mutationFn: async () =>
       (await syncVendorBoard()) as { skipped?: string; jobs?: number; added?: number; changed?: number; removed?: number },
     onSuccess: (r) => {
-      if (r.skipped) toast.warning('The board wasn’t read', { description: r.skipped });
+      if (r.skipped) toast.warning('The board wasn’t read', { description: practice(r.skipped) });
       else toast.success(`Read ${r.jobs} jobs`, { description: `${r.added} new, ${r.changed} changed, ${r.removed} removed.` });
       void client.invalidateQueries({ queryKey: ['vendors'] });
     },
@@ -237,7 +241,7 @@ function Jobs({
         return (
           <span className="grid">
             <span className="truncate">{j.description || j.po_number || `Job ${j.id}`}</span>
-            {j.project_name && <span className="truncate text-[11px] text-muted-foreground">{j.project_name}</span>}
+            {j.project_name && <span className="truncate text-xs text-muted-foreground">{j.project_name}</span>}
           </span>
         );
       },
@@ -246,7 +250,13 @@ function Jobs({
     col.accessor('need_by', { header: 'Must ship by', cell: (x) => day(x.getValue()) }),
     col.accessor('slack_days', {
       header: 'Spare',
-      meta: { align: 'right' },
+      meta: {
+        align: 'right',
+        footer: (rows) => {
+          const spare = rows.map((r) => r.slack_days).filter((n): n is number => n != null);
+          return spare.length ? `tightest ${Math.min(...spare)} d` : null;
+        },
+      },
       cell: (x) =>
         x.getValue() == null ? '–' : <span className={cn(x.getValue()! < 0 && 'font-semibold text-bad')}>{x.getValue()} d</span>,
     }),
@@ -303,8 +313,10 @@ function Jobs({
           <input type="checkbox" checked={shipped} onChange={(e) => setShipped(e.target.checked)} />
           Show shipped
         </label>
+        <SavedViews screen="vendors" className="ml-auto" />
+        {hasRole('OPERATOR') && <DownloadMenu list="vendor-jobs" />}
         {canEdit && (
-          <div className="ml-auto flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -421,7 +433,19 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
               '–'
             ),
           ],
-          ['Project', j.project_name || j.project_item_id || '–'],
+          [
+            'Project',
+            j.project_name || j.project_item_id ? (
+              <Link
+                href={`/projects?project=${encodeURIComponent(String(j.project_name || j.project_item_id))}`}
+                className="underline underline-offset-2"
+              >
+                {j.project_name || j.project_item_id}
+              </Link>
+            ) : (
+              '–'
+            ),
+          ],
           ['PO placed', day(j.ordered_on)],
           ['We asked for', day(j.requested_on)],
           ['Vendor confirmed', day(j.acknowledged_on)],
@@ -482,6 +506,8 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
           </Button>
         </form>
       )}
+
+      <UpdatesPanel itemType="vendor_job" itemRef={String(j.id)} />
 
       {(j.history?.length ?? 0) > 0 && (
         <div className="grid gap-2">
@@ -628,8 +654,11 @@ const scoreColumns = scol.columns([
         '–'
       ),
   }),
-  scol.accessor('slips', { header: 'Date moves', meta: { align: 'right' } }),
-  scol.accessor('open', { header: 'Open', meta: { align: 'right' } }),
+  scol.accessor('slips', {
+    header: 'Date moves',
+    meta: { align: 'right', footer: (rows) => rows.reduce((n, r) => n + Number(r.slips || 0), 0) },
+  }),
+  scol.accessor('open', { header: 'Open', meta: { align: 'right', footer: (rows) => rows.reduce((n, r) => n + Number(r.open || 0), 0) } }),
 ]);
 
 function Scorecard({ data }: { data: Overview }) {

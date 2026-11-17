@@ -8,8 +8,8 @@ const nextConfig = {
   outputFileTracingRoot: import.meta.dirname,
   // Memoizes components automatically, so pages don't need hand-written useMemo/useCallback.
   reactCompiler: true,
-  // Dev only: lets a phone test the dev server through a Tailscale address (pc.tailnet.ts.net).
-  allowedDevOrigins: ['**.ts.net'],
+  // Dev only (ignored by the production build): lets a phone test the dev server through a Tailscale address, and lets a browser use 127.0.0.1 as well as localhost.
+  allowedDevOrigins: ['**.ts.net', '127.0.0.1', 'localhost'],
   experimental: {
     // The /api rewrite proxy gives up after 30s by default, which cut off AI
     // requests to the local model (35-60s each; a drawing check reads two).
@@ -35,6 +35,11 @@ const nextConfig = {
       { source: '/automation', destination: '/?automate=true', permanent: false },
       { source: '/boards', destination: '/', permanent: false },
       { source: '/integrations', destination: '/health?tab=monday', permanent: false },
+      { source: '/audit', destination: '/admin/audit', permanent: false },
+      { source: '/today', destination: '/inbox', permanent: false },
+      { source: '/sales', destination: '/sales/pipeline', permanent: false },
+      { source: '/compliance', destination: '/compliance/vault', permanent: false },
+      { source: '/system', destination: '/health', permanent: false },
     ];
   },
   async rewrites() {

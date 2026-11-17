@@ -29,6 +29,40 @@ def safe_xml(text: Optional[str]) -> str:
     return xml_escape.escape(str(text), entities={'"': "&quot;", "'": "&apos;"})
 
 
+def _vendor_name_set(extra: object = None) -> set:
+    """Every vendor name Allied knows (fetched once per slip) plus any extra ones."""
+    names = {str(extra or "").strip()}
+    try:
+        from app.services.coordination import blind
+
+        names |= set(blind.vendor_names())
+    except Exception:  # noqa: BLE001 - the vendor list is a help; the line's own vendor is always removed
+        pass
+    return names
+
+
+def _without_vendor_names(text: str, line_vendor: object = None, names: object = None) -> str:
+    """A description for the customer: any vendor's name typed into it is taken out, in the usual short forms ("KWS" for "KWS Ltd"), the same ways
+    the blind-shipment check looks for them. A blind shipment must never tell the customer who makes the part."""
+    import re
+
+    pool = set(names) if names else _vendor_name_set()
+    pool.add(str(line_vendor or "").strip())
+    out = str(text or "")
+    forms = set()
+    try:
+        from app.services.coordination import blind
+
+        for n in pool:
+            if n and n.upper() != "STOCK":
+                forms |= {v for v, _floor in blind._variants(n) if len(v.replace(" ", "")) >= 3}
+    except Exception:  # noqa: BLE001
+        forms = {n for n in pool if len(n) >= 3}
+    for name in sorted(forms | {n for n in pool if len(n) >= 3 and n.upper() != "STOCK"}, key=len, reverse=True):
+        out = re.sub(r"(?<!\w)" + re.escape(name) + r"(?!\w)", "", out, flags=re.I)
+    return " ".join(out.split())
+
+
 class PackingSlipGenerator:
     """Generates standardized, sanitized white-label packing lists using ReportLab."""
 
@@ -94,7 +128,7 @@ class PackingSlipGenerator:
                 Paragraph(
                     "<b>PACKING LIST</b><br/>"
                     # Allied's own sales order number is internal; the customer's PO is the reference they know.
-                    f"<font size='9'>Your PO Number: <b>{safe_xml(order.customer_po_number)}</b><br/>"
+                    f"<font size='9'>Your Reference: <b>{safe_xml(order.customer_po_number)}</b><br/>"
                     f"Order Date: {order.po_date.strftime('%b %d, %Y')}<br/>"
                     f"Ship By: {(ship_date or order.po_date).strftime('%b %d, %Y')}<br/>"
                     "Page: 1</font>",
@@ -144,7 +178,7 @@ class PackingSlipGenerator:
         terms = safe_xml(order.customer.payment_terms)
 
         summary_headers = [
-            ["Customer ID", "PO Number", "Sales Rep Name"],
+            ["Customer ID", "Your Reference", "Sales Rep Name"],
             [cust_id, po_num, sales_rep],
             ["Customer Contact", "Shipping Method", "Payment Terms"],
             [contact, ship_method, terms],
@@ -170,10 +204,11 @@ class PackingSlipGenerator:
             ["Quantity", "Item", "Description", "Shipped Prior", "This Shipment"]
         ]
 
+        _vendor_names = _vendor_name_set()
         for item in order.line_items:
             qty_str = f"{float(item.quantity):.2f}"
             item_code = safe_xml(item.item_id or "CUSTOM-FAB")
-            desc_text = safe_xml(item.description or item.raw_item_text)
+            desc_text = safe_xml(_without_vendor_names(item.description or item.raw_item_text, item.preferred_vendor, _vendor_names))
             # A fabricated part is only identifiable by the drawing and
             # revision it was cut to. Carrying the reference onto the slip is
             # what lets the customer tie what arrived to what they approved,
@@ -219,7 +254,7 @@ class PackingSlipGenerator:
                     "<b>RECEIVING INSTRUCTIONS & NOTES:</b><br/>"
                     "&bull; All shipments must be inspected upon arrival. Any damages must be noted on the BOL.<br/>"
                     "&bull; Direct technical inquiries to info@alliedweldingsystems.com / (972) 248-8838.<br/>"
-                    f"&bull; Customer PO Reference: <b>{safe_xml(order.customer_po_number)}</b>",
+                    f"&bull; Your Reference: <b>{safe_xml(order.customer_po_number)}</b>",
                     normal_style,
                 )
             ]

@@ -36,12 +36,21 @@ def _uid(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:6].upper()}"
 
 
-def _zibo_invoice(number: str, total: str = "925.00", vendor: str = "ZIBO", line_total: str = "840.00"):
-    """An invoice against PO-ZIBO-4412 (2 x HOSE-CERAMIC-4IN @ $420, freight $85)."""
+def _fresh_zibo_po() -> str:
+    """A private copy of PO-ZIBO-4412 for one test: the database is shared between tests, and a PO that is already billed in full (by another test) would,
+    correctly, flag the next full bill against it."""
+    import copy
+    name = f"PO-ZIBO-{uuid.uuid4().hex[:6].upper()}"
+    reconciliation_service._authorized_pos[name] = copy.deepcopy(reconciliation_service._authorized_pos["PO-ZIBO-4412"])
+    return name
+
+
+def _zibo_invoice(number: str, total: str = "925.00", vendor: str = "ZIBO", line_total: str = "840.00", po: str = ""):
+    """An invoice against a private copy of PO-ZIBO-4412 (2 x HOSE-CERAMIC-4IN @ $420, freight $85)."""
     return VendorInvoice(
         invoice_number=number,
         vendor_name=vendor,
-        po_number="PO-ZIBO-4412",
+        po_number=po or _fresh_zibo_po(),
         lines=[
             VendorInvoiceLine(
                 item_id="HOSE-CERAMIC-4IN",

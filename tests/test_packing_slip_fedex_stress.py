@@ -176,7 +176,7 @@ def test_a_blank_po_falls_back_so_documents_still_have_a_reference(client):
     cci = logistics_dispatcher.generate_customs_invoice(so_number="12345", customer_name="OC", shipping_address="Edmonton, AB",
                                                         origin_facility="E", items=[{"item_id": "X", "quantity": 1, "unit_price": 5}],
                                                         customer_po="   ")
-    assert cci.cci_number == "CCI-2026-12345"          # nothing else to show: the number is the last resort
+    assert cci.cci_number.startswith("CCI-2026-") and "12345" not in cci.cci_number      # nothing else to show: a neutral code, never our SO number
 
 
 # ---------------------------------- FedEx ------------------------------------

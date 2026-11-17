@@ -229,6 +229,20 @@ class MondayClient:
     # Operations
     # ------------------------------------------------------------------
 
+    def _staged(self, kind: str, board_id: Any, item_id: Any, payload: Dict[str, Any], summary: str, key: str) -> bool:
+        """True when this change was saved for a later push instead of being sent. Falls back to the normal path (which the
+        read-only switch still guards) if staging isn't possible, for instance before the table exists."""
+        try:
+            from app.services import monday_push
+
+            if not monday_push.should_stage(self):
+                return False
+            monday_push.stage(kind, board_id, item_id, payload, summary, key)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Could not stage a monday change ({type(exc).__name__}); using the normal path.")
+            return False
+
     def post_pulse_update(
         self, pulse_id: Optional[int], message: str, idempotency_key: Optional[str] = None
     ) -> bool:
@@ -238,6 +252,8 @@ class MondayClient:
             # posting to item 0 or a made-up id must never reach the API.
             logger.debug("No monday item for this update; skipped.")
             return False
+        if self._staged("post_update", "", pulse_id, {"text": message}, f"Post a comment on item {pulse_id}: {message[:80]}", idempotency_key or ""):
+            return True                                            # saved for a later push; see app/services/monday_push.py
         query = """
         mutation ($itemId: ID!, $body: String!) {
             create_update (item_id: $itemId, body: $body) {
@@ -264,6 +280,9 @@ class MondayClient:
         values = {k: v for k, v in column_values.items() if k}
         if not (board_id and item_id and values):
             return False
+        if self._staged("update_columns", board_id, item_id, {"columns": values},
+                        f"Set {', '.join(str(k) for k in values)} on item {item_id}", idempotency_key or ""):
+            return True
         query = """
         mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
             change_multiple_column_values (board_id: $boardId, item_id: $itemId, column_values: $columnValues, create_labels_if_missing: true) {
@@ -286,6 +305,30 @@ class MondayClient:
         except Exception as exc:
             logger.warning(f"Could not update Monday columns on item #{item_id}: {exc}")
             return False
+
+    def create_item(self, board_id: Any, item_name: str, column_values: Optional[Dict[str, Any]] = None,
+                    idempotency_key: Optional[str] = None) -> Optional[str]:
+        """Adds a row to a board and returns its id; None when nothing was created (read-only, simulation, or monday said no)."""
+        if not (board_id and (item_name or "").strip()):
+            return None
+        query = """
+        mutation ($boardId: ID!, $name: String!, $columnValues: JSON) {
+            create_item (board_id: $boardId, item_name: $name, column_values: $columnValues, create_labels_if_missing: true) {
+                id
+            }
+        }
+        """
+        try:
+            data = self.execute_query(
+                query, {"boardId": str(board_id), "name": item_name.strip()[:255],
+                        "columnValues": json.dumps({k: v for k, v in (column_values or {}).items() if k})}, idempotency_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Could not add a row to board {board_id}: {exc}")
+            return None
+        if not self.writable:
+            return None
+        created = ((data or {}).get("data") or {}).get("create_item") or {}
+        return str(created["id"]) if created.get("id") else None
 
     def get_item(self, item_id: int) -> Optional[Dict[str, Any]]:
         """Fetches one item with its column values, keyed by column id.

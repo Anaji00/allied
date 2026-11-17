@@ -41,6 +41,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Fail before anything listens: default secrets make every token forgeable.
     settings.assert_production_secrets()
+    if not settings.is_production and settings.insecure_secrets():
+        logger.warning("These secrets are empty or still the shipped defaults: %s. Set them in .env before anyone outside this machine can reach the app.", ", ".join(settings.insecure_secrets()))
 
     # Initialize persistent database (SQLite WAL)
     from app.core.database import init_database

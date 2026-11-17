@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, MessageSquare, Play, RotateCcw, Trash2, X } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Loader2, MessageSquare, Play, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { NativeSelect, PanelHeading } from '@/components/data/filters';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { DictateButton, MicButton, addDictation } from '@/components/data/voice';
@@ -11,6 +12,8 @@ import { useAuth } from '@/context/AuthContext';
 import { clock, useRecorder } from '@/hooks/use-recorder';
 import { dateTime, person, since } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { useReadNow } from './use-automations';
+import type { Role } from './use-boards';
 import { LANGS, unreadFor, useBoardNotes, useMarkRead, useNotePeople, usePostNote, voiceUrl, type Lang, type Note } from './use-notes';
 
 const lower = (v?: string | null) => (v ?? '').trim().toLowerCase();
@@ -29,143 +32,27 @@ export function NoteChip({ notes, itemId }: { notes: Note[] | undefined; itemId:
 }
 
 /**
- * Notes from management to the engineers on one job: English first (the version that counts),
- * Mandarin or Vietnamese when asked for, who has read each, and a composer for managers.
+ * Writing a note for the engineers on one job (managers). The notes themselves, with who has read them,
+ * the Mandarin and Vietnamese versions and any voice recording, now show in the job's one thread
+ * together with the comments (see UpdatesPanel).
  */
-export function ItemNotes({ boardId, role, itemId }: { boardId: string; role: string; itemId: string }) {
-  const { hasRole, employeeEmail } = useAuth();
-  const me = lower(employeeEmail);
-  const notes = useBoardNotes(boardId, true);
-  const mine = (notes.data ?? []).filter((n) => n.item_id === itemId);
-  const offered = (Object.keys(LANGS) as Lang[]).filter((l) => mine.some((n) => n.translations[l]?.text));
-  const [lang, setLang] = useState<'en' | Lang>('en');
-  const unread = unreadFor(notes.data, itemId, me);
-
+export function ItemNotes({ boardId, role, itemId, owners = [] }: { boardId: string; role: string; itemId: string; owners?: string[] }) {
+  const { hasRole } = useAuth();
+  if (!hasRole('MANAGER')) return null;
   return (
-    <section className="grid gap-2" aria-label="Notes for the engineers">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <PanelHeading>
-          <span className="inline-flex items-center gap-1.5">
-            <MessageSquare className="size-3" aria-hidden /> Notes for the engineers
-            {unread > 0 && <ToneBadge tone="warn">{unread} unread</ToneBadge>}
-          </span>
-        </PanelHeading>
-        {offered.length > 0 && (
-          <div role="group" aria-label="Language" className="flex gap-1">
-            {(['en', ...offered] as const).map((l) => (
-              <button
-                key={l}
-                type="button"
-                aria-pressed={lang === l}
-                onClick={() => setLang(l)}
-                className={cn(
-                  'h-6 rounded-full border px-2 text-xs',
-                  lang === l ? 'border-foreground bg-foreground text-background' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {l === 'en' ? 'English' : LANGS[l].short}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {notes.isPending ? (
-        <p className="text-xs text-muted-foreground">Loading notes…</p>
-      ) : notes.error ? (
-        <p className="text-xs text-bad">Notes couldn’t be loaded: {notes.error.message}</p>
-      ) : mine.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No notes on this job yet.</p>
-      ) : (
-        <ul className="grid gap-2">
-          {mine.map((n) => (
-            <NoteCard key={n.id} note={n} lang={lang} me={me} boardId={boardId} />
-          ))}
-        </ul>
-      )}
-      {hasRole('MANAGER') && <NoteComposer boardId={boardId} role={role} itemId={itemId} />}
+    <section className="grid gap-2" aria-label="Write a note for the engineers">
+      <PanelHeading>
+        <span className="inline-flex items-center gap-1.5">
+          <MessageSquare className="size-3" aria-hidden /> Write a note for the engineers
+        </span>
+      </PanelHeading>
+      <NoteComposer boardId={boardId} role={role} itemId={itemId} owners={owners} />
     </section>
   );
 }
 
-function NoteCard({ note: n, lang, me, boardId }: { note: Note; lang: 'en' | Lang; me: string; boardId: string }) {
-  const markRead = useMarkRead(boardId, me);
-  const t = lang === 'en' ? undefined : n.translations[lang];
-  const read = n.recipients.filter((r) => n.read_by[r]);
-  const mineUnread = n.unread.includes(me);
-
-  return (
-    <li className={cn('grid gap-2 rounded-lg border p-3 text-[13px]', n.urgent && 'border-bad/50', mineUnread && 'bg-warn-soft/40')}>
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{person(n.author, me)}</span>
-        <span title={dateTime(n.created_at)}>{since(n.created_at)}</span>
-        {n.urgent && <ToneBadge tone="bad">Urgent</ToneBadge>}
-      </div>
-      {t?.text ? (
-        <>
-          <p lang={lang} className="leading-relaxed whitespace-pre-wrap">
-            <Marked text={t.text} terms={t.unsure ?? []} />
-          </p>
-          {(t.unsure?.length ?? 0) > 0 && (
-            <p className="text-xs text-muted-foreground">
-              Highlighted terms the translator wasn’t sure of; check them against the English.
-            </p>
-          )}
-          <details className="text-xs">
-            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">English (the version that counts)</summary>
-            <p className="mt-1 whitespace-pre-wrap">{n.text}</p>
-          </details>
-        </>
-      ) : (
-        <>
-          <p className="leading-relaxed whitespace-pre-wrap">{n.text}</p>
-          {lang !== 'en' && (
-            <p className="text-xs text-muted-foreground">{t?.error ?? `No ${LANGS[lang].label} translation was asked for on this note.`}</p>
-          )}
-        </>
-      )}
-      {n.voice && <VoiceNote voice={n.voice} />}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span
-          title={n.recipients
-            .map((r) => `${person(r, me)}: ${n.read_by[r] ? `read ${dateTime(n.read_by[r])}` : 'not read yet'}`)
-            .join('\n')}
-        >
-          Read by {read.length} of {n.recipients.length}
-          {n.unread.length > 0 && ` · waiting on ${n.unread.map((r) => person(r, me)).join(', ')}`}
-        </span>
-        {mineUnread && (
-          <Button size="xs" variant="outline" disabled={markRead.isPending} onClick={() => markRead.mutate(n.id)}>
-            Mark as read
-          </Button>
-        )}
-      </div>
-    </li>
-  );
-}
-
-/** A translation with the terms the translator wasn't sure of highlighted. */
-function Marked({ text, terms }: { text: string; terms: string[] }) {
-  const wanted = terms.filter(Boolean);
-  if (!wanted.length) return <>{text}</>;
-  const escaped = wanted.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const parts = text.split(new RegExp(`(${escaped.join('|')})`, 'g'));
-  return (
-    <>
-      {parts.map((part, i) =>
-        wanted.includes(part) ? (
-          <mark key={i} className="rounded-sm bg-warn-soft px-0.5 text-warn" title="The translator wasn’t sure of this term">
-            {part}
-          </mark>
-        ) : (
-          part
-        ),
-      )}
-    </>
-  );
-}
-
 /** A voice note: loaded when asked for (it's a protected file), then a normal player, plus its transcript. */
-function VoiceNote({ voice }: { voice: NonNullable<Note['voice']> }) {
+export function VoiceNote({ voice }: { voice: NonNullable<Note['voice']> }) {
   const [src, setSrc] = useState<string | null>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
   useEffect(() => () => void (src && URL.revokeObjectURL(src)), [src]);
@@ -206,10 +93,30 @@ function VoiceNote({ voice }: { voice: NonNullable<Note['voice']> }) {
 }
 
 /** A manager's note to the job's engineers (or people picked), with optional translations. */
-function NoteComposer({ boardId, role, itemId }: { boardId: string; role: string; itemId: string }) {
+function NoteComposer({ boardId, role, itemId, owners = [] }: { boardId: string; role: string; itemId: string; owners?: string[] }) {
   const post = usePostNote(boardId);
   const [open, setOpen] = useState(false);
   const people = useNotePeople(role, open);
+  const client = useQueryClient();
+  const readNow = useReadNow(boardId, role as Role);
+  const all = people.data?.people ?? [];
+  const boardRead = people.data?.boardRead ?? true;
+  // The job's owners are named on monday; the app finds their emails among the people it knows.
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const withEmail = all.filter((p) => p.email);
+  const found = owners.map((name) => ({
+    name,
+    person:
+      withEmail.find((p) => norm(p.name) === norm(name)) ??
+      withEmail.find((p) => norm(p.name) && (norm(p.name).includes(norm(name)) || norm(name).includes(norm(p.name)))),
+  }));
+  const ownerPeople = found.flatMap((f) => (f.person ? [f.person] : []));
+  const noEmail = found.filter((f) => !f.person).map((f) => f.name);
   const [text, setText] = useState('');
   const [langs, setLangs] = useState<Set<Lang>>(() => new Set());
   const [urgent, setUrgent] = useState(false);
@@ -224,12 +131,12 @@ function NoteComposer({ boardId, role, itemId }: { boardId: string; role: string
     voice.clear();
     setOpen(false);
   };
-  const label = (email: string) => people.data?.find((p) => p.value === email)?.label ?? email;
+  const label = (email: string) => all.find((p) => p.email.toLowerCase() === email.toLowerCase())?.name || email;
 
   if (!open)
     return (
       <Button size="sm" variant="outline" className="justify-self-start" onClick={() => setOpen(true)}>
-        <MessageSquare /> Write a note to the engineers
+        <MessageSquare /> Write a note
       </Button>
     );
 
@@ -282,7 +189,10 @@ function NoteComposer({ boardId, role, itemId }: { boardId: string; role: string
         <span className="text-xs font-medium">Who gets it</span>
         <div className="flex flex-wrap items-center gap-1.5">
           {to.length === 0 ? (
-            <ToneBadge>The job’s engineers (its owners on the board)</ToneBadge>
+            <ToneBadge>
+              The job’s engineers (its owners on the board)
+              {owners.length > 0 ? `: ${owners.join(', ')}` : boardRead ? '' : ': not known yet'}
+            </ToneBadge>
           ) : (
             to.map((email) => (
               <span key={email} className="inline-flex h-6 items-center gap-1 rounded-full border bg-card pr-1 pl-2 text-xs">
@@ -295,20 +205,51 @@ function NoteComposer({ boardId, role, itemId }: { boardId: string; role: string
           )}
           <NativeSelect
             aria-label="Add a person"
-            className="h-7 w-auto text-xs"
+            className="h-7 w-auto max-w-64 text-xs"
             value=""
             onChange={(e) => e.target.value && setTo((t) => (t.includes(e.target.value) ? t : [...t, e.target.value]))}
           >
             <option value="">{people.isPending ? 'Loading people…' : 'Add a person…'}</option>
-            {(people.data ?? [])
-              .filter((p) => !to.includes(p.value))
-              .map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
+            {[
+              { title: 'On this job', list: ownerPeople },
+              { title: 'Engineers', list: all.filter((p) => p.role === 'engineer' && !ownerPeople.includes(p)) },
+              { title: 'Everyone else', list: all.filter((p) => p.role !== 'engineer' && !ownerPeople.includes(p)) },
+            ]
+              .map((g) => ({ ...g, list: g.list.filter((p) => !to.includes(p.email)) }))
+              .filter((g) => g.list.length > 0)
+              .map((g) => (
+                <optgroup key={g.title} label={g.title}>
+                  {g.list.map((p) => (
+                    <option key={p.email || p.name} value={p.email} disabled={!p.email}>
+                      {p.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
           </NativeSelect>
         </div>
+        {!boardRead && (
+          <p className="flex flex-wrap items-center gap-2 text-xs text-warn">
+            The app hasn’t read this board from monday yet, so the job’s owners can’t be named.
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={readNow.isPending}
+              onClick={() =>
+                readNow.mutate(undefined, { onSettled: () => void client.invalidateQueries({ queryKey: ['autopilot', 'recipe-options'] }) })
+              }
+            >
+              {readNow.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Read it from monday now
+            </Button>
+          </p>
+        )}
+        {noEmail.length > 0 && (
+          <p className="text-xs text-warn">
+            No email on file for {noEmail.join(', ')}, so a note can’t reach {noEmail.length === 1 ? 'them' : 'them'} yet. Add them under
+            People &amp; alerts.
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
         <span className="font-medium">Also in</span>

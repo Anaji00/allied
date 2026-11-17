@@ -17,6 +17,20 @@
 	}
 }
 
+:80 {
+	# Let phones download the root certificate over plain http before trusting https.
+	handle /allied-root.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		file_server
+	}
+
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}
+
 {$ALLIED_HTTPS_SITES:https://localhost} {
 	# The root certificate, for installing on a phone once. It is public by nature.
 	handle /allied-root.crt {

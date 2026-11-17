@@ -1,0 +1,3 @@
+Vendor ID,Vendor Name(X),Invoice #,Date,Date Due,PO Number,Accounts Payable Account,Accounts Payable Amount(X),Number of Distributions,Item ID,Description,G/L Account,Unit Price,Amount,Credit Memo
+ZIBO,Zibo Supereal Industrial Ceramic Co. Ltd,ZB-J-1,11/18/2026,01/17/2027,PO-J-1,2000-00,"2,080.00",2,HOSE,HOSE,5000-00,"1,000.00","2,000.00",FALSE
+ZIBO,Zibo Supereal Industrial Ceramic Co. Ltd,ZB-J-1,11/18/2026,01/17/2027,PO-J-1,2000-00,"2,080.00",2,FREIGHT,FREIGHT,5100-00,80.00,80.00,FALSE

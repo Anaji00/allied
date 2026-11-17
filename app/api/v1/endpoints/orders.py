@@ -30,6 +30,31 @@ class OrderPage(BaseModel):
     items: List[Dict[str, Any]]
 
 
+def _already_in_sage(customer_po: str) -> list:
+    """Sales orders still open in Sage for this customer PO (from an imported file): the new-order check warns so the order is not made twice."""
+    try:
+        from app.services import sage_import
+
+        return sage_import.already_open_in_sage(customer_po)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _attach_sage(items: list) -> None:
+    """Adds `sage` to each order: {paid_status PAID/PART_PAID/UNPAID, amount_due, invoiced_total, invoice_numbers, open_in_sage}, or null when no imported Sage
+    file knows the order. A problem reading the mirrors never breaks the list."""
+    try:
+        from app.services import sage_import
+
+        known = sage_import.order_money_status(items)
+        for it in items:
+            it["sage"] = known.get(str(it.get("sales_order_number") or it.get("customer_po_number") or ""))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Could not read the Sage mirrors for the order list: {type(exc).__name__}")
+        for it in items:
+            it.setdefault("sage", None)
+
+
 @router.get("", response_model=OrderPage, summary="List orders, newest first, with filters and paging")
 def list_orders(
     q: Optional[str] = Query(None, description="Sales order, customer PO or customer name"),
@@ -49,6 +74,7 @@ def list_orders(
         db, q=q, view=view, status=order_status, vendor=vendor,
         min_margin_pct=floor, limit=limit, offset=offset,
     )
+    _attach_sage(page["items"])
     return OrderPage(total=page["total"], limit=limit, offset=offset, min_margin_pct=floor, items=page["items"])
 
 
@@ -117,7 +143,14 @@ def dry_run_order(
                 vendor_splits[preferred_vendor] = []
             vendor_splits[preferred_vendor].append(item_data["item_id"])
 
+        from app.services.coordination import jobs as _jobs
+
+        names = [orchestrator.entity_matcher.vendors_cache.get(c, {}).get("vendor_name", c) for c in vendor_splits if c != "STOCK"]
+        suggested = _jobs.match_for_order(cust_record["customer_name"], names, [request.customer_po_number, request.notes or ""], request.job)
         return {
+            "existing_pos": _jobs.existing_pos(cust_record["customer_name"], names),
+            "already_in_sage": _already_in_sage(request.customer_po_number),
+            "suggested_job": suggested["ref"] if suggested else None,
             "mode": "DRY_RUN",
             "customer_resolved": cust_record["customer_name"],
             "customer_id": cust_record["customer_id"],
@@ -139,6 +172,24 @@ def dry_run_order(
 # backslashes, dots) is refused before it can be joined into a path: on
 # Windows a backslash is a separator, so "..\..\x" escaped the folder.
 _SO_NUMBER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+@router.get("/inbox", summary="One list of what needs a person (order emails, supplier bills, failed packing slips, orders to check), oldest first, with a type filter")
+def orders_inbox(
+    filter: Literal["needs_me", "emails", "bills", "slips", "orders"] = Query("needs_me"),
+    limit: int = Query(100, ge=1, le=500),
+    _user: dict = Depends(require_operator),          # customer email subjects and internal SO numbers: staff only, not VIEWER
+) -> Dict[str, Any]:
+    from app.services import orders_inbox as inbox
+
+    return inbox.list_items(filter, limit)
+
+
+@router.get("/attention", summary="How many orders, slips, emails and bills need a person, and the total for a badge")
+def orders_attention(_user: dict = Depends(require_viewer)) -> Dict[str, int]:
+    from app.services import order_attention
+
+    return order_attention.counts()
 
 
 @router.get("/{so_number}", summary="One order by sales order number")

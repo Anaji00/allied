@@ -1,0 +1,4 @@
+Customer ID,Customer Name(X),Invoice/CM #,Date,Date Due,Customer PO,SO/Proposal Number,Accounts Receivable Account,Accounts Receivable Amount(X),Number of Distributions,Invoice/CM Distribution,Quantity,Item ID,Description,G/L Account,Unit Price,Amount,Credit Memo,Voided by Transaction
+10195,Owens Corning Starr Composites,INV-J-1,11/20/2026,12/20/2026,4500912345,J12930,1100-00,"3,000.00",2,1,2,OC262064,CERAMIC LINED HOSE,4000-00,"1,385.00","-2,770.00",FALSE,
+10195,Owens Corning Starr Composites,INV-J-1,11/20/2026,12/20/2026,4500912345,J12930,1100-00,"3,000.00",2,2,1,FREIGHT,FREIGHT,4100-00,230.00,-230.00,FALSE,
+10195,Owens Corning Starr Composites,CM-J-2,11/21/2026,,,,1100-00,-100.00,1,1,1,OC262064,RETURNED PART,4000-00,100.00,100.00,TRUE,

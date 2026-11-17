@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowUp, AudioLines, Loader2, Square, X } from 'lucide-react';
+import { ArrowRight, ArrowUp, AudioLines, Loader2, Sparkles, Square, X } from 'lucide-react';
 import { DictateButton, addDictation } from '@/components/data/voice';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,7 +46,7 @@ const nextId = () => ++counter;
  * Chat first: ask in your own words, see the answer and any cards at once, confirm changes with a
  * click or by voice. The model never changes anything itself; every change waits for a yes.
  */
-export function AssistantChat({ initialPrompt = '' }: { initialPrompt?: string }) {
+export function AssistantChat({ initialPrompt = '', fill = false }: { initialPrompt?: string; fill?: boolean }) {
   const router = useRouter();
   const client = useQueryClient();
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -192,23 +192,36 @@ export function AssistantChat({ initialPrompt = '' }: { initialPrompt?: string }
   });
 
   return (
-    <div className="mx-auto grid h-[calc(100svh-13rem)] min-h-96 max-w-3xl grid-rows-[minmax(0,1fr)_auto] gap-3">
+    <div
+      className={cn(
+        'mx-auto grid max-w-3xl grid-rows-[minmax(0,1fr)_auto] gap-3',
+        fill
+          ? 'h-full min-h-0 w-full'
+          : 'h-[calc(100svh-18rem-env(safe-area-inset-bottom))] min-h-80 md:h-[calc(100svh-13rem)] md:min-h-96',
+      )}
+    >
       <div className="overflow-y-auto pr-1" aria-live="polite">
         {messages.length === 0 ? (
-          <div className="grid h-full content-center justify-items-center gap-4 text-center">
-            <p className="text-lg font-medium">What do you need?</p>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              Ask in your own words, or tap the wave to talk. Changes always wait for your OK.
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
+          <div className="grid h-full content-center justify-items-center gap-5 text-center">
+            <span className="grid size-14 place-items-center rounded-full bg-primary text-primary-foreground shadow-lg ring-8 ring-muted">
+              <Sparkles className="size-6" />
+            </span>
+            <div className="grid gap-1.5">
+              <p className="text-xl font-semibold tracking-tight">What do you need?</p>
+              <p className="mx-auto max-w-xs text-sm text-muted-foreground">
+                Ask in your own words, or tap the wave to talk. Changes always wait for your OK.
+              </p>
+            </div>
+            <div className="grid w-full max-w-sm gap-2">
               {STARTERS.map((s) => (
                 <button
                   key={s}
                   type="button"
                   onClick={() => void send(s)}
-                  className="rounded-full border bg-card px-3 py-1.5 text-sm hover:bg-accent"
+                  className="group flex items-center justify-between gap-3 rounded-2xl border bg-card px-4 py-2.5 text-left text-sm shadow-xs transition-all hover:-translate-y-px hover:border-foreground/30 hover:shadow-sm"
                 >
                   {s}
+                  <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
                 </button>
               ))}
             </div>
@@ -222,8 +235,12 @@ export function AssistantChat({ initialPrompt = '' }: { initialPrompt?: string }
                 ) : (
                   <p
                     className={cn(
-                      'max-w-[85%] rounded-2xl px-3.5 py-2 text-[15px] leading-relaxed whitespace-pre-wrap',
-                      m.role === 'user' ? 'bg-foreground text-background' : m.error ? 'bg-bad-soft text-bad' : 'bg-muted',
+                      'max-w-[88%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap duration-200 animate-in fade-in slide-in-from-bottom-1',
+                      m.role === 'user'
+                        ? 'rounded-br-md bg-primary text-primary-foreground shadow-sm'
+                        : m.error
+                          ? 'rounded-bl-md bg-bad-soft text-bad'
+                          : 'rounded-bl-md border bg-card shadow-xs',
                     )}
                   >
                     {m.content}
@@ -247,7 +264,7 @@ export function AssistantChat({ initialPrompt = '' }: { initialPrompt?: string }
       </div>
 
       <form
-        className="flex items-end gap-2 rounded-3xl border bg-card p-2 shadow-sm focus-within:ring-3 focus-within:ring-ring/40"
+        className="flex items-end gap-1.5 rounded-[1.75rem] border bg-card p-2 shadow-md transition-shadow focus-within:border-foreground/30 focus-within:shadow-lg"
         onSubmit={(e) => {
           e.preventDefault();
           void send(draft);
@@ -265,19 +282,26 @@ export function AssistantChat({ initialPrompt = '' }: { initialPrompt?: string }
           }}
           placeholder="Ask anything…"
           aria-label="Your message"
-          className="max-h-40 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] outline-none field-sizing-content"
+          className="max-h-40 min-h-10 flex-1 resize-none bg-transparent px-3 py-2 text-[15px] outline-none placeholder:text-muted-foreground/70 field-sizing-content"
         />
         <DictateButton compact onText={(t) => setDraft((cur) => addDictation(cur, t))} />
         {busy ? (
-          <Button type="button" size="icon" variant="outline" aria-label="Stop" onClick={stop}>
+          <Button type="button" size="icon" variant="outline" className="rounded-full" aria-label="Stop" title="Stop" onClick={stop}>
             <Square />
           </Button>
         ) : draft.trim() ? (
-          <Button type="submit" size="icon" aria-label="Send">
+          <Button type="submit" size="icon" className="rounded-full" aria-label="Send">
             <ArrowUp />
           </Button>
         ) : (
-          <Button type="button" size="icon" aria-label="Talk to the assistant" onClick={voice.start}>
+          <Button
+            type="button"
+            size="icon"
+            className="rounded-full"
+            aria-label="Talk to the assistant"
+            title="Talk hands-free: tap once, then just speak"
+            onClick={voice.start}
+          >
             <AudioLines />
           </Button>
         )}
@@ -300,7 +324,11 @@ function Thinking({ step }: { step: string }) {
   // The real step when the server reports one; otherwise only what is true from the clock.
   const note = step || (seconds >= 10 ? 'Still working. This one needs a few checks.' : seconds >= 4 ? 'Looking it up…' : '');
   return (
-    <span className="inline-flex items-center gap-2 rounded-2xl bg-muted px-4 py-3" role="status" aria-label="Thinking">
+    <span
+      className="inline-flex items-center gap-2 rounded-2xl rounded-bl-md border bg-card px-4 py-3 shadow-xs"
+      role="status"
+      aria-label="Thinking"
+    >
       <span className="inline-flex items-center gap-1">
         {[0, 1, 2].map((i) => (
           <span key={i} className="size-1.5 animate-pulse rounded-full bg-muted-foreground" style={{ animationDelay: `${i * 160}ms` }} />

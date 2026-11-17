@@ -82,6 +82,8 @@ def init_tesseract() -> Optional[str]:
 # Longest side of a rendered page. An oversized (e.g. A0 or a crafted) page at
 # full DPI would allocate hundreds of megabytes for one pixmap.
 _MAX_RENDER_PX = 5000
+_MAX_TEXT_PAGES = 30      # pages checked for a text layer
+_MAX_OCR_PAGES = 8        # pages of a scan read by OCR (slow)
 
 
 def _capped_dpi(page: Any, dpi: int) -> int:
@@ -99,6 +101,109 @@ def _readable(text: str) -> bool:
         return False
     printable = sum(ch.isprintable() or ch in "\r\n\t" for ch in body)
     return printable / len(body) >= 0.85
+
+
+_PO_WORDS_NOT_NUMBERS = {"DATE", "TOTAL", "AMOUNT", "STATUS", "TERMS", "BOX", "INFORMATION", "NUMBER", "NO", "REVISION", "REVISED", "REV"}
+_PO_PATTERNS = (
+    r"\b(?:CUSTOMER\s+PO|CUST\.?\s+PO)\s*(?:NUMBER|NO\.?|NUM\.?|#)?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-_/]{2,})",
+    r"\b(?:PURCHASE\s+ORDER|P\.?\s?O\.?)\s*(?:NUMBER|NO\.?|NUM\.?|#)\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-_/]{2,})",
+    r"\bPURCHASE\s+ORDER\s*[:#.\-]?\s*([0-9][A-Z0-9\-_/]{3,})",
+    r"\bP\.?\s?O\.?\s*[:#.\-]?\s*([0-9][A-Z0-9\-_/]{2,})",                 # a bare "PO 9921", "P.O. 99-23", "PO-9921"
+)
+
+
+def find_po_number(text: str, filename: str = "") -> Optional[str]:
+    """The customer's PO number as people write it ("PO 9921", "P.O. No. 99-23", "PO#9921", "Purchase Order: 4500123"), never
+    Allied's own PO to a vendor, never "P.O. Box", and always one that has a digit in it. None when there isn't one: a number is never made up."""
+    for pat in _PO_PATTERNS:
+        for m in re.finditer(pat, text or "", re.IGNORECASE):
+            val = m.group(1).strip().rstrip(".,;:)/-_")
+            before = re.sub(r"\s+", "", (text[max(0, m.start() - 12):m.start()]).lower())
+            if before.endswith("allied") or before.endswith("vendor") or re.match(r"\s*box\b", text[m.end(1):m.end(1) + 4], re.I):
+                continue
+            if re.match(r"P\.?\s?O\.?\s*BOX", text[m.start():m.start() + 12], re.I):
+                continue
+            if val.upper() in _PO_WORDS_NOT_NUMBERS or not any(ch.isdigit() for ch in val):
+                continue
+            return val
+    fn = re.search(r"\bPO[_\-\s#]*([A-Z0-9][A-Z0-9\-]+)", filename or "", re.IGNORECASE)
+    if fn and len(fn.group(1)) >= 3 and any(ch.isdigit() for ch in fn.group(1)):
+        return fn.group(1).strip()
+    return None
+
+
+def find_payment_terms(text: str) -> Optional[str]:
+    """"Net 45", "NET30", "Terms: Net 60 days" as written; never a number that happens to appear elsewhere (PO 9260 is not Net 60)."""
+    m = re.search(r"\bNET\s*[-:]?\s*(\d{1,3})\b", text or "", re.IGNORECASE)
+    return f"Net {int(m.group(1))} Days" if m and 0 < int(m.group(1)) <= 180 else None
+
+
+_KEYWORDS = ("PURCHASE", "ORDER", "QTY", "QUANTITY", "DATE", "TOTAL", "PRICE", "SHIP", "CUSTOMER", "INVOICE", "PAGE", "NET", "TERMS",
+             "ITEM", "DESCRIPTION", "UNIT", "VENDOR", "BUYER", "PO", "DRAWING", "HEAT", "MATERIAL")
+
+
+def _read_score(text: str) -> int:
+    """How much like a real document this OCR text is: word-like tokens, and the words a PO, invoice or drawing always has.
+    Sideways text comes out as short random fragments and scores near zero."""
+    words = re.findall(r"[A-Za-z]{3,}", text or "")
+    wordlike = sum(1 for w in words if re.search(r"[aeiouAEIOU]", w) and not re.search(r"[^aeiouAEIOU\W\d_]{5}", w))
+    keyword = sum(1 for w in re.findall(r"[A-Za-z]{2,}", (text or "").upper()) if w in _KEYWORDS)
+    return wordlike + 6 * keyword + len(re.findall(r"\d{3,}", text or ""))
+
+
+def _prepare(img: Any) -> Any:
+    """What a camera or scanner got wrong, put right before reading: the phone's own rotation note, colour, and size."""
+    from PIL import ImageOps
+
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 - an image with a damaged rotation note is read as it is
+        pass
+    img = img.convert("L")
+    if min(img.size) < 1000:                                     # a small photo or low-resolution fax reads far better enlarged
+        scale = min(4.0, 1400 / max(1, min(img.size)))
+        img = img.resize((int(img.width * scale), int(img.height * scale)))
+    return img
+
+
+def ocr_upright(img: Any) -> str:
+    """Read a picture of a page however it was sent. Reads it as it is; if that comes out like gibberish (a sideways or upside-down
+    scan, a PDF whose page was scanned on its side) it tries the other three ways up and keeps the best reading."""
+    img = _prepare(img)
+    best = pytesseract.image_to_string(img).strip()
+    best_score = _read_score(best)
+    if best_score >= 20:
+        return best
+    for angle in (90, 270, 180):
+        try:
+            text = pytesseract.image_to_string(img.rotate(angle, expand=True)).strip()
+        except Exception:  # noqa: BLE001
+            continue
+        score = _read_score(text)
+        if score > best_score:
+            best, best_score = text, score
+    return best
+
+
+def parse_quantity(line: str) -> Decimal:
+    """The quantity on one PO line, as people write it: "Qty 2", "Qty: 1,000", "x 4", "5 ea", "(6)", "2 | item", "1. 3 item".
+    A number written as a price ($410.00) is never a quantity. Defaults to 1 when the line gives none."""
+    text = re.sub(r"\$\s*[\d,]+(?:\.\d+)?", " ", line)                          # take the prices out first
+    num = r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+    for pat in (rf"\bQ(?:TY|UANTITY)\.?\s*[:=]?\s*{num}", rf"^\s*{num}\s*\|", rf"\({num}\)",
+                rf"\b{num}\s*(?:EA|EACH|SPL|SPOOLS?|PCS?|PIECES?|UNITS?|SHEETS?|FT)\b", rf"^\d+[.):\-]\s*\(?{num}\)?\b",
+                # "x 4" is a quantity; the x in 5" ID X 120" LG is a dimension, so it must not be followed by a unit or an inch mark
+                rf"(?<![A-Za-z0-9\"'])X\s*{num}(?![\d\"'./]|\s*(?:LG|IN|INCH|MM|CM|FT|THK|LONG|OD|ID|PITCH)\b)"):
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            try:
+                return Decimal(m.group(1).replace(",", ""))
+            except Exception:  # noqa: BLE001
+                continue
+    m = re.search(r"\b(\d+)\s*$", text.strip())                                # a bare whole number at the end of the line
+    if m and "." not in text[m.start():] and 0 < int(m.group(1)) <= 5000:
+        return Decimal(m.group(1))
+    return Decimal("1.0")
 
 
 UNREADABLE_IMAGE_NOTICE = "[NOTICE: Could not read the image (OCR unavailable or no text found).]"
@@ -133,13 +238,21 @@ class DocumentScannerService:
                 page_texts: List[Tuple[int, str, Optional[bytes]]] = []
                 from app.services.ai.drawings import PDF_LOCK  # PyMuPDF is not thread-safe
 
+                total_pages = 0
                 with PDF_LOCK, pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
-                    for idx in range(min(len(doc), 8)):
+                    total_pages = len(doc)
+                    skipped_ocr = 0
+                    ocr_pages = 0
+                    for idx in range(min(len(doc), _MAX_TEXT_PAGES)):
                         page = doc[idx]
                         txt = page.get_text().strip()
                         png = None
-                        # If page has insufficient machine text, render it for OCR
-                        if (not txt or len(txt) < 40) and tess_cmd and pytesseract is not None:
+                        # If page has insufficient machine text, render it for OCR (the first few such pages only: it is slow)
+                        wants_ocr = (not txt or len(txt) < 40) and tess_cmd and pytesseract is not None
+                        if wants_ocr and ocr_pages >= _MAX_OCR_PAGES:
+                            skipped_ocr += 1
+                        elif wants_ocr:
+                            ocr_pages += 1
                             try:
                                 png = page.get_pixmap(dpi=_capped_dpi(page, 140)).tobytes("png")
                             except Exception as render_err:
@@ -150,7 +263,7 @@ class DocumentScannerService:
                     idx, txt, png = entry
                     if png is not None:
                         try:
-                            txt = pytesseract.image_to_string(Image.open(io.BytesIO(png))).strip()
+                            txt = ocr_upright(Image.open(io.BytesIO(png)))
                         except Exception as ocr_err:
                             logger.warning(f"OCR notice on page {idx + 1}: {ocr_err}")
                     return idx, txt
@@ -163,6 +276,10 @@ class DocumentScannerService:
                 for idx, txt in page_results:
                     if txt and txt.strip():
                         extracted_pages.append(f"--- PAGE {idx + 1} ---\n{txt.strip()}")
+                if total_pages > _MAX_TEXT_PAGES or skipped_ocr:
+                    extracted_pages.append(f"[NOTE: This file has {total_pages} pages and not all could be read here "
+                                           f"(the first {_MAX_TEXT_PAGES} are checked for text, the first {_MAX_OCR_PAGES} scanned pages are read by OCR). "
+                                           "A person must check the rest.]")
             except Exception as exc:
                 logger.warning(f"pymupdf extraction notice: {exc}")
 
@@ -207,7 +324,7 @@ class DocumentScannerService:
         if tess_cmd and pytesseract is not None:
             try:
                 img = Image.open(io.BytesIO(file_bytes))
-                ocr_text = pytesseract.image_to_string(img).strip()
+                ocr_text = ocr_upright(img)
                 if ocr_text and len(ocr_text) > 15:
                     return ocr_text
             except Exception as exc:
@@ -285,6 +402,10 @@ class DocumentScannerService:
         # 4. RFQ Proposal Check (use word boundary regex to avoid false matches in arbitrary bytes/words)
         if bool(re.search(r"\b(?:RFQ|REQUEST\s+FOR\s+QUOTE|QUOTE\s+REQUEST)\b", upper_text)):
             return DocumentScanType.RFQ_PROPOSAL
+
+        # 5. Messy purchase orders: no "Purchase Order" heading, just "PO 9921", "P.O. 99-23" or "PO#9921" somewhere in it
+        if find_po_number(text) is not None and re.search(r"\bQTY\b|\bQUANTITY\b|\bEA\b|\bPCS\b|\bUNIT\s+PRICE\b|\$\s*\d", upper_text):
+            return DocumentScanType.CUSTOMER_PO
 
         return DocumentScanType.GENERAL_DOC
 
@@ -375,6 +496,9 @@ class DocumentScannerService:
         else:
             confidence = 0.80
 
+        if "[NOTE: This file has" in extracted_text:
+            compliance_notes.append("Only part of this file could be read here: a person must check the pages that were not read")
+
         return DocumentScanResponse(
             scan_id=scan_id,
             filename=filename,
@@ -397,7 +521,7 @@ class DocumentScannerService:
         text_upper = text.upper()
         if "10195" in text or "STARR" in text_upper:
             return self.matcher.match_customer("Owens Corning Starr Composites")
-        if "OWENS CORNING" in text_upper or "OWENS" in text_upper or "10221" in text or "EDMONTON" in text_upper:
+        if "OWENS CORNING" in text_upper or "OWENS" in text_upper or "10221" in text:
             return self.matcher.match_customer("Owens Corning (Edmonton Plant)")
         if "KNAUF" in text_upper or "10148" in text or "LANETT" in text_upper:
             return self.matcher.match_customer("Knauf Insulation (Lanett Plant)")
@@ -414,7 +538,7 @@ class DocumentScannerService:
                 except Exception:
                     pass
 
-        return self.matcher.match_customer("Owens Corning")
+        return {}, 0.0                                    # nobody we know: never guess a customer
 
     def _parse_customer_po_entities(
         self, text: str, filename: str
@@ -427,12 +551,17 @@ class DocumentScannerService:
 
         cust_rec, conf_raw = self._resolve_customer_from_text(text)
         conf = conf_raw / 100.0 if conf_raw > 1.0 else conf_raw
-        cust_name = cust_rec.get("customer_name", "Owens Corning (Edmonton Plant)")
-        cust_id = cust_rec.get("customer_id", "10221")
+        known = bool(cust_rec) and conf >= 0.6
+        cust_name = cust_rec.get("customer_name", "") if known else ""
+        cust_id = cust_rec.get("customer_id", "") if known else ""
+        if not known:
+            conf = 0.0
+            cust_rec = {}
+            compliance.append("The customer could not be matched to a known account: a person must pick it")
 
         fields["customer_name"] = ExtractedDocumentField(
             field_name="customer_name",
-            raw_value=cust_name,
+            raw_value=cust_name or "NOT FOUND",
             normalized_value=cust_name,
             confidence=min(max(conf, 0.0), 1.0),
         )
@@ -443,39 +572,22 @@ class DocumentScannerService:
             confidence=min(max(conf, 0.0), 1.0),
         )
 
-        po_number = None
-        po_patterns = [
-            r"\bPURCHASE\s+ORDER\s*#?\s*([0-9]{5,})",
-            r"\b(?:CUSTOMER\s+PO|CUST\s+PO)\s*(?:NUMBER|NO\.?|#)?\s*[:#\.\-]?\s*([A-Z0-9\-\_]{3,})",
-            r"\b(?:PURCHASE\s+ORDER|PO)\s*(?:NUMBER|NO\.?|#)\s*[:#\.\-]?\s*([A-Z0-9\-\_]{3,})",
-            r"\bPO\s*[:#]\s*([A-Z0-9\-\_]{3,})",
-        ]
-        for pat in po_patterns:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                val = m.group(1).strip()
-                if val.upper() not in ("DATE", "TOTAL", "AMOUNT", "STATUS", "TERMS", "BOX", "INFORMATION"):
-                    po_number = val
-                    break
-
+        po_number = find_po_number(text, filename)
         if not po_number:
             allied_m = re.search(r"\b(?:ALLIED\s+PO|VENDOR\s*\d*\s*ALLIED\s+PO)\s*(?:#|NO\.?|NUMBER)?\s*[:#\.\-]?\s*([0-9A-Z\-\_]{3,})", text, re.IGNORECASE)
-            if allied_m:
+            if allied_m and any(ch.isdigit() for ch in allied_m.group(1)):
                 po_number = allied_m.group(1).strip()
 
-        if not po_number:
-            fn_m = re.search(r"\bPO[_\-\s#]*([A-Z0-9\-]+)", filename, re.IGNORECASE)
-            if fn_m and len(fn_m.group(1)) >= 3:
-                po_number = fn_m.group(1).strip()
-
-        is_synthetic = not po_number
-        po_number = po_number or f"PO-SCAN-{uuid.uuid4().hex[:6].upper()}"
+        po_missing = not po_number
+        po_number = po_number or ""                      # never made up: the same PO scanned twice must not become two different orders
         fields["customer_po_number"] = ExtractedDocumentField(
             field_name="customer_po_number",
-            raw_value=po_number,
+            raw_value=po_number or "NOT FOUND",
             normalized_value=po_number,
-            confidence=0.98 if not is_synthetic else 0.85,
+            confidence=0.98 if not po_missing else 0.0,
         )
+        if po_missing:
+            compliance.append("No customer reference (order) number could be read: a person must enter it before an order is started")
 
         # Allied PO / Internal PO number check
         allied_po_m = re.search(r"\b(?:ALLIED\s+PO|VENDOR\s*\d*\s*ALLIED\s+PO|PURCHASE\s+ORDER\s+NO\.?)\s*[:#\.\-]?\s*([0-9A-Z\-\_]{3,})", text, re.IGNORECASE)
@@ -489,19 +601,16 @@ class DocumentScannerService:
                     confidence=0.96,
                 )
 
-        terms = "Net 30 Days"
-        if "150" in text:
-            terms = "Net 150 Days"
-        elif "60" in text:
-            terms = "Net 60 Days"
+        written_terms = find_payment_terms(text)
+        terms = written_terms or cust_rec.get("payment_terms") or "Net 30 Days"
         fields["payment_terms"] = ExtractedDocumentField(
             field_name="payment_terms",
             raw_value=terms,
             normalized_value=terms,
-            confidence=0.95,
+            confidence=0.95 if written_terms else 0.5,           # not written on the document: the customer's usual terms, to be checked
         )
 
-        ship_addr = cust_rec.get("shipping_address", "831 Hayter Rd NW, Edmonton, AB T6S 1A1, Canada")
+        ship_addr = cust_rec.get("shipping_address", "")
         fields["shipping_address"] = ExtractedDocumentField(
             field_name="shipping_address",
             raw_value=ship_addr,
@@ -543,30 +652,8 @@ class DocumentScannerService:
                             break
 
             if matched_rec:
-                # Parse quantity
-                qty = Decimal("1.0")
-                qty_m = re.search(r"(?:\((\d+(?:\.\d+)?)\)|\b(\d+(?:\.\d+)?)\s*(?:EA|SPL|SPOOLS?|PCS?|UNITS?|SHEETS?|FT|X)\b|^\s*(\d+(?:\.\d+)?)\s*\|)", line_str, re.IGNORECASE)
-                if qty_m:
-                    parsed_str = qty_m.group(1) or qty_m.group(2) or qty_m.group(3)
-                    try:
-                        qty = Decimal(parsed_str)
-                    except Exception:
-                        pass
-                else:
-                    lead_num = re.match(r"^\d+[\.\)\-:]\s*\(?(\d+(?:\.\d+)?)\)?", line_str)
-                    trail_num = re.search(r"\b(\d+(?:\.\d+)?)\s*$", line_str)
-                    if lead_num:
-                        try:
-                            qty = Decimal(lead_num.group(1))
-                        except Exception:
-                            pass
-                    elif trail_num:
-                        try:
-                            val = Decimal(trail_num.group(1))
-                            if val <= Decimal("5000"):
-                                qty = val
-                        except Exception:
-                            pass
+                # Parse quantity (never the price: "Qty 2 ... $410.00" is two, not 410)
+                qty = parse_quantity(line_str)
 
                 # Parse unit price
                 price_m = re.search(r"@?\s*\$\s*([\d,]+(?:\.\d{2})?)", line_str)
@@ -610,98 +697,25 @@ class DocumentScannerService:
 
         line_items = list(line_items_by_sku.values())
 
-        # Fallback to keyword matching if line-by-line scanning found nothing
         if not line_items:
-            if "SCREEN" in text.upper() or "755507" in text or "OC755507" in text:
-                item_rec, _ = self.matcher.match_item("OC755507")
-                line_items.append(
-                    ScannedLineItem(
-                        item_id=item_rec["item_id"],
-                        description=item_rec["description"],
-                        quantity=Decimal("2.0"),
-                        unit_price=Decimal("3772.91"),
-                        unit_cost=Decimal("1785.00"),
-                        preferred_vendor=item_rec.get("preferred_vendor", "NIBROCK"),
-                        drawing_ref="DWG# OC-ED-218-R2",
-                        heat_number="HT-300XL-8819",
-                        confidence=0.98,
-                    )
-                )
+            compliance.append("No line items could be matched to the catalogue: a person must enter them")
 
-            if "BAR" in text.upper() or "BRACE" in text.upper() or "C1045" in text.upper() or "BAR-34X2-41" in text:
-                item_rec, _ = self.matcher.match_item("BAR-34X2-41")
-                line_items.append(
-                    ScannedLineItem(
-                        item_id=item_rec["item_id"],
-                        description=item_rec["description"],
-                        quantity=Decimal("4.0"),
-                        unit_price=Decimal("225.00"),
-                        unit_cost=Decimal("110.00"),
-                        preferred_vendor=item_rec.get("preferred_vendor", "NIBROCK"),
-                        drawing_ref="DWG# OC-ED-218-R2",
-                        confidence=0.98,
-                    )
-                )
-
-            if "SCREW" in text.upper() or "KN5218554" in text:
-                item_rec, _ = self.matcher.match_item("KN5218554")
-                line_items.append(
-                    ScannedLineItem(
-                        item_id=item_rec["item_id"],
-                        description=item_rec["description"],
-                        quantity=Decimal("1.0"),
-                        unit_price=Decimal("14500.00"),
-                        unit_cost=Decimal("7200.00"),
-                        preferred_vendor="KWS",
-                        drawing_ref="DWG# KNF001",
-                        confidence=0.98,
-                    )
-                )
-
-            if "HOSE" in text.upper() or "CERAMIC" in text.upper() or "OC262064" in text:
-                item_rec, _ = self.matcher.match_item("OC262064")
-                line_items.append(
-                    ScannedLineItem(
-                        item_id=item_rec["item_id"],
-                        description=item_rec["description"],
-                        quantity=Decimal("2.0"),
-                        unit_price=Decimal("2480.00"),
-                        unit_cost=Decimal("1200.00"),
-                        preferred_vendor="ZIBO",
-                        confidence=0.98,
-                    )
-                )
-
-        if not line_items:
-            item_rec, _ = self.matcher.match_item("PLATE-300XL-38")
-            line_items.append(
-                ScannedLineItem(
-                    item_id=item_rec["item_id"],
-                    description=item_rec["description"],
-                    quantity=Decimal("1.0"),
-                    unit_price=Decimal(str(item_rec.get("base_price", "2950.00"))),
-                    unit_cost=Decimal(str(item_rec.get("standard_cost", "1450.00"))),
-                    preferred_vendor=item_rec.get("preferred_vendor", "NIBROCK"),
-                    confidence=0.95,
-                )
-            )
-
-        first_item = line_items[0]
+        first_item = line_items[0] if line_items else None
         # Opens the New order form filled in from the PO; nothing is created
         # until a person checks it there.
         actions.append(
             ActionRoutingPayload(
                 target_action="STAGE_SAGE_ORDER",
                 label="Start an order from this PO",
-                route_url=_new_order_link(cust_name, first_item.item_id, first_item.unit_price),
+                route_url=_new_order_link(cust_name or None, first_item.item_id if first_item else None, first_item.unit_price if first_item else None),
                 prefill_data={
                     "customer_name": cust_name,
                     "customer_po_number": po_number,
                     "payment_terms": terms,
                     "shipping_address": ship_addr,
-                    "item_id": first_item.item_id,
-                    "quantity": str(first_item.quantity),
-                    "unit_price": str(first_item.unit_price),
+                    "item_id": first_item.item_id if first_item else "",
+                    "quantity": str(first_item.quantity) if first_item else "",
+                    "unit_price": str(first_item.unit_price) if first_item else "",
                 },
             )
         )

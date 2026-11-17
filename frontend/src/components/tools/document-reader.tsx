@@ -29,7 +29,7 @@ const ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.txt';
 
 // A note only counts as a pass if it reads like one: "could not read the
 // drawing number" next to an OK is how a warning gets read as reassurance.
-const PROBLEM_NOTE = /could not|cannot|not read|needs a person|no allied|must not|unresolved|by hand|does not resolve/i;
+const PROBLEM_NOTE = /could not|cannot|not read|needs a person|no allied|must not|unresolved|by hand|does not resolve|first \d+/i;
 const clean = (t: string) => String(t || '').replace(/[\p{Extended_Pictographic}️]/gu, '').trim();
 const display = (v: unknown) => (v == null || v === '' ? '–' : typeof v === 'object' ? JSON.stringify(v) : String(v));
 
@@ -318,8 +318,8 @@ function Reconciliation({ rec }: { rec: any }) {
       {rec.dispute_email_draft && (
         <p className="text-muted-foreground">
           A dispute letter has been written; see{' '}
-          <Link className="underline underline-offset-2" href="/health?tab=automation">
-            mail the system has written
+          <Link className="underline underline-offset-2" href="/inbox?filter=drafts">
+            drafts waiting for review
           </Link>
           .
         </p>

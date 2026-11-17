@@ -9,7 +9,15 @@ export const TRACKED: Role[] = ['projects', 'vendors', 'rfqs'];
 
 export type BoardSummary = { board_id: string; name: string; role: Role; label: string; read_at: string | null; items: number };
 
-export type Column = { id: string; title: string; type: string; width?: number | null; labels?: Record<string, string> };
+export type Column = {
+  id: string;
+  title: string;
+  type: string;
+  width?: number | null;
+  labels?: Record<string, string>;
+  /** monday leaves this formula column empty, so the app works the figure out itself. */
+  computed_by_app?: boolean;
+};
 export type Group = { id: string; title: string; color?: string | null };
 
 /** What the app makes of a row; null when the app doesn't track it. */

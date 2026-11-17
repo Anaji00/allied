@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Production models on Groq as of Oct 2026 (the Llama 3.x models were shut
     # down in Aug 2026). gpt-oss-120b supports strict JSON-schema answers.
     GROQ_TEXT_MODEL: str = "openai/gpt-oss-120b"
+    # Used in order when GROQ_TEXT_MODEL has reached its daily free limit (Groq counts the limit per model).
+    # Checked against Groq's rate-limit page on 2026-11-06: these three each have their own 1,000 requests and
+    # 200K tokens a day. The older Llama models are no longer on the free plan.
+    GROQ_FALLBACK_MODELS: str = "openai/gpt-oss-20b,qwen/qwen3.8-27b"
     # Reads scanned drawings. Preview on Groq: may change without notice.
     GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
     GROQ_SPEECH_MODEL: str = "whisper-large-v3-turbo"
@@ -165,6 +169,8 @@ class Settings(BaseSettings):
     MILESTONE_CHANGES_LABEL: str = "Changes requested"
     SUBMISSION_MAX_MB: int = 50
     MAX_REQUEST_MB: int = 60  # any request body over this is refused before it is read
+    # Files that can be attached to an item or a comment (programs are refused whatever they are called).
+    ATTACHMENT_EXTENSIONS: str = "pdf,dwg,dxf,step,stp,igs,iges,sldprt,sldasm,slddrw,xlsx,xlsm,xls,csv,docx,doc,pptx,txt,png,jpg,jpeg,tif,tiff,bmp,webp,zip"
     SUBMISSION_EXTENSIONS: str = "pdf,dwg,dxf,step,stp,igs,iges,sldprt,sldasm,slddrw,xlsx,xls,docx,doc,png,jpg,jpeg,zip"
 
     # Schedule rules (days are calendar days in BUSINESS_TZ).
@@ -265,6 +271,9 @@ class Settings(BaseSettings):
     RFQ_BOARD_CUSTOMER_COLUMN_ID: str = "Customer"
     RFQ_BOARD_STATUS_COLUMN_ID: str = "Status"
     RFQ_BOARD_VENDORS_COLUMN_ID: str = "Bidding vendors"
+    RFQ_BOARD_NOTES_COLUMN_ID: str = "Notes"
+    # The status a new row starts with on the Open RFQs board ("" = leave it empty). Must be a label that exists there.
+    RFQ_BOARD_NEW_STATUS_LABEL: str = ""
     RFQ_BOARD_FOLLOWUP_COLUMN_ID: str = "Last follow up"
     RFQ_BOARD_STATUS_MAP: str = ("waiting on vendor quote=WAITING_VENDOR,waiting on freight=WAITING_VENDOR,"
                                  "waiting on drawing=CLARIFYING,need quote checked=PRICING,need markup=PRICING,"
@@ -356,6 +365,8 @@ class Settings(BaseSettings):
     AUTH_DEV_BYPASS: bool = False
 
     # Pre-seeded Admin Credentials
+    # Proxies in front of the app whose X-Forwarded-For entries are believed (only the Docker network by default, never the office LAN: list the proxy's own address range here if Docker uses another).
+    TRUSTED_PROXY_NETS: str = "172.16.0.0/12,127.0.0.0/8"
     ADMIN_EMAIL: str = "admin@alliedweldingsystems.com"
     ADMIN_PASSWORD: str = "AlliedEnterprise2026!"
     ADMIN_FULL_NAME: str = "Allied System Administrator"
@@ -382,6 +393,38 @@ class Settings(BaseSettings):
     SUPPORTED_CURRENCIES: list = ["USD", "CAD", "CNY"]
     DEFAULT_CURRENCY: str = "USD"
     FX_RATES: dict = {"USD": 1.0, "CAD": 1.36, "CNY": 7.24}  # Baseline rates, updated operationally
+    # Live rates from a free public service (no key, no Allied data sent). The two fixed rates below are used when it is off or down.
+    # Whose-turn-it-is chasing, in working days since the ball moved: remind whoever holds it, then tell the owner, then leadership.
+    # How changes to monday are made. "manual": every change the app wants to make is STAGED and nothing is sent until a person pushes
+    # (like git). "auto": changes are sent as they happen. Either way nothing is sent while MONDAY_READ_ONLY is on.
+    # What happens when an order is released for production ("Send PO" on the board): "suggest" (default) queues the purchase order
+    # email to the vendor as a draft for a person to approve; "auto" sends it at once, as before.
+    VENDOR_PO_MODE: str = "suggest"
+    BACKUP_ENABLED: bool = True          # a consistent copy of the database every BACKUP_EVERY_HOURS, checked by opening it
+    BACKUP_EVERY_HOURS: int = 24
+    BACKUP_KEEP_DAYS: int = 14
+    BACKUP_KEEP_MIN: int = 7             # the newest this many are never removed, however old
+    BACKUP_DIR: str = ""                 # blank = a "backups" folder beside the database
+    BACKUP_COPY_ALLOW_SYNCED: bool = False  # True lets BACKUP_COPY_DIR be a cloud-synced folder (OneDrive, Dropbox ...): the copy holds the whole database
+    BACKUP_COPY_DIR: str = ""            # a second location (another disk or a share you control) every checked backup is also copied to; blank = not set up. The copy holds the WHOLE database including logins, so not a cloud-synced folder
+    BOARD_STALE_DAYS: int = 14           # an open item whose status has not changed for this long is called stale
+    # Numbers the app hands out start above these, so they can never clash with numbers the accountant already used in Sage 50.
+    PO_NUMBER_FLOOR: int = 0
+    # A warning (never a block) appears on a job when the customer's price leaves less than this share of it after the vendor's price. 0 = warn only on a loss.
+    MIN_MARGIN_PCT: float = 0.0
+    # A purchase order whose lines add up to more than this can only be approved by an ADMIN, not a MANAGER. 0 = no limit.
+    PO_APPROVAL_LIMIT: float = 0.0
+    # Board people -> email, as JSON {"Name": "email"}. Anyone not found here or in the staff contacts gets a placeholder address that never receives mail.
+    OWNER_EMAILS: str = ""
+    SO_NUMBER_FLOOR: int = 0
+    MONDAY_PUSH_MODE: str = "manual"
+    MONDAY_STAGE_DAYS: int = 30        # a staged change nobody pushed for this long expires: monday will have moved on
+    BALL_NUDGE_DAYS: int = 2
+    BALL_ESCALATE_DAYS: int = 4
+    BALL_LEADERSHIP_DAYS: int = 7
+    FX_LIVE_RATES: bool = True
+    FX_URL: str = "https://api.frankfurter.dev/v1/latest"
+    FX_CACHE_HOURS: int = 12
     CAD_TO_USD_RATE: float = 0.735  # 1 CAD ~ 0.735 USD
     CNY_TO_USD_RATE: float = 0.138  # 1 CNY ~ 0.138 USD
 
@@ -538,6 +581,8 @@ class Settings(BaseSettings):
         """Refuses to run in production with default or empty secrets."""
         if not self.is_production:
             return
+        if self.AUTH_DEV_BYPASS:
+            raise RuntimeError("Refusing to start in production: AUTH_DEV_BYPASS is on, which lets anyone in without signing in.")
         insecure = self.insecure_secrets()
         if insecure:
             raise RuntimeError(

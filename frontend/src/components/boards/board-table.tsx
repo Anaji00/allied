@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronRight, Calculator } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AutomationChip } from './board-automations';
 import { NoteChip } from './board-notes';
@@ -9,6 +9,8 @@ import type { Note } from './use-notes';
 import { Cell, ColumnSummary, InApp, TRACKED_ROLES, sortItems, type Sort } from './board-parts';
 import type { Automations } from './use-automations';
 import type { Board, Column, Group, Item } from './use-boards';
+import { useCellDrag } from './use-cell-drag';
+import { cellKey, idKey, useStaged } from './use-staged';
 
 const width = (c: Column) => Math.min(Math.max(c.width ?? 140, 80), 320);
 
@@ -42,6 +44,8 @@ export function BoardTable({
   notes?: Note[];
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const staged = useStaged(board);
+  const drag = useCellDrag(board);
   const nameColumn = board.columns.find((c) => c.type === 'name');
   const columns = board.columns.filter((c) => c.type !== 'name');
   // A monday Doc's table has no item names; reference boards aren't tracked by the app.
@@ -62,7 +66,7 @@ export function BoardTable({
   // Click once to sort up, again to sort down, a third time to go back to monday's order.
   const cycle = (id: string) => onSort(sort?.column !== id ? { column: id, desc: false } : sort.desc ? null : { column: id, desc: true });
 
-  const header = (id: string, title: string, extra?: string, minWidth?: number) => {
+  const header = (id: string, title: string, extra?: string, minWidth?: number, computed?: boolean) => {
     const active = sort?.column === id;
     return (
       <th
@@ -74,6 +78,12 @@ export function BoardTable({
       >
         <button type="button" onClick={() => cycle(id)} className="flex w-full items-center gap-1 px-3 py-2 hover:text-foreground">
           {title}
+          {computed && (
+            <span title="Filled in by the app: monday leaves this column empty, so the app fills it in." className="inline-flex text-info">
+              <Calculator className="size-3" aria-hidden />
+              <span className="sr-only">Filled in by the app</span>
+            </span>
+          )}
           {active && (sort.desc ? <ArrowDown className="size-3" aria-hidden /> : <ArrowUp className="size-3" aria-hidden />)}
         </button>
       </th>
@@ -90,6 +100,19 @@ export function BoardTable({
         >
           {allCollapsed ? 'Expand all groups' : 'Collapse all groups'}
         </button>
+        {drag.can && (
+          <span className="rounded-full bg-muted px-2.5 py-1 text-foreground max-sm:hidden">
+            Tip: drag a value onto another cell in the same column to copy it
+          </span>
+        )}
+        {drag.held && (
+          <span className="flex items-center gap-2 rounded-full bg-primary px-3 py-1 text-primary-foreground">
+            Copying “{drag.held.value}”. Tap a matching cell to paste it.
+            <button type="button" className="underline" onClick={drag.cancel}>
+              Cancel
+            </button>
+          </span>
+        )}
         {sort && (
           <button
             type="button"
@@ -106,7 +129,7 @@ export function BoardTable({
             <thead className="sticky top-0 z-[2] bg-card">
               <tr>
                 {showName && header('name', nameColumn?.title ?? 'Item', 'sticky left-0 z-[1] min-w-40 bg-card sm:min-w-64')}
-                {columns.map((c) => header(c.id, c.title, undefined, width(c)))}
+                {columns.map((c) => header(c.id, c.title, undefined, width(c), c.computed_by_app))}
                 {tracked && (
                   <th
                     scope="col"
@@ -162,15 +185,35 @@ export function BoardTable({
                             {item.name}
                           </th>
                         )}
-                        {columns.map((c) => (
-                          <td key={c.id} className="px-3 py-1.5 align-middle" style={{ minWidth: width(c) }}>
-                            <Cell column={c} value={item.values[c.id] ?? ''} />
-                          </td>
-                        ))}
+                        {columns.map((c) => {
+                          const change = staged.cells.get(idKey(item.id, c.id)) ?? staged.cells.get(cellKey(item.name, c.title));
+                          return (
+                            <td
+                              key={c.id}
+                              className={cn(
+                                'px-3 py-1.5 align-middle',
+                                change && 'bg-ok-soft',
+                                drag.over === `${item.id}:${c.id}` && 'bg-accent outline-2 -outline-offset-2 outline-ring',
+                              )}
+                              style={{ minWidth: width(c) }}
+                              title={change ? 'Waiting to be sent to monday' : undefined}
+                              {...drag.dragProps(item, c, item.values[c.id] ?? '')}
+                            >
+                              {change ? (
+                                <span className="grid gap-0.5">
+                                  {change.now && <span className="rounded-sm bg-bad-soft px-1 text-bad line-through">{change.now}</span>}
+                                  <span className="font-medium text-ok">{change.becomes || '(cleared)'}</span>
+                                </span>
+                              ) : (
+                                <Cell column={c} value={item.values[c.id] ?? ''} />
+                              )}
+                            </td>
+                          );
+                        })}
                         {tracked && (
                           <td className="border-l px-3 py-1.5 whitespace-nowrap">
                             <span className="flex items-center gap-2">
-                              <InApp role={board.role} item={item} />
+                              <InApp role={board.role} item={item} compact />
                               <AutomationChip data={automations} itemId={item.id} />
                               <NoteChip notes={notes} itemId={item.id} />
                             </span>
@@ -198,6 +241,35 @@ export function BoardTable({
                 </tbody>
               );
             })}
+            {staged.rows.length > 0 && (
+              <tbody>
+                <tr>
+                  <th colSpan={span} scope="colgroup" className="sticky left-0 border-b bg-ok-soft p-0 text-left">
+                    <span className="sticky left-0 block px-3 py-1.5 text-[13px] font-semibold text-ok">
+                      Waiting to be added to monday <span className="font-normal tabular-nums">{staged.rows.length}</span>
+                    </span>
+                  </th>
+                </tr>
+                {staged.rows.map((r, i) => (
+                  <tr key={i} className="border-b bg-ok-soft/60">
+                    {showName && (
+                      <th
+                        scope="row"
+                        className="sticky left-0 z-[1] max-w-80 truncate border-l-4 border-l-ok bg-ok-soft px-3 py-1.5 text-left font-medium"
+                      >
+                        {r.name || '(no name)'}
+                      </th>
+                    )}
+                    {columns.map((c) => (
+                      <td key={c.id} className="px-3 py-1.5 align-middle text-ok" style={{ minWidth: width(c) }}>
+                        {r.fields[c.id] ?? r.fields[c.title] ?? ''}
+                      </td>
+                    ))}
+                    {tracked && <td className="border-l" />}
+                  </tr>
+                ))}
+              </tbody>
+            )}
           </table>
         </div>
       </div>

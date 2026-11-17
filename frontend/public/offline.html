@@ -37,6 +37,12 @@
     <p>Allied Operations can't reach the office server. Check your Wi‑Fi or signal, then try again.</p>
     <button type="button" onclick="location.reload()">Try again</button>
   </main>
-  <script>window.addEventListener('online', () => location.reload());</script>
+  <script>
+    window.addEventListener('online', () => location.reload());
+    // Check quietly every few seconds, and come back by itself once the server answers.
+    setInterval(function () {
+      fetch('/manifest.webmanifest', { cache: 'no-store' }).then(function (r) { if (r.ok) location.reload(); }).catch(function () {});
+    }, 4000);
+  </script>
 </body>
 </html>

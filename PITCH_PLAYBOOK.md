@@ -88,24 +88,23 @@ Say that sentence out loud. It's the one that lands.
 
 ## Running the demo
 
-```bash
-python demo_reset.py
-```
-
-Then start the API on **port 8010** — 8000 is taken by your other app, and the failure is
-silent, which will make you look unprepared:
+**Never run `demo_reset.py`: it deletes the live database.** Build a separate demo copy instead (details in the README under "Presenting it"):
 
 ```bash
-uvicorn app.main:app --port 8010
+python scripts/demo_seed.py --db C:/demo/allied_demo.db
 ```
-
-Frontend in a second terminal:
 
 ```bash
-cd frontend && npm run dev
+python scripts/demo_run.py --db C:/demo/allied_demo.db --port 8010
 ```
 
-Demo login: `admin@alliedweldingsystems.com` / `AlliedEnterprise2026!`
+Frontend in a second terminal, pointed at the demo API:
+
+```bash
+cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8010 npm run dev
+```
+
+The seeder prints four demo sign-ins and a one-time password. Sign in as manager and admin in two browsers before you start: five wrong passwords lock an account for 15 minutes.
 
 ### The three things to actually show
 
@@ -124,13 +123,22 @@ wrong conversation.
 
 ## Known limitations — say these before they find them
 
-- Not yet plugged into live Sage or the live Monday board. It produces the Sage files
+- Not yet plugged into live Sage or the live monday board (monday is read-only). It produces the Sage files
   correctly and records what it *would* post to the board. Connecting both is what the
   proposal is for.
-- The 133 automatic checks all pass, but they're my checks. Stage 1 proves it against
+- The 2,394 automatic checks all pass, but they're my checks. Stage 1 proves it against
   Allied's real parts and customers, which is the test that counts.
-- Backups don't exist yet. Everything lives in one file on one machine. This is in stage 1
-  of the proposal for a reason, and it's the only item that could lose data permanently.
+- Everything lives in one file on one machine. The system copies the database before any upgrade and has a backup script. A second copy to another disk or folder is built in (`BACKUP_COPY_DIR`) but must be set up; say that, not that it exists.
+- Customs papers (commercial invoice, packing list) are prepared, never filed, and the system lists what is missing instead of guessing. Your customs broker still files.
+
+---
+
+## Questions to expect (and honest answers)
+
+- **"What if it breaks on a busy day, and who fixes it?"** Say: I fix it; the data is one file with automatic copies before upgrades, and restoring it on another machine takes about an hour. There is no written restore runbook yet, and it depends on one person. Offer to write it in stage 1. (Do not promise a response time you won't keep.)
+- **"Who can see our prices and vendors?"** Every signed-in staff account sees vendor names and PO numbers; costs and margins are manager-only; a customer sees only their own reference and never our sales order number. Any signed-in viewer can download an attached file if they know its number. Accounts are removed or demoted instantly.
+- **"What does it cost to keep running?"** The AI runs on a free tier (no per-use bill today, but limits can change). Hosting is one office PC. Your time to maintain it is the real cost; agree it before you are asked.
+- **"Can it send emails by itself?"** Not as shipped. Every email waits for a person, and vendor POs always do.
 
 ---
 

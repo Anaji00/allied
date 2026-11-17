@@ -29,6 +29,7 @@ _TEST_TMP = Path(tempfile.mkdtemp(prefix="allied_tests_"))
 
 settings.DATABASE_URL = f"sqlite:///{_TEST_TMP / 'test_allied.db'}"
 settings.AUTH_DEV_BYPASS = True
+settings.FX_LIVE_RATES = False   # tests never call the exchange-rate service; the fixed rates apply
 settings.SEED_DEMO_DATA = False
 
 # Work on copies of the master data, never the originals.
@@ -131,3 +132,34 @@ def staff_token(email: str, role: str) -> str:
             db.commit()
     forget_account(email)
     return create_access_token({"sub": email, "name": email, "role": role, "facility": "HQ"})
+
+
+@pytest.fixture(autouse=True)
+def _undo_monkeypatches_left_on_service_objects():
+    """pytest's monkeypatch, undoing a patch on an OBJECT (not a class), writes the original bound method back into the object, which then shadows every
+    later patch made on the class. A snapshot of the shared service objects is restored after each test, so one test's patch can never decide another's result."""
+    import importlib
+    targets = []
+    for module, name in (("app.services.outbound_email_service", "outbound_email_service"), ("app.services.sage_export_service", "sage_export_service"),
+                         ("app.services.reconciliation_service", "reconciliation_service"), ("app.services.logistics_dispatcher", "logistics_dispatcher")):
+        try:
+            obj = getattr(importlib.import_module(module), name)
+            targets.append((obj, dict(vars(obj))))
+        except Exception:  # noqa: BLE001 - a service that cannot be imported has nothing to restore
+            continue
+    yield
+    for obj, before in targets:
+        for key in [k for k in vars(obj) if k not in before]:
+            try:
+                delattr(obj, key)
+            except AttributeError:
+                pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_throttle():
+    """Wrong-password counts are kept in memory; one test must not lock out the next."""
+    from app.core import login_guard
+    login_guard.reset()
+    yield
+    login_guard.reset()

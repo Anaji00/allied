@@ -12,6 +12,8 @@ import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
+import { SavedViews } from '@/components/data/saved-views';
+import { DownloadMenu } from '@/components/data/download-menu';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
@@ -74,8 +76,7 @@ export function ShipmentsView() {
   // A link straight to a shipment opens a view that lists it.
   const linked = id != null ? all.find((s) => s.id === id) : undefined;
   const fallback: View = groups.attention.length || !data ? 'attention' : 'active';
-  const current: View =
-    view ?? (linked && !groups[fallback].includes(linked) ? (isFinished(linked) ? 'finished' : 'active') : fallback);
+  const current: View = view ?? (linked && !groups[fallback].includes(linked) ? (isFinished(linked) ? 'finished' : 'active') : fallback);
 
   // Filtering trails the typing slightly, so letters appear at once on a slow PC.
   const needle = useDeferredValue(q).trim().toLowerCase();
@@ -104,11 +105,15 @@ export function ShipmentsView() {
       id: 'route',
       header: 'Route',
       meta: { className: 'max-w-64 truncate' },
-      cell: (c) => (
-        <span className="inline-flex items-center gap-1">
-          {c.row.original.origin || '?'} <ArrowRight className="size-3 text-muted-foreground" aria-label="to" /> {c.row.original.destination || '?'}
-        </span>
-      ),
+      cell: (c) =>
+        c.row.original.origin || c.row.original.destination ? (
+          <span className="inline-flex items-center gap-1">
+            {c.row.original.origin || 'Not set'} <ArrowRight className="size-3 text-muted-foreground" aria-label="to" />{' '}
+            {c.row.original.destination || 'Not set'}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">Not set</span>
+        ),
     }),
     col.accessor('mode', { header: 'By', cell: (c) => MODE_LABEL[c.getValue()] ?? c.getValue() }),
     col.accessor('status', {
@@ -170,16 +175,20 @@ export function ShipmentsView() {
             { value: 'finished', label: 'Finished', count: data ? groups.finished.length : undefined },
           ]}
         />
-        {canEdit && (
-          <div className="ml-auto flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setReading(true)}>
-              <Mail /> Read forwarder email
-            </Button>
-            <Button size="sm" onClick={() => setAdding(true)}>
-              <Plus /> Add shipment <Kbd className="bg-transparent text-current opacity-60">N</Kbd>
-            </Button>
-          </div>
-        )}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+          <SavedViews screen="shipments" />
+          {hasRole('OPERATOR') && <DownloadMenu list="shipments" />}
+          {canEdit && (
+            <div className="ml-1 flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setReading(true)}>
+                <Mail /> Read forwarder email
+              </Button>
+              <Button size="sm" onClick={() => setAdding(true)}>
+                <Plus /> Add shipment <Kbd className="bg-transparent text-current opacity-60">N</Kbd>
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_26rem]')}>
@@ -199,7 +208,9 @@ export function ShipmentsView() {
               onSelect={open}
               minWidth={900}
               empty={
-                <EmptyState title={needle ? 'No shipments match' : current === 'attention' ? 'Nothing needs attention' : 'No shipments here'}>
+                <EmptyState
+                  title={needle ? 'No shipments match' : current === 'attention' ? 'Nothing needs attention' : 'No shipments here'}
+                >
                   {needle
                     ? 'Try a shorter search or another filter.'
                     : current === 'attention'
@@ -227,7 +238,7 @@ export function ShipmentsView() {
           onClose={() => open(undefined)}
           recordName={selected ? recordKey('shipment', selected.id) : undefined}
           title={selected ? <span className="font-mono">{identifier(selected)}</span> : ''}
-          description={selected ? `${selected.origin || '?'} to ${selected.destination || '?'}` : undefined}
+          description={selected ? `${selected.origin || 'not set'} to ${selected.destination || 'not set'}` : undefined}
         >
           {selected && <ShipmentDetail key={selected.id} shipment={selected} statuses={statuses} canEdit={canEdit} />}
         </DetailPanel>
@@ -235,7 +246,12 @@ export function ShipmentsView() {
 
       {canEdit && (
         <>
-          <AddShipmentDialog open={adding} onOpenChange={setAdding} statuses={statuses} onAdded={(sid) => void setId(sid).then(() => setView('active'))} />
+          <AddShipmentDialog
+            open={adding}
+            onOpenChange={setAdding}
+            statuses={statuses}
+            onAdded={(sid) => void setId(sid).then(() => setView('active'))}
+          />
           <ForwarderEmailDialog open={reading} onOpenChange={setReading} onApplied={(sid) => void setId(sid).then(() => setView(null))} />
         </>
       )}

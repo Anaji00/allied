@@ -12,6 +12,10 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    UniqueConstraint,
+    Index,
+    func,
+    text,
     Column,
     Numeric,
     DateTime,
@@ -65,6 +69,7 @@ class UserDB(Base):
     full_name = Column(String(256), nullable=False)
     role = Column(String(64), nullable=False, default="VIEWER")  # ADMIN, MANAGER, OPERATOR, VIEWER
     facility = Column(String(64), nullable=False, default="HQ")  # HQ, EDMONTON, ZIBO
+    language = Column(String(8), nullable=False, default="en", server_default="en")  # en, zh, vi: what the app shows them in
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
     last_login = Column(DateTime(timezone=True), nullable=True)
@@ -153,6 +158,8 @@ class NotificationDB(Base):
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)
     acknowledged_by = Column(String(256), nullable=True)
     escalated_at = Column(DateTime(timezone=True), nullable=True)
+    snoozed_until = Column(DateTime(timezone=True), nullable=True)   # hidden from the lists until this time passes
+    assignee = Column(String(256), nullable=True)                    # the one person it was handed to
 
 
 class MondayProjectDB(Base):
@@ -247,6 +254,7 @@ class VendorJobDB(Base):
     description = Column(String(512), nullable=False, default="")
     project_item_id = Column(String(32), nullable=True, index=True)
     po_number = Column(String(64), nullable=True)
+    purchase_order_id = Column(Integer, nullable=True, index=True)   # the one purchase order record this line is for (number, vendor, lines, status live there)
     owner_email = Column(String(256), nullable=True)
     status = Column(String(128), nullable=True)
     mode = Column(String(8), nullable=False, default="SEA")
@@ -321,6 +329,112 @@ class EngineeringNoteDB(Base):
     audio = Column(JSON, nullable=True)                           # {file, mime, size, seconds} of a voice note
     transcript = Column(Text, nullable=True)                      # what the voice note says, as heard
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class ItemFileDB(Base):
+    """A file attached to an item (or to a comment on it). Stored on the server; removing one hides it."""
+
+    __tablename__ = "item_files"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_type = Column(String(24), nullable=False)
+    item_ref = Column(String(64), nullable=False)
+    update_id = Column(Integer, nullable=True)            # set when attached to a comment
+    filename = Column(String(255), nullable=False)
+    stored_path = Column(String(1024), nullable=False)
+    size = Column(Integer, nullable=False, default=0)
+    sha256 = Column(String(64), nullable=False, default="")
+    content_type = Column(String(120), nullable=True)
+    uploaded_by = Column(String(256), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    design = Column(Boolean, nullable=False, default=False)       # marked as a design file: the only kind that goes to a vendor
+
+
+class OutboundMailDB(Base):
+    """The send ledger: one row for every mail the app tried to send or only drafted, with what really happened (SENT, DRAFTED, FAILED; REDIRECTED is a
+    SENT to the pilot test inbox). The PO and order paths read "did it go?" from here, not from memory, so a restart never forgets."""
+
+    __tablename__ = "outbound_mail_log"
+    __table_args__ = (Index("ix_mail_log_ref", "category", "reference"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(String(32), nullable=False, unique=True)
+    category = Column(String(32), nullable=False, default="GENERAL")
+    reference = Column(String(128), nullable=True)
+    to_addr = Column(String(512), nullable=True)
+    intended_to = Column(String(512), nullable=True)
+    status = Column(String(16), nullable=False)                           # SENT, DRAFTED, FAILED
+    redirected = Column(Boolean, nullable=False, default=False)
+    subject = Column(String(256), nullable=True)
+    detail = Column(String(400), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class MondayChangeDB(Base):
+    """A change to monday that is staged (saved, not sent) until someone pushes it. Like a commit that hasn't been pushed."""
+
+    __tablename__ = "monday_changes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(16), nullable=False)               # create_item, update_columns, post_update
+    board_id = Column(String(32), nullable=False, default="")
+    item_id = Column(String(32), nullable=False, default="")
+    payload = Column(JSON, nullable=False, default=dict)
+    summary = Column(String(500), nullable=False, default="")
+    source = Column(String(40), nullable=False, default="app")
+    status = Column(String(12), nullable=False, default="STAGED", index=True)   # STAGED, PUSHED, FAILED, SKIPPED, EXPIRED
+    dedupe_key = Column(String(120), nullable=False, default="", index=True)
+    staged_by = Column(String(256), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+    result = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=True)
+    pushed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class ItemBallDB(Base):
+    """Whose turn it is on an item, and since when. One row per item. Moving the ball restarts the clock
+    and the chasing; the history keeps who moved it, when and why."""
+
+    __tablename__ = "item_balls"
+    __table_args__ = (Index("ix_item_balls_item", "item_type", "item_ref", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_type = Column(String(24), nullable=False)
+    item_ref = Column(String(64), nullable=False)
+    owner_email = Column(String(256), nullable=True)       # who is responsible for the item getting done
+    ball_with = Column(String(16), nullable=False)         # us, engineer, manager, vendor, customer, carrier, other
+    ball_person = Column(String(256), nullable=True)       # an email for our own people, a name for outsiders
+    note = Column(String(300), nullable=True)               # what it is waiting for
+    due_at = Column(String(10), nullable=True)
+    ball_since = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    escalation_level = Column(Integer, nullable=False, default=0)   # 0 none, 1 nudged, 2 owner told, 3 leadership told
+    last_escalated_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    history = Column(JSON, nullable=False, default=list)
+    set_by = Column(String(256), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class ItemUpdateDB(Base):
+    """A comment on any order, RFQ, vendor job, shipment, milestone or board item: one thread per item,
+    one level of replies, @mentions that alert the person named. Deleting hides it (the row stays)."""
+
+    __tablename__ = "item_updates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_type = Column(String(24), nullable=False)       # order, rfq, vendor_job, shipment, milestone, board_item
+    item_ref = Column(String(64), nullable=False)
+    parent_id = Column(Integer, nullable=True)           # set on a reply
+    author_email = Column(String(256), nullable=False)
+    author_name = Column(String(256), nullable=False, default="")
+    body = Column(Text, nullable=False)
+    mentions = Column(JSON, nullable=False, default=list)  # emails of the people named
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    edited_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class PackingSlipDB(Base):
@@ -593,3 +707,192 @@ class AuditLogDB(Base):
     detail = Column(Text, nullable=True)
     ip_address = Column(String(45), nullable=True)
     correlation_id = Column(String(64), nullable=True)
+
+
+class JobDB(Base):
+    """One job from the customer's RFQ to the shipment: the thread that links the RFQ, the engineering talk, the design approval,
+    the vendor POs, the sales order and the shipments. Its stage is worked out from what exists, not typed in."""
+
+    __tablename__ = "jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ref = Column(String(24), unique=True, nullable=False, index=True)        # JOB-2026-0001
+    title = Column(String(256), nullable=False, default="")
+    customer = Column(String(256), nullable=True)
+    rfq_id = Column(Integer, nullable=True, unique=True)
+    sales_order_number = Column(String(64), nullable=True, index=True)
+    design_approved_by = Column(String(256), nullable=True)
+    design_approved_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(String(256), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class PurchaseOrderDB(Base):
+    """A purchase order Allied issues to a vendor for a job: one per vendor per job. It is drafted, approved after the design is
+    approved, then sent as a draft a person OKs; the same number is kept when the customer's order arrives."""
+
+    __tablename__ = "purchase_orders"
+    __table_args__ = (Index("ux_po_job_vendor", "job_id", func.lower(Column("vendor")), unique=True, sqlite_where=text("status <> 'CANCELLED'")),
+                      Index("ux_po_number", "po_number", unique=True, sqlite_where=text("po_number is not null")))
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=False, index=True)
+    po_number = Column(String(64), nullable=True, index=True)               # assigned when it is approved
+    vendor = Column(String(256), nullable=False)
+    vendor_email = Column(String(256), nullable=True)
+    lines = Column(JSON, nullable=False, default=list)                       # [{qty, item, description, unit_cost, amount}]
+    terms = Column(String(64), nullable=True)
+    ship_via = Column(String(64), nullable=True)
+    good_thru = Column(String(16), nullable=True)
+    status = Column(String(16), nullable=False, default="DRAFT")            # DRAFT, APPROVED, SENT, ACKNOWLEDGED
+    approved_by = Column(String(256), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    action_id = Column(String(36), nullable=True)                            # the email draft waiting for a person's OK
+    incoterm = Column(String(16), nullable=True)                            # optional: FOB, EXW ... for an overseas vendor
+    revision_marks = Column(JSON, nullable=True)                            # {"acked": {"1": {"revision", "by", "at"}}}: the drawing revision the vendor said it is making
+    incoterm_place = Column(String(64), nullable=True)                      # optional: Ningbo ...
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)           # a manager cancelled it (the customer cancelled, or it was raised by mistake)
+    cancel_reason = Column(String(256), nullable=True)
+    created_by = Column(String(256), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class JobResearchDB(Base):
+    """A research note on a job: a site or result someone (or the web search) found, with a note."""
+
+    __tablename__ = "job_research"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(512), nullable=False, default="")
+    url = Column(String(1024), nullable=True)
+    note = Column(Text, nullable=True)
+    source = Column(String(16), nullable=False, default="manual")           # manual, search
+    created_by = Column(String(256), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class AutomationModeDB(Base):
+    """The one switch for a timed play or an instant reaction: off, suggest (a person approves) or auto. Overrides the environment setting."""
+
+    __tablename__ = "automation_modes"
+
+    key = Column(String(80), primary_key=True)                 # play:vendor_chaser, reaction:rfq_won
+    mode = Column(String(8), nullable=False)
+    changed_by = Column(String(256), nullable=True)
+    changed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class JobDocumentDB(Base):
+    """One document found inside a scanned job packet (a PO, a quotation, a sales order, drawings...): what it is, which pages, and the facts printed
+    on it. A fact that is not printed is not stored."""
+
+    __tablename__ = "job_documents"
+    __table_args__ = (UniqueConstraint("source_sha", "page_from", name="ux_job_documents_page"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=True, index=True)            # blank until the packet is attached to a job
+    kind = Column(String(24), nullable=False)
+    label = Column(String(80), nullable=False, default="")
+    page_from = Column(Integer, nullable=False)
+    page_to = Column(Integer, nullable=False)
+    fields = Column(JSON, nullable=False, default=dict)
+    text = Column(Text, nullable=True)                              # what the pages say, for search
+    source_name = Column(String(255), nullable=False, default="")
+    source_sha = Column(String(64), nullable=False, index=True)
+    created_by = Column(String(256), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    confirmed_by = Column(String(256), nullable=True)            # a person checked these facts against the page
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Sage 50 import mirrors: read-only copies of what a Sage export file said. The app never writes to Sage; these tables only ever come from a file.
+# ---------------------------------------------------------------------------
+
+class SageImportDB(Base):
+    """One committed import file: what it was, who brought it in, what it changed. The same file (same kind, same hash) is never taken twice."""
+
+    __tablename__ = "sage_imports"
+    __table_args__ = (UniqueConstraint("kind", "file_hash", name="ux_sage_imports_file"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(24), nullable=False)
+    file_name = Column(String(255), nullable=False, default="")
+    file_hash = Column(String(64), nullable=False)
+    rows_total = Column(Integer, nullable=False, default=0)
+    created = Column(Integer, nullable=False, default=0)
+    updated = Column(Integer, nullable=False, default=0)
+    unchanged = Column(Integer, nullable=False, default=0)
+    problems = Column(Integer, nullable=False, default=0)
+    imported_by = Column(String(256), nullable=True)
+    imported_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class SageInvoiceDB(Base):
+    __tablename__ = "sage_invoices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_number = Column(String(64), nullable=False, unique=True)
+    customer_id = Column(String(64), nullable=True, index=True)
+    customer_name = Column(String(256), nullable=True)
+    invoice_date = Column(String(10), nullable=False)
+    due_date = Column(String(10), nullable=True)
+    customer_po = Column(String(128), nullable=True, index=True)
+    sales_order = Column(String(64), nullable=True, index=True)
+    total = Column(Numeric(14, 2), nullable=False)
+    amount_due = Column(Numeric(14, 2), nullable=True)           # blank when the file did not say: then payments decide
+    import_id = Column(Integer, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class SagePaymentDB(Base):
+    __tablename__ = "sage_payments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pay_key = Column(String(64), nullable=False, unique=True)
+    receipt_number = Column(String(64), nullable=True)
+    payment_date = Column(String(10), nullable=False)
+    customer_id = Column(String(64), nullable=True)
+    invoice_number = Column(String(64), nullable=True, index=True)
+    amount = Column(Numeric(14, 2), nullable=False)
+    import_id = Column(Integer, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class SageOpenOrderDB(Base):
+    """A sales order or purchase order that is still open in Sage (so the app does not make it twice)."""
+
+    __tablename__ = "sage_open_orders"
+    __table_args__ = (UniqueConstraint("kind", "number", name="ux_sage_open_orders"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(2), nullable=False)                     # SO or PO
+    number = Column(String(64), nullable=False)
+    party_id = Column(String(64), nullable=True)
+    party_name = Column(String(256), nullable=True)
+    order_date = Column(String(10), nullable=False)
+    customer_po = Column(String(128), nullable=True, index=True)
+    amount = Column(Numeric(14, 2), nullable=True)
+    open_amount = Column(Numeric(14, 2), nullable=True)
+    import_id = Column(Integer, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class SageBillDB(Base):
+    __tablename__ = "sage_bills"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bill_key = Column(String(160), nullable=False, unique=True)  # vendor | bill number: two vendors can use the same number
+    bill_number = Column(String(64), nullable=False, index=True)
+    vendor_id = Column(String(64), nullable=True)
+    vendor_name = Column(String(256), nullable=True)
+    bill_date = Column(String(10), nullable=False)
+    due_date = Column(String(10), nullable=True)
+    amount = Column(Numeric(14, 2), nullable=False)
+    amount_due = Column(Numeric(14, 2), nullable=True)
+    po_number = Column(String(64), nullable=True)
+    import_id = Column(Integer, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow)

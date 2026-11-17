@@ -1,0 +1,4 @@
+Customer ID,Customer Name(X),SO/Proposal Number,Date,Closed,Customer PO,Accounts Receivable Amount(X),Number of Distributions,Quantity,Item ID,Description,G/L Account,Unit Price,Amount
+10195,Owens Corning Starr Composites,SO-J-1,11/18/2026,FALSE,4500777001,"2,500.00",2,1,A,PART A,4000-00,"1,000.00","-1,000.00"
+10195,Owens Corning Starr Composites,SO-J-1,11/18/2026,FALSE,4500777001,"2,500.00",2,1,B,PART B,4000-00,"1,500.00","-1,500.00"
+10195,Owens Corning Starr Composites,SO-J-2,11/10/2026,TRUE,4500777002,900.00,1,1,C,PART C,4000-00,900.00,-900.00

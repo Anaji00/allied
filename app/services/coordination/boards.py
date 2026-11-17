@@ -13,6 +13,7 @@ here is stored in the database and nothing is ever written to monday.
 
 import json
 import threading
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
@@ -205,6 +206,43 @@ def _app_view(role: str) -> Dict[str, Dict[str, Any]]:
     return {}
 
 
+def _days_from(today: Any, iso: Optional[str]) -> Optional[int]:
+    try:
+        return (date.fromisoformat(str(iso)[:10]) - today).days if iso else None
+    except ValueError:
+        return None
+
+
+def _fill_formulas(b: Dict[str, Any], rows: List[Dict[str, Any]]) -> set:
+    """monday cannot hand over what its formula columns work out (they come through empty, and out of an Excel export blank).
+    Where the app works the same thing out itself (VENDOR ETS, Target Date, the Days Left columns), the empty cells are filled with
+    the app's figure and the column is marked `computed_by_app`, so screens and downloads show a value instead of a blank."""
+    today = alerts.today()
+    wanted = {}
+    for c in b["columns"]:
+        if c.get("type") != "formula":
+            continue
+        t = c["title"].casefold()
+        if "vendor days" in t:
+            wanted[c["id"]] = lambda a: _days_from(today, a.get("expected"))
+        elif "customer days" in t:
+            wanted[c["id"]] = lambda a: _days_from(today, a.get("need_by"))
+        elif "target" in t:
+            wanted[c["id"]] = lambda a: a.get("need_by")
+        elif "ets" in t.split() or "ets" in t or "expected" in t:
+            wanted[c["id"]] = lambda a: a.get("expected")
+    filled: set = set()
+    for row in rows:
+        a = row.get("app") or {}
+        for cid, fn in wanted.items():
+            if (row["values"].get(cid) or "") == "" and a:
+                v = fn(a)
+                if v not in (None, ""):
+                    row["values"] = {**row["values"], cid: str(v)}
+                    filled.add(cid)
+    return filled
+
+
 def view(board_id: str, hide_done: bool = False) -> Dict[str, Any]:
     """The board as monday shows it, with the app's view beside each row.
 
@@ -225,5 +263,7 @@ def view(board_id: str, hide_done: bool = False) -> Dict[str, Any]:
         if hide_done and (item["values"].get(status_id) or "").strip().casefold() in done:
             continue
         rows.append({**item, "app": app.get(item["id"])})
-    return {**{k: v for k, v in b.items() if k != "items"}, "label": ROLES.get(b["role"], b["role"]),
-            "status_column": status_id, "hide_done": hide_done, "items": rows}
+    computed = _fill_formulas(b, rows)
+    return {**{k: v for k, v in b.items() if k not in ("items", "columns")},
+            "columns": [{**c, "computed_by_app": True} if c["id"] in computed else c for c in b["columns"]],
+            "label": ROLES.get(b["role"], b["role"]), "status_column": status_id, "hide_done": hide_done, "items": rows}

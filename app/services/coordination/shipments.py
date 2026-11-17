@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.core.database import SessionLocal
+from app.core import status_words
 from app.core.logging import logger
 from app.models.db_models import ShipmentDB, ShipmentEventDB
 from app.services.coordination import notify as alerts
@@ -42,9 +43,10 @@ def _as_dict(s: ShipmentDB, events: Optional[List[ShipmentEventDB]] = None) -> D
     d = {k: v for k, v in s.__dict__.items() if not k.startswith("_")}
     for k in ("last_update_at", "created_at"):
         d[k] = d[k].isoformat() if d.get(k) else None
+    d["status_word"] = status_words.word("shipment", d.get("status"))
     if events is not None:
         d["events"] = [
-            {"at": e.at.isoformat() if e.at else None, "status": e.status, "eta": e.eta,
+            {"at": e.at.isoformat() if e.at else None, "status": e.status, "status_word": status_words.word("shipment", e.status), "eta": e.eta,
              "description": e.description, "source": e.source}
             for e in events
         ]
@@ -98,6 +100,12 @@ def create(data: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     status = (data.get("status") or "BOOKED").upper()
     if status not in STATUSES:
         raise ValueError(f"Status must be one of {', '.join(STATUSES)}.")
+    for field, label in (("etd", "departure date"), ("eta", "arrival date"), ("free_time_ends", "last free day")):
+        given = data.get(field)
+        if given not in (None, "") and not _date_ok(str(given)):             # an unreadable date is refused, never dropped without a word
+            raise ValueError(f"The {label} '{str(given)[:20]}' is not a real date. Write it as YYYY-MM-DD, for example 2026-12-20.")
+    if not any(str(data.get(k) or "").strip() for k in ("reference", "container_no", "awb", "forwarder", "carrier", "project_item_id")):
+        raise ValueError("Give at least a reference, container number, air waybill or forwarder, so the shipment can be told apart.")
     eta = _date_ok(data.get("eta"))
     with SessionLocal() as db:
         row = ShipmentDB(

@@ -94,7 +94,7 @@ def _sort(sender, subject, body, attachments=None, reference=None, actor="system
 def day(monkeypatch):
     """Allied's setup as configured: Gmail in test mode (everything to one address), sending on,
     autopilot on, one reviewer, AI sorting on (faked)."""
-    sent = []
+    sent, attached = [], []
     for k, v in {"AUTOPILOT_ENABLED": True, "AUTOPILOT_EVENTS_ASYNC": False, "AUTOPILOT_REVIEWER_EMAILS": REVIEWER,
                  "EMAIL_SEND_ENABLED": True, "SMTP_HOST": "smtp.gmail.com", "SMTP_USERNAME": "operations@alliedweldingsystems.com",
                  "SMTP_PASSWORD": "app-password", "EMAIL_REDIRECT_ALL_TO": TEST_INBOX, "AI_EMAIL_TRIAGE_ENABLED": True,
@@ -103,11 +103,11 @@ def day(monkeypatch):
                  "APP_BASE_URL": "https://ops.allied.test"}.items():
         monkeypatch.setattr(settings, k, v)
     monkeypatch.setattr(features, "triage_email", _sort)
-    monkeypatch.setattr(outbound_email_service, "_deliver", lambda msg, to: sent.append((msg["Subject"], list(to), msg.get_content())))
+    monkeypatch.setattr(outbound_email_service, "_deliver", lambda msg, to: (sent.append((msg["Subject"], list(to), msg.get_body(("plain",)).get_content())), attached.append([a.get_filename() for a in msg.iter_attachments()])))
     gmail = FakeGmail()
     poller = mp.MailboxPoller()
     poller._connect = lambda: gmail
-    return {"gmail": gmail, "read_mail": poller.poll_once, "sent": sent}
+    return {"gmail": gmail, "read_mail": poller.poll_once, "sent": sent, "attached": attached}
 
 
 def _drafts(play=None, job_id=None, status="PENDING"):

@@ -11,9 +11,11 @@ import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
+from app.core.logging import logger
 from app.services.coordination import notify as alerts
 
 ROLE_RANK = {"VIEWER": 0, "OPERATOR": 1, "MANAGER": 2, "ADMIN": 3}
@@ -51,6 +53,7 @@ class Tool:
     summarize: Optional[Callable[[Dict[str, Any]], str]] = None
     required: List[str] = field(default_factory=list)
     offered: bool = True  # False: never shown to the model; only screens propose it (it still needs a click)
+    check: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None  # run when a change is proposed: raises ValueError/LookupError so the model can ask, not propose a bad change
 
     def spec(self) -> Dict[str, Any]:
         return {"type": "function", "function": {
@@ -252,7 +255,8 @@ def find_orders(args: Dict[str, Any], user: Dict[str, Any]) -> str:
         rows = DatabaseService.get_all_orders(db, limit=500)
     hits = [o for o in rows if not term or any(term in str(o.get(k) or "").casefold()
                                                 for k in ("customer_name", "customer_po_number", "sales_order_number", "order_id"))]
-    out = [f"- {o.get('sales_order_number') or o['order_id']} {o.get('customer_name')}: PO {o.get('customer_po_number') or '-'}, "
+    staff = user.get("role") in ("OPERATOR", "MANAGER", "ADMIN")        # Allied's own sales order number is internal: a viewer sees the order id instead
+    out = [f"- {(o.get('sales_order_number') if staff else None) or o['order_id']} {o.get('customer_name')}: PO {o.get('customer_po_number') or '-'}, "
            f"status {o.get('status') or '-'}, created {str(o.get('created_at') or '')[:10]}" for o in hits[:10]]
     return _lines(out, "No orders match.", len(hits) - 10)
 
@@ -323,13 +327,155 @@ def send_email(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
 
 def post_monday_update(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     from app.core.container import get_monday_client
+    from app.services import monday_push
 
     client = get_monday_client()
-    ok = client.post_pulse_update(int(args["item_id"]), f"{args.get('text')}\n\n({user.get('email')}, via Allied Operations)")
-    if not client.writable:
-        why = "read-only (MONDAY_READ_ONLY)" if client.live else "in simulation"
-        return {"done": f"monday is {why}; nothing was posted."}
-    return {"done": "Posted to monday." if ok else "monday did not accept the comment."}
+    text = f"{args.get('text')}\n\n({user.get('email')}, via Allied Operations)"
+    if not client.live:
+        return {"done": "monday isn't connected (simulation), so nothing was posted or staged."}
+    cid = monday_push.stage("post_update", "", int(args["item_id"]), {"text": text}, f"Post a comment on item {args['item_id']}: {str(args.get('text'))[:80]}",
+                            by=user.get("email", "app"), source="assistant")
+    if settings.MONDAY_PUSH_MODE == "auto" and not settings.MONDAY_READ_ONLY and user.get("role") in ("MANAGER", "ADMIN"):      # only a manager's confirm can push
+        out = monday_push.push([cid], who=user.get("email", ""))
+        return {"done": out["message"], "change_id": cid}
+    return {"done": f"Staged (not sent yet): the comment is saved as change #{cid} and goes to monday when you push. "
+                    + ("monday is read-only right now." if settings.MONDAY_READ_ONLY else ""), "change_id": cid}
+
+
+def design_hold(args: Dict[str, Any], user: Dict[str, Any]) -> None:
+    """A PO drafted from an RFQ waits for a manager's design approval. Raised before the draft is claimed, so it stays waiting."""
+    if str(args.get("po_number") or "").strip() or not args.get("rfq_number"):
+        return
+    from app.services.coordination import jobs
+
+    job = jobs.from_rfq(str(args["rfq_number"]), user)
+    if not jobs.design_approved(job["id"]):
+        raise ValueError(f"The design for {job['ref']} is not approved yet. A manager approves it on the job first; this purchase order stays waiting.")
+
+
+def send_vendor_po(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    return _send_vendor_po(args, user)          # the PO claims itself for sending (begin_send), so two approvals at once cannot send twice
+
+
+def _send_vendor_po(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    """Sends a reviewed purchase order email to a vendor (only ever from the review queue, and only by a manager). A PO drafted from an RFQ has
+    no number yet: it is numbered and approved now, once. The PDF is built from the saved record, so it is the one that was previewed, and a
+    PO that was already sent is never sent again."""
+    from app.services import order_documents
+    from app.services.coordination import purchase_orders
+    from app.services.coordination.jobs import same_vendor_name
+    from app.services.outbound_email_service import outbound_email_service
+
+    po = str(args.get("po_number") or "").strip()
+    po_id = args.get("po_id")
+    if not po:
+        if not args.get("rfq_number"):
+            raise ValueError("This purchase order has no number and no RFQ to take one for.")
+        made = purchase_orders.number_for_rfq(str(args["rfq_number"]), str(args.get("vendor_name") or ""), user)
+        po, po_id = made["po_number"], made["id"]
+    if not po_id and po:                                  # a draft with a number but no record id: find the record by its number
+        have = purchase_orders.by_number(po)
+        if have:
+            po_id = have["id"]
+    if po_id:
+        rec = purchase_orders.get(int(po_id))
+        if rec["status"] in ("SENT", "ACKNOWLEDGED"):
+            raise ValueError(f"Purchase order {rec['po_number'] or po} has already been sent to the vendor.")
+        if str(po) and rec["po_number"] and str(po) != str(rec["po_number"]):
+            raise ValueError(f"This draft says purchase order {po} but the record is {rec['po_number']}. It was not sent.")
+        if args.get("vendor_name") and rec["vendor"] and not same_vendor_name(str(args["vendor_name"]), rec["vendor"]):
+            raise ValueError(f"This draft is addressed to {args['vendor_name']} but the purchase order is for {rec['vendor']}. It was not sent.")
+        po, args = str(rec["po_number"] or po), {**args, "vendor_name": rec["vendor"]}      # the record decides the number and the vendor
+    body = str(args.get("body") or "").replace("{po_number}", po)
+    ids = list(args.get("attach_file_ids") or [])
+    if po_id and ids:
+        from app.services.coordination import jobs
+
+        job = jobs.get(purchase_orders.get(int(po_id))["job_id"])
+        allowed = {f["id"] for f in job["design"]["files"] if f.get("design")}
+        if any(i not in allowed for i in ids):
+            raise ValueError("This draft attaches a file that is not a design file of this job. Only files marked as design files can go to a vendor.")
+    extra = purchase_orders.attachments(ids, strict=True)
+    token = purchase_orders.begin_send(int(po_id)) if po_id else None          # claimed first: from here no edit can change what the PDF says
+    try:
+        if po_id:
+            # The address is read AFTER the claim (a manager's correction cannot slip in between) and must be the one the reviewer saw on the card.
+            on_file = str(purchase_orders.get(int(po_id)).get("vendor_email") or "").strip()
+            drafted = str(args.get("to") or "").strip()
+            if on_file and drafted.lower() != on_file.lower():
+                raise ValueError(f"This draft goes to {drafted or 'no address'} but the purchase order's email is {on_file}. It was not sent; draft it again so the right address is shown.")
+            if not on_file:
+                args = {**args, "to": purchase_orders._one_email(drafted)}
+                if not args["to"]:
+                    raise ValueError("This purchase order has no vendor email. Add it to the purchase order first.")
+            else:
+                args = {**args, "to": on_file}
+            pdf = purchase_orders.pdf(int(po_id))
+        else:   # a PO that came from an order (no record of its own): built from the draft as reviewed
+            purchase_orders.check_lines_limit(order_documents.po_lines(args.get("lines") or []), user)          # the approval limit holds here too
+            pdf = order_documents.vendor_po_pdf({
+                "po_number": po, "vendor_name": args.get("vendor_name") or "", "terms": args.get("terms") or "", "ship_via": args.get("ship_via") or "",
+                "good_thru": args.get("good_thru") or "", "lines": order_documents.po_lines(args.get("lines") or [])})
+        if not po_id:                                      # a PO built from an order has no record to take its address from: one valid address only
+            args = {**args, "to": purchase_orders._one_email(args.get("to"))}
+            if not args["to"]:
+                raise ValueError("Give the vendor's email address.")
+        entry = outbound_email_service.send_purchase_order(vendor_name=str(args.get("vendor_name") or ""), vendor_email=str(args["to"]), po_number=po,
+                                                           body=body, pdf_bytes=pdf, extra_attachments=extra)
+    except Exception:
+        if po_id:
+            purchase_orders.finish_send(int(po_id), False, token)
+        raise
+    went = entry.get("status") == "SENT" and not entry.get("redirected")       # a pilot mail redirected to the test inbox did not reach the vendor
+    if po_id:
+        purchase_orders.finish_send(int(po_id), went, token)          # SENT only when the mail really went (not when it was only recorded as a draft)
+    note = "" if went else (" The mail went to the pilot test inbox, not the vendor, so the purchase order is not marked sent." if entry.get("redirected")
+                            else " Mail did not go out (it was only recorded), so the purchase order is not marked sent.")
+    return {"done": f"Purchase order {po} {entry.get('status', 'recorded').lower()} to {args['to']}.{note}", "status": entry.get("status"), "po_number": po}
+
+
+def send_vendor_price_request(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    """Sends a reviewed price request to a vendor with the chosen drawings attached (only ever from the review queue)."""
+    from app.services.coordination import purchase_orders
+    from app.services.outbound_email_service import outbound_email_service
+
+    from app.services.coordination import files as item_files
+
+    allowed = purchase_orders.design_file_ids(str(args["rfq_number"])) if args.get("rfq_number") else set()
+    ids = list(args.get("attach_file_ids") or [])
+    if any(i not in allowed for i in ids):          # editing a draft cannot attach a file that is not a design file of this RFQ
+        raise ValueError("This draft attaches a file that is not a design file of this RFQ. Only files marked as design files can go to a vendor.")
+    entry = outbound_email_service.send(to=str(args["to"]), subject=str(args.get("subject") or "Price request"), body=str(args.get("body") or ""),
+                                        category="PRICE_REQUEST", reference=str(args.get("rfq_number") or "") or None,
+                                        attachments=purchase_orders.attachments(ids, strict=True) or None)
+    return {"done": f"Price request {entry.get('status', 'recorded').lower()} to {args['to']}.", "status": entry.get("status")}
+
+
+def add_rfq_to_monday(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+    """Approves the reviewed row for the Open RFQs board: it is STAGED (saved, not sent) and goes to monday when someone pushes.
+    With writing on and MONDAY_PUSH_MODE=auto it is sent at once. Nothing is ever sent while monday is read-only."""
+    from app.config import settings
+    from app.core.container import get_monday_client
+    from app.services import monday_push
+
+    board = str(args.get("board_id") or settings.MONDAY_RFQ_BOARD_ID or "")
+    row = {k: str(args.get(k) or "") for k in ("item_name", "customer", "status", "notes")}
+    as_text = "\n".join(f"{k.replace('_', ' ').title()}: {v}" for k, v in row.items() if v)
+    if not board:
+        return {"done": f"No Open RFQs board is set up (MONDAY_RFQ_BOARD_ID), so nothing was staged. The row, to add by hand:\n{as_text}"}
+    if not get_monday_client().live:
+        return {"done": f"monday isn't connected (simulation), so nothing was staged. The row, to add by hand:\n{as_text}"}
+    fields = {settings.RFQ_BOARD_CUSTOMER_COLUMN_ID: row["customer"], settings.RFQ_BOARD_STATUS_COLUMN_ID: row["status"],
+              settings.RFQ_BOARD_NOTES_COLUMN_ID: row["notes"]}
+    cid = monday_push.stage("create_item", board, "", {"item_name": row["item_name"], "fields": fields},
+                            f"Add a row to the Open RFQs board: {row['item_name']} ({row['customer'] or 'no customer'})",
+                            key=f"rfq-row-{board}-{row['item_name']}", by=user.get("email", "app"), source="rfq_row")
+    if settings.MONDAY_PUSH_MODE == "auto" and not settings.MONDAY_READ_ONLY:
+        out = monday_push.push([cid], who=user.get("email", ""))
+        made = next((r.get("monday_item_id") for r in out.get("results", []) if r.get("id") == cid), None)
+        return {"done": out["message"], "change_id": cid, **({"monday_item_id": made} if made else {})}
+    why = "monday is read-only right now, so " if settings.MONDAY_READ_ONLY else ""
+    return {"done": f"Staged (not sent yet): the row is saved as change #{cid}. {why}it goes to monday when you push.", "change_id": cid}
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +544,26 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("chat_action", "A change asked for on the Copilot chat screen.", {}, lambda args, user: _chat_action(args, user),
          write=True, min_role="OPERATOR", offered=False,
          summarize=lambda a: _chat_action_summary(a)),
+    Tool("send_vendor_price_request", "Email a vendor asking for a price, with the drawings attached. Only ever from the review queue after a person has checked it.",
+         {"to": _s("Vendor email"), "vendor_name": _s("Vendor"), "rfq_number": _s("The RFQ it is about"), "subject": _s("Subject"), "body": _s("The message"),
+          "attach_file_ids": {"type": "array", "items": {"type": "integer"}, "description": "Drawing files to attach"}},
+         send_vendor_price_request, write=True, min_role="OPERATOR", connector="email", required=["to", "body"], offered=False,
+         summarize=lambda a: f"Ask {a.get('vendor_name') or a.get('to')} for a price"),
+    Tool("send_vendor_po", "Email a purchase order to a vendor. Only ever from the review queue after a person has checked it.",
+         {"to": _s("Vendor email"), "vendor_name": _s("Vendor"), "po_number": _s("Allied's PO number; blank for a new one"),
+          "rfq_number": _s("The RFQ it was drafted from"), "body": _s("The message"),
+          "lines": {"type": "array", "items": {"type": "object"}, "description": "What to make: quantity, item, description, unit_cost"},
+          "po_id": {"type": "integer", "description": "The purchase order record"},
+          "attach_file_ids": {"type": "array", "items": {"type": "integer"}, "description": "Design files to attach"}, "terms": _s("Payment terms"), "ship_via": _s("Ship via"), "good_thru": _s("Good thru date")},
+         send_vendor_po, write=True, min_role="MANAGER", connector="email", required=["to", "body"], offered=False,
+         summarize=lambda a: (f"Send purchase order {a.get('po_number')} to {a.get('vendor_name') or a.get('to')}" if a.get("po_number")
+                              else f"Send a purchase order to {a.get('vendor_name') or a.get('to')} (number assigned when sent)")),
+    Tool("add_rfq_to_monday", "Add a reviewed request-for-quote row to the Open RFQs board on monday. Only ever from the "
+         "review queue after a person has checked the row.",
+         {"item_name": _s("What is being quoted"), "customer": _s("Customer"), "status": _s("Status label that exists on the board; blank for none"),
+          "notes": _s("Details for the Notes column"), "board_id": _s("Board id; blank for the Open RFQs board")},
+         add_rfq_to_monday, write=True, min_role="OPERATOR", connector="monday", required=["item_name"], offered=False,
+         summarize=lambda a: f"Add to the Open RFQs board: {a.get('item_name')} ({a.get('customer') or 'no customer'})"),
     Tool("post_monday_update", "Push a comment to a monday item. ONLY when the user explicitly asks to push, sync or post "
          "something to monday; never on your own.",
          {"item_id": {"type": "integer", "description": "monday item id"}, "text": _s("Comment text")},
@@ -410,6 +576,10 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
 from app.services.assistant import platform_tools  # noqa: E402  (after the helpers it uses)
 
 TOOLS.update({t.name: t for t in platform_tools.TOOLS})
+
+from app.services.assistant import board_tools  # noqa: E402
+
+TOOLS.update({t.name: t for t in board_tools.TOOLS})
 
 
 def all_tools() -> Dict[str, Tool]:
@@ -441,7 +611,14 @@ _TOPICS = [
     (("rfq", "quote", "quoting", "request for", "pricing", "priced", "won", "lost", "no bid"), ("log_rfq", "update_rfq")),
     (("spec", "procedure", "weld", "price list", "how do", "how to", "standard"), ("search_knowledge",)),
     (("send", "email", "draft", "write to"), ("send_email",)),
-    (("monday", "push", "sync"), ("post_monday_update",)),
+    (("monday", "push", "sync"), ("post_monday_update", "monday_staged", "skip_staged_change")),
+]
+# Board and job topics match whole words only ("status" or "item" alone would pull the tools into every question about an order).
+_WORD_TOPICS = [
+    (re.compile(r"\b(?:boards?|rows?|cells?|columns?|staged|set the status|change the status|update the status|add a comment|comment on)\b"),
+     ("list_boards", "find_board_items", "stage_cell_edit", "stage_new_row", "stage_comment", "monday_staged", "skip_staged_change")),
+    (re.compile(r"\b(?:jobs?|approve|approved|design|quotation|draft po|purchase orders?|sales order|packets?)\b"),
+     ("list_jobs", "job_detail", "approve_design", "record_vendor_quote", "draft_po", "approve_po", "create_sales_order")),
 ]
 
 
@@ -454,6 +631,10 @@ def for_message(user: Dict[str, Any], text: str) -> Dict[str, Tool]:
     hit = False
     for words, tools_ in _TOPICS:
         if any(w in low for w in words):
+            names |= set(tools_)
+            hit = True
+    for pattern, tools_ in _WORD_TOPICS:
+        if pattern.search(low):
             names |= set(tools_)
             hit = True
     if not hit:

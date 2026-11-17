@@ -40,6 +40,9 @@ _CANADA_MARKERS = ("CANADA", ", AB", " AB ", "ALBERTA", "EDMONTON", "ONTARIO", "
 _CHINA_MARKERS = ("CHINA", "SHANDONG", "ZIBO")
 
 
+from app.services import order_documents  # noqa: E402
+
+
 class OrderOrchestrator:
     """Orchestrates ingestion, catalog matching, math, dual-sided generation, and compliance."""
 
@@ -76,8 +79,10 @@ class OrderOrchestrator:
         # Destination country drives the facility that fulfils the order.
         if any(marker in address for marker in _CANADA_MARKERS):
             facility = "EDMONTON"
-        elif any(marker in address for marker in _CHINA_MARKERS) or "ZIBO" in {v.upper() for v in vendors}:
+        elif any(marker in address for marker in _CHINA_MARKERS):
             facility = "ZIBO"
+        elif not address.strip() and "ZIBO" in {v.upper() for v in vendors}:
+            facility = "ZIBO"                       # no ship-to at all: the vendor is the only clue. A ship-to in the US keeps a US order in dollars, whoever makes the part
         else:
             facility = settings.DEFAULT_FACILITY
 
@@ -124,6 +129,7 @@ class OrderOrchestrator:
                         "packing_slip_path": row.packing_slip_path,
                         "facility": row.facility,
                         "currency": row.currency,
+                        "line_items": row.line_items or [],
                     }
         except Exception as exc:
             # A lookup failure must not block a legitimate new order.
@@ -131,7 +137,36 @@ class OrderOrchestrator:
         return None
 
     @staticmethod
-    def _result_from_cached(order: Dict[str, Any]) -> DualSidedResult:
+    def _revision_note(existing: Dict[str, Any], request: InboundOrderRequest) -> Optional[str]:
+        """The same customer PO arriving again is usually a repeat; but if the lines or quantities are different it is a
+        REVISED PO, and the existing order has not been changed. Returns what differs in plain words, or None for a plain repeat."""
+        try:
+            was_items = sorted(
+                (str(l.get("item_id") or "").strip().upper(), float(str(l.get("quantity"))), float(str(l.get("unit_price") or 0)))
+                for l in (existing.get("line_items") or []) if isinstance(l, dict)
+            )
+            now_items = sorted(
+                (str(l.item_id or "").strip().upper(), float(l.quantity), float(l.unit_price or 0))
+                for l in request.line_items
+            )
+        except (TypeError, ValueError):
+            return None
+        if not was_items:
+            return None
+        if not any(i for i, _, _ in now_items):          # the repeat names no part ids (raw text only): compare quantities and prices alone
+            was_items = sorted((q, p) for _, q, p in was_items)
+            now_items = sorted((q, p) for _, q, p in now_items)
+            if was_items == now_items:
+                return None
+            was_items, now_items = [("", q, p) for q, p in was_items], [("", q, p) for q, p in now_items]
+        elif was_items == now_items:
+            return None
+        fmt = lambda items: ", ".join(f"{q:g}" for _, q, _ in items)  # noqa: E731
+        return (f"PO {request.customer_po_number} arrived again with different lines or quantities (was {len(was_items)} line(s): {fmt(was_items)}; "
+                f"now {len(now_items)} line(s): {fmt(now_items)}). The existing order was NOT changed: someone must update it or raise a new one.")
+
+    @staticmethod
+    def _result_from_cached(order: Dict[str, Any], revision: Optional[str] = None) -> DualSidedResult:
         """Rebuilds the result for an order that was already committed."""
         return DualSidedResult(
             order_id=order.get("order_id", ""),
@@ -149,8 +184,24 @@ class OrderOrchestrator:
             messages=[
                 f"Customer PO #{order.get('customer_po_number')} was already processed as "
                 f"Sales Order #{order.get('sales_order_number')}. No duplicate was created."
-            ],
+            ] + ([revision] if revision else []),
         )
+
+    @staticmethod
+    def _tell_revised(existing: Dict[str, Any], request: InboundOrderRequest, note: str) -> None:
+        """A revised PO must reach a person: silently keeping the old order would ship the wrong quantity."""
+        try:
+            import hashlib
+
+            from app.services.coordination import notify
+            from app.services.coordination.autopilot import reviewers
+
+            sig = hashlib.sha1(",".join(sorted(str(l.quantity) for l in request.line_items)).encode()).hexdigest()[:8]
+            notify.notify("po_revised", f"po-revised:{existing.get('sales_order_number')}:{sig}",
+                          f"Revised PO: {request.customer_po_number} came in again with changes", note, severity="warning",
+                          to=reviewers(), link="/orders")
+        except Exception as exc:  # noqa: BLE001 - the order result still says it
+            logger.warning(f"Could not alert about a revised PO: {exc}")
 
     def process_inbound_order(
         self,
@@ -196,7 +247,10 @@ class OrderOrchestrator:
                 f"Customer PO #{request.customer_po_number} is already committed as "
                 f"SO #{existing.get('sales_order_number')}; returning the existing order."
             )
-            return self._result_from_cached(existing)
+            revision = self._revision_note(existing, request)
+            if revision:
+                self._tell_revised(existing, request, revision)
+            return self._result_from_cached(existing, revision)
 
         order_id = str(uuid.uuid4())[:8].upper()
         logger.info(f"Processing Inbound Order [{order_id}] for PO #{request.customer_po_number}")
@@ -348,6 +402,10 @@ class OrderOrchestrator:
 
         # 6. Build Split Sage Purchase Orders (Expense Side) - 1 SO -> up to 3+ POs
         purchase_orders_to_create: List[SagePurchaseOrder] = []
+        from app.services.coordination import jobs as _jobs
+
+        vendor_names = [self.entity_matcher.vendors_cache.get(c, {}).get("vendor_name", c) for c in vendor_partition if c != "STOCK"]
+        matched_job = _jobs.match_for_order(request.customer_name, vendor_names, [request.customer_po_number, request.notes or ""], request.job)
 
         for vendor_code, vendor_lines in vendor_partition.items():
             if vendor_code == "STOCK":
@@ -377,13 +435,14 @@ class OrderOrchestrator:
 
             # Blind shipping instructions
             notes = [
-                f"ORDER REF: ALLIED SO FOR PO {request.customer_po_number}",
+                order_documents.default_notes(vend_name)[0],     # names the vendor; the customer's reference and our SO never go to a vendor
                 special_inst,
                 "CRITICAL: BLIND SHIPMENT. DO NOT INCLUDE VENDOR INVOICE OR PRICING IN PACKING CRATES.",
             ]
 
+            kept_po = _jobs.po_number_on_job(matched_job["id"], vend_name) if matched_job else None
             po_dto = SagePurchaseOrder(
-                purchase_order_number="",
+                purchase_order_number=kept_po or "",
                 vendor_id=vendor_code,
                 order_date=master_order.po_date,
                 payment_terms=vend_terms,
@@ -401,6 +460,9 @@ class OrderOrchestrator:
             sales_order=sales_order_dto,
             purchase_orders=purchase_orders_to_create,
         )
+
+        if matched_job:
+            _jobs.link_order(matched_job["id"], so_num)
 
         # 8. Generate Sanitized White-Label PDF Packing Slip
         # Queued with the order's details and made now, as its own job: a slip that can't be made is

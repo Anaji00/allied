@@ -8,6 +8,7 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel } from '@/components/data/detail-panel';
 import { FilterChips } from '@/components/data/filters';
+import { PlanJob } from './plan-job';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
@@ -16,7 +17,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
 import { api, ok } from '@/lib/api/client';
-import { day, person, plural, since } from '@/lib/format';
+import { day, person, plural, practice, since } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { JobDetail, ProjectDetail } from './project-detail';
 import {
@@ -57,7 +58,7 @@ export function ProjectsView() {
     mutationFn: async () =>
       (await ok(api.POST('/api/v1/projects/sync'))) as { skipped?: string; projects?: number; milestones?: number; removed?: number },
     onSuccess: (res) => {
-      if (res.skipped) toast.warning('monday wasn’t read', { description: res.skipped });
+      if (res.skipped) toast.warning('monday wasn’t read', { description: practice(res.skipped) });
       else
         toast.success(`Read ${plural(res.projects ?? 0, 'project')} and ${plural(res.milestones ?? 0, 'milestone')} from monday`, {
           description: res.removed ? `Removed ${res.removed} no longer on the board.` : undefined,
@@ -214,10 +215,11 @@ export function ProjectsView() {
             { value: 'mine', label: byJob ? 'My jobs' : 'My milestones', count: data ? lists.mine.length : undefined },
           ]}
         />
-        <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
           <span className={cn(stale && data?.last_sync?.error && 'text-bad')}>
-            {stale ?? `Read from monday ${since(data?.last_sync?.at)}`}
+            {!data ? '' : (stale ?? `Read from monday ${since(data?.last_sync?.at)}`)}
           </span>
+          {canOperate && <PlanJob />}
           {canOperate && (
             <Button variant="outline" size="sm" onClick={() => sync.mutate()} disabled={sync.isPending}>
               {sync.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}

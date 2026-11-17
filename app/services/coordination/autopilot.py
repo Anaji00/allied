@@ -61,6 +61,9 @@ def modes() -> Dict[str, str]:
         name, _, mode = part.partition("=")
         if name.strip() in PLAYS and mode.strip().lower() in MODES:
             out[name.strip()] = mode.strip().lower()
+    from app.services.coordination import automations
+
+    out.update({k: v for k, v in automations.overrides("play").items() if k in PLAYS})
     return out
 
 
@@ -71,7 +74,7 @@ def _week(on: date) -> str:
 
 def reviewers(owner: Optional[str] = None) -> List[str]:
     """Who confirms a draft. Never empty: a draft nobody can see would never be sent or cancelled."""
-    if owner and (settings.AUTOPILOT_REVIEW_BY or "").strip().lower() == "owner":
+    if owner and not alerts.is_placeholder(owner) and (settings.AUTOPILOT_REVIEW_BY or "").strip().lower() == "owner":
         return [owner]
     named = [e.strip() for e in (settings.AUTOPILOT_REVIEWER_EMAILS or "").split(",") if e.strip()]
     return named or alerts.leadership() or [settings.ADMIN_EMAIL]
@@ -434,7 +437,7 @@ class Play:
 PLAYS: Dict[str, Play] = {
     "rfq_board": Play(play_rfq_board, "auto", "Reads the monday Open RFQs board into the RFQ tracker."),
     "orders_watch": Play(play_orders_watch, "auto", "Weekly list of unpaid orders and vendor photos waiting."),
-    "vendor_chaser": Play(play_vendor_chaser, "suggest", "Follows up vendors once an order hasn't shipped its wait after the PO."),
+    "vendor_chaser": Play(play_vendor_chaser, "suggest", "Follows up a vendor when an order has not shipped and the usual waiting time after the PO is over."),
     "rfq_vendor_chaser": Play(play_rfq_vendor_chaser, "suggest", "Asks bidding vendors for prices that are overdue."),
     "quote_followup": Play(play_quote_followup, "suggest", "Follows up customers on quotes they haven't answered."),
 }
@@ -451,11 +454,18 @@ def _draft(play: str, intent: Intent, auto: bool) -> str:
 
     from app.services.outbound_email_service import outbound_email_service
 
+    from app.services.coordination import blind
+
+    leaks = blind.check(intent.tool, intent.args)
+    if leaks:                                               # warned in the draft's "why", and an automatic one waits for a person
+        intent.args = {**intent.args, "_why": list(intent.args.get("_why") or []) + [w for w in leaks if w not in (intent.args.get("_why") or [])]}
+        auto = False
     action_id = uuid.uuid5(uuid.NAMESPACE_URL, f"allied-autopilot:{intent.key}").hex
     owner = (intent.to or reviewers())[0]
     # Auto only carries out what can really go: with mail off an email would only be drafted
     # and then never sent, so it waits in the queue for a person instead.
     auto = auto and (intent.tool != "send_email" or outbound_email_service.send_enabled)
+    auto = auto and intent.tool != "send_vendor_po"       # a purchase order always waits for a person, even if its switch is set to auto
     with SessionLocal() as db:
         row = db.get(AssistantActionDB, action_id)
         stale = row is not None and (row.status == "EXPIRED" or (
@@ -530,6 +540,18 @@ def after_done(args: Dict[str, Any], user: Dict[str, Any], result: Optional[Dict
                 rfqs.update(args["_rfq_id"], {"status": "ACKNOWLEDGED", "note": "acknowledgement sent"}, user)
         except (LookupError, ValueError) as exc:
             logger.info(f"Acknowledgement sent but RFQ {args['_rfq_id']} not updated: {exc}")
+    if args.get("_play") == "rfq_board_row" and args.get("_rfq_id") and (result or {}).get("change_id") and not (result or {}).get("monday_item_id"):
+        try:                                       # staged, not sent yet: remember which RFQ it is, so the push can link the new row to it
+            from app.services import monday_push
+
+            monday_push.attach(result["change_id"], rfq_id=args["_rfq_id"])
+        except Exception as exc:  # noqa: BLE001
+            logger.info(f"Row staged but not tied to RFQ {args['_rfq_id']}: {exc}")
+    if args.get("_play") == "rfq_board_row" and args.get("_rfq_id") and (result or {}).get("monday_item_id"):
+        try:                                       # the row now exists on monday: link it, so the board read never makes a second RFQ of it
+            rfqs.update(args["_rfq_id"], {"monday_item_id": result["monday_item_id"]}, user)
+        except (LookupError, ValueError) as exc:
+            logger.info(f"RFQ row added ({result['monday_item_id']}) but RFQ {args['_rfq_id']} not linked: {exc}")
 
 
 def carry_out(name: str, mode: str, intents: List[Intent], dry_run: bool = False) -> List[Dict[str, Any]]:

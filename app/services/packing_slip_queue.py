@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.database import SessionLocal
 from app.core.keyed_lock import keyed_lock
+from app.core import status_words
 from app.core.logging import logger
 from app.models.db_models import PackingSlipDB
 
@@ -25,7 +26,7 @@ def _now() -> datetime:
 
 
 def _as_dict(r: PackingSlipDB) -> Dict[str, Any]:
-    return {"sales_order_number": r.sales_order_number, "customer_po_number": r.customer_po_number, "status": r.status,
+    return {"sales_order_number": r.sales_order_number, "customer_po_number": r.customer_po_number, "status": r.status, "status_word": status_words.word("slip", r.status),
             "attempts": r.attempts, "last_error": r.last_error, "ready": bool(r.path and Path(r.path).is_file()),
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "ready_at": r.ready_at.isoformat() if r.ready_at else None,
@@ -102,7 +103,7 @@ def _alert(job: Dict[str, Any]) -> None:
     from app.services.coordination import notify
     from app.services.coordination.autopilot import reviewers
 
-    notify.notify("packing_slip_failed", f"slip-failed:{job['sales_order_number']}:",
+    notify.notify("packing_slip_failed", f"slip-failed:{job['sales_order_number']}:{int(_now().timestamp())}",
                   f"Packing slip couldn't be made: PO {job['customer_po_number'] or job['sales_order_number']}",
                   f"It failed {job['attempts']} times: {job['last_error']}\nOpen the packing slip queue and press Retry, "
                   "or make the slip by hand before the order ships.", severity="warning", to=reviewers(), link="/orders")

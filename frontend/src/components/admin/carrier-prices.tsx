@@ -3,7 +3,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Check, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
+import { DownloadMenu } from '@/components/data/download-menu';
+import { RowActions } from '@/components/data/row-actions';
 import { ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +26,7 @@ type Line = {
   enabled: boolean;
   status: string;
   stale: boolean;
+  days_old?: number | null;
 };
 type Rates = {
   lines: Line[];
@@ -51,7 +54,17 @@ async function call(path: string, method: string, body?: unknown) {
 }
 
 /** A price box that saves when you leave it, and only if the number changed. */
-function NumberBox({ value, label, disabled, onSave }: { value: number | null; label: string; disabled: boolean; onSave: (n: number | null) => void }) {
+function NumberBox({
+  value,
+  label,
+  disabled,
+  onSave,
+}: {
+  value: number | null;
+  label: string;
+  disabled: boolean;
+  onSave: (n: number | null) => void;
+}) {
   const [text, setText] = useState(value == null ? '' : String(value));
   return (
     <Input
@@ -62,8 +75,12 @@ function NumberBox({ value, label, disabled, onSave }: { value: number | null; l
       value={text}
       onChange={(e) => setText(e.target.value.replace(/[^\d.]/g, ''))}
       onBlur={() => {
-        const n = text === '' ? null : Number(text);
-        if (n !== value && !(n != null && Number.isNaN(n))) onSave(n);
+        if (text === '') {
+          setText(value == null ? '' : String(value));
+          return;
+        }
+        const n = Number(text);
+        if (n !== value && !Number.isNaN(n)) onSave(n);
       }}
     />
   );
@@ -94,7 +111,8 @@ export function CarrierPrices() {
     },
     onError: (e) => toast.error('That didn’t save', { description: e.message }),
   });
-  const edit = (id: string, body: Record<string, unknown>, done = 'Saved') => save.mutate({ path: `/${encodeURIComponent(id)}`, method: 'PATCH', body, done });
+  const edit = (id: string, body: Record<string, unknown>, done = 'Saved') =>
+    save.mutate({ path: `/${encodeURIComponent(id)}`, method: 'PATCH', body, done });
 
   if (rates.isPending) return <RowsSkeleton rows={4} />;
   if (rates.isError) return <ErrorState error={rates.error} onRetry={() => void rates.refetch()} />;
@@ -105,72 +123,100 @@ export function CarrierPrices() {
     <div className="grid gap-4">
       {data.needs_review > 0 && (
         <p role="status" className="rounded-lg bg-warn-soft p-3 text-sm text-warn">
-          {data.needs_review} {data.needs_review === 1 ? 'price needs' : 'prices need'} a check before you rely on {data.needs_review === 1 ? 'it' : 'them'}.
+          {data.needs_review} {data.needs_review === 1 ? 'price needs' : 'prices need'} a check before you rely on{' '}
+          {data.needs_review === 1 ? 'it' : 'them'}.
         </p>
       )}
+      {hasRole('OPERATOR') && <DownloadMenu list="carrier-prices" className="justify-self-end" />}
       <p className="text-sm text-muted-foreground">
         Freight prices change all the time, so these are your own figures. Type a new price and today’s date is saved with it.
-        {data.live.length > 0 && (
-          <>
-            {' '}
-            Live prices: {data.live.map((l) => `${l.name} (${l.ready ? 'ready' : 'not set up'})`).join(', ')}.
-          </>
-        )}
+        {data.live.length > 0 && <> Live prices: {data.live.map((l) => `${l.name} (${l.ready ? 'ready' : 'not set up'})`).join(', ')}.</>}
       </p>
 
       <div className="overflow-x-auto rounded-lg border bg-card">
-        <table className="w-full min-w-[820px] text-[13px]">
+        <table className="w-full min-w-[640px] text-[13px]">
           <thead className="text-left text-xs text-muted-foreground">
             <tr>
-              {['Carrier', 'Service', 'Where', 'Price ($)', 'Per pound ($)', 'Days', 'Last checked', ''].map((h) => (
-                <th key={h} className="px-3 py-2 font-medium">
-                  {h}
-                </th>
-              ))}
+              <th className="px-3 py-2 font-medium">Carrier</th>
+              <th className="px-3 py-2 font-medium">Price ($)</th>
+              <th className="px-3 py-2 font-medium">Per pound ($)</th>
+              <th className="px-3 py-2 font-medium">Days</th>
+              <th className="px-3 py-2 font-medium">Last checked</th>
+              <th className="px-3 py-2" />
             </tr>
           </thead>
           <tbody>
             {data.lines.map((l) => (
               <tr key={l.id} className={`border-t align-middle ${l.enabled ? '' : 'opacity-50'}`}>
-                <td className="px-3 py-2 font-medium">{l.carrier}</td>
-                <td className="px-3 py-2">{l.service}</td>
-                <td className="px-3 py-2">{l.regions.map((r) => WHERE[r] ?? r).join(', ')}</td>
                 <td className="px-3 py-2">
-                  <NumberBox key={`${l.id}-p-${l.rate_usd}`} label={`${l.carrier} price`} value={l.rate_usd} disabled={!manager} onSave={(n) => edit(l.id, { rate_usd: n })} />
-                </td>
-                <td className="px-3 py-2">
-                  <NumberBox key={`${l.id}-l-${l.per_lb_usd}`} label={`${l.carrier} price per pound`} value={l.per_lb_usd} disabled={!manager} onSave={(n) => edit(l.id, { per_lb_usd: n })} />
-                </td>
-                <td className="px-3 py-2">
-                  <NumberBox key={`${l.id}-t-${l.transit_days}`} label={`${l.carrier} days`} value={l.transit_days} disabled={!manager} onSave={(n) => edit(l.id, { transit_days: n })} />
-                </td>
-                <td className="px-3 py-2">
-                  <span className="grid gap-0.5">
-                    <span>{l.status}</span>
-                    {l.stale && <ToneBadge tone="warn">Confirm</ToneBadge>}
+                  <span className="grid min-w-52 gap-0.5">
+                    <span className="font-medium">{l.carrier}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {l.service}
+                      {l.service ? ' · ' : ''}
+                      {l.regions.map((r) => WHERE[r] ?? r).join(', ')}
+                    </span>
                   </span>
                 </td>
                 <td className="px-3 py-2">
+                  <NumberBox
+                    key={`${l.id}-p-${l.rate_usd}`}
+                    label={`${l.carrier} price`}
+                    value={l.rate_usd}
+                    disabled={!manager}
+                    onSave={(n) => edit(l.id, { rate_usd: n })}
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <NumberBox
+                    key={`${l.id}-l-${l.per_lb_usd}`}
+                    label={`${l.carrier} price per pound`}
+                    value={l.per_lb_usd}
+                    disabled={!manager}
+                    onSave={(n) => edit(l.id, { per_lb_usd: n })}
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <NumberBox
+                    key={`${l.id}-t-${l.transit_days}`}
+                    label={`${l.carrier} days`}
+                    value={l.transit_days}
+                    disabled={!manager}
+                    onSave={(n) => edit(l.id, { transit_days: n })}
+                  />
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap" title={l.status}>
+                  {l.stale ? (
+                    <ToneBadge tone="warn">{l.as_of ? `${l.days_old} days old` : 'Not reviewed'}</ToneBadge>
+                  ) : (
+                    <span className="text-muted-foreground">Checked {l.as_of}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
                   {manager && (
-                    <span className="flex justify-end gap-1.5">
-                      <Button size="sm" variant="outline" disabled={save.isPending} onClick={() => save.mutate({ path: `/${encodeURIComponent(l.id)}/confirm`, method: 'POST', done: 'Marked as checked today' })}>
-                        <Check /> I checked this today
-                      </Button>
-                      <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => edit(l.id, { enabled: !l.enabled }, l.enabled ? 'Turned off' : 'Turned on')}>
-                        {l.enabled ? 'Turn off' : 'Turn on'}
-                      </Button>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Remove ${l.carrier} ${l.service}`}
-                        disabled={save.isPending}
-                        onClick={() => {
-                          if (window.confirm(`Remove ${l.carrier} ${l.service}?`)) save.mutate({ path: `/${encodeURIComponent(l.id)}`, method: 'DELETE', done: 'Removed' });
-                        }}
-                      >
-                        <Trash2 />
-                      </Button>
-                    </span>
+                    <RowActions
+                      rowLabel={`${l.carrier} ${l.service}`}
+                      main={{
+                        label: 'Checked today',
+                        busy: save.isPending,
+                        hint: 'I checked this price today',
+                        onClick: () =>
+                          save.mutate({ path: `/${encodeURIComponent(l.id)}/confirm`, method: 'POST', done: 'Marked as checked today' }),
+                      }}
+                      more={[
+                        {
+                          label: l.enabled ? 'Turn off' : 'Turn on',
+                          onClick: () => edit(l.id, { enabled: !l.enabled }, l.enabled ? 'Turned off' : 'Turned on'),
+                        },
+                        {
+                          label: 'Remove',
+                          onClick: () => {
+                            if (window.confirm(`Remove ${l.carrier} ${l.service}?`))
+                              save.mutate({ path: `/${encodeURIComponent(l.id)}`, method: 'DELETE', done: 'Removed' });
+                          },
+                        },
+                      ]}
+                    />
                   )}
                 </td>
               </tr>

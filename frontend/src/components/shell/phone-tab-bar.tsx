@@ -9,7 +9,7 @@ import { isActive, PHONE_TABS } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 
 const tab =
-  'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground outline-none focus-visible:bg-accent [&_svg]:size-5';
+  'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted-foreground outline-none focus-visible:bg-accent [&_svg]:size-5';
 
 /** Phones only: the daily pages one thumb away, and "More" for the full menu. */
 export function PhoneTabBar() {
@@ -42,9 +42,10 @@ export function PhoneTabBar() {
               {item.href === '/inbox' && waiting.length > 0 && (
                 <span
                   className={cn(
-                    'absolute top-1.5 left-1/2 ml-2 min-w-5 rounded-full px-1 text-center text-[10px] leading-5 font-semibold tabular-nums',
+                    'absolute top-1.5 left-1/2 ml-2 min-w-5 rounded-full px-1 text-center text-xs leading-5 font-semibold tabular-nums',
                     critical ? 'bg-bad text-white' : 'bg-foreground text-background',
                   )}
+                  role="img"
                   aria-label={`${waiting.length} waiting`}
                 >
                   {waiting.length > 99 ? '99+' : waiting.length}

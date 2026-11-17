@@ -77,11 +77,21 @@ class SageSDKWriter:
                         po_digits = "".join(ch for ch in str(po) if ch.isdigit())
                         if po_digits:
                             po_next = max(po_next, int(po_digits) + 1)
+            with SessionLocal() as db:                                   # POs already given to vendors (for RFQs) count too
+                from app.models.db_models import PurchaseOrderDB, VendorJobDB
+
+                for (po,) in db.query(VendorJobDB.po_number).union_all(db.query(PurchaseOrderDB.po_number)).all():
+                    digits = "".join(ch for ch in str(po or "") if ch.isdigit())
+                    if digits and len(digits) <= 7:
+                        po_next = max(po_next, int(digits) + 1)
         except Exception as exc:
             logger.warning(
                 f"Could not read document-number high-water marks ({exc}); "
                 f"starting at SO {so_next} / PO {po_next}"
             )
+        from app.config import settings
+
+        so_next, po_next = max(so_next, int(settings.SO_NUMBER_FLOOR or 0) + 1), max(po_next, int(settings.PO_NUMBER_FLOOR or 0) + 1)
         logger.info(f"Sage document numbering resumes at SO #{so_next}, PO #{po_next}")
         return so_next, po_next
 

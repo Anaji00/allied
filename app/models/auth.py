@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class LoginRequest(BaseModel):
     """Credentials for JWT token acquisition."""
     email: str = Field(..., description="User email address")
-    password: str = Field(..., description="User password")
+    password: str = Field(..., max_length=128, description="User password")
 
 
 class TokenResponse(BaseModel):
@@ -38,7 +38,7 @@ class UserProfile(BaseModel):
 class CreateUserRequest(BaseModel):
     """Admin-only request to create a new user account."""
     email: str
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
     full_name: str
     role: str = "VIEWER"
     facility: str = "HQ"
@@ -51,7 +51,7 @@ class UpdateUserRequest(BaseModel):
     facility: Optional[str] = None
     is_active: Optional[bool] = None
     # Sets a new password, e.g. after a person forgets theirs; never read back.
-    new_password: Optional[str] = Field(None, min_length=8)
+    new_password: Optional[str] = Field(None, min_length=8, max_length=128)
 
 
 # Resolve forward reference

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ChevronRight, Download, Loader2 } from 'lucide-react';
+import { UpdatesPanel } from '@/components/data/updates-panel';
 import { Facts } from '@/components/data/detail-panel';
 import { Field, PanelHeading } from '@/components/data/filters';
 import { ToneBadge } from '@/components/data/tone-badge';
@@ -15,6 +16,8 @@ import { useAuth } from '@/context/AuthContext';
 import { downloadSubmissionFile, reviewSubmission, submitDesignDocs } from '@/lib/api';
 import { day, dateTime, person } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { RequiredForm, missingAnswers, useMilestoneForm, useTranslatedForm, type Answers } from './required-form';
+import { useLanguage } from '@/lib/language';
 import { SUBMISSION, fileSize, milestoneState, type Milestone, type Project, type Submission } from './use-projects';
 
 const names = (emails: string[] | undefined, me: string, empty = 'Not set') => (emails ?? []).map((e) => person(e, me)).join(', ') || empty;
@@ -188,6 +191,8 @@ function MilestoneBody({
       {waiting && !mine && !canReview && <p className="text-sm text-muted-foreground">Version {latest?.version} is waiting for review.</p>}
       {canSubmit && <SubmitForm milestone={m} />}
 
+      <UpdatesPanel itemType="milestone" itemRef={m.item_id} />
+
       <div className="grid gap-2">
         <PanelHeading>Design documents sent</PanelHeading>
         {m.submissions.length === 0 ? (
@@ -319,18 +324,31 @@ function SubmitForm({ milestone }: { milestone: Milestone }) {
   const [files, setFiles] = useState<File[]>([]);
   const [note, setNote] = useState('');
   const [inputKey, setInputKey] = useState(0);
+  const [answers, setAnswers] = useState<Answers>({});
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
+  const [tried, setTried] = useState(false);
+  const { data: form } = useMilestoneForm(milestone.name);
+  const { language } = useLanguage();
+  const { data: translation } = useTranslatedForm(form?.id, language);
+  const missing = form ? missingAnswers(form, answers) : {};
   const again = milestone.latest_submission?.status === 'CHANGES_REQUESTED';
 
   const send = useMutation({
-    mutationFn: () => submitDesignDocs(milestone.item_id, files, note.trim()),
+    mutationFn: () => submitDesignDocs(milestone.item_id, files, note.trim(), form ? answers : undefined, form?.id),
     onSuccess: () => {
       toast.success('Sent for review');
       setFiles([]);
       setNote('');
       setInputKey((k) => k + 1);
+      setAnswers({});
+      setServerErrors({});
+      setTried(false);
       void client.invalidateQueries({ queryKey: ['projects'] });
     },
-    onError: (e) => toast.error('The documents weren’t sent', { description: e.message }),
+    onError: (e: Error & { fields?: Record<string, string> }) => {
+      if (e.fields) setServerErrors(e.fields);
+      toast.error('The documents weren’t sent', { description: e.message });
+    },
   });
 
   return (
@@ -338,13 +356,26 @@ function SubmitForm({ milestone }: { milestone: Milestone }) {
       className="grid gap-2 rounded-md border p-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (files.length) send.mutate();
+        setTried(true);
+        if (files.length && !Object.keys(missing).length) send.mutate();
       }}
     >
       <PanelHeading>{again ? 'Send a new version' : 'Send design documents for review'}</PanelHeading>
       <Field label="Files" hint={files.length ? files.map((f) => f.name).join(', ') : 'You can choose more than one.'}>
         <Input key={inputKey} type="file" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
       </Field>
+      {form && (
+        <RequiredForm
+          translation={translation}
+          form={form}
+          answers={answers}
+          onChange={(k, v) => {
+            setAnswers((a) => ({ ...a, [k]: v }));
+            setServerErrors((er) => ({ ...er, [k]: '' }));
+          }}
+          errors={{ ...(tried ? missing : {}), ...Object.fromEntries(Object.entries(serverErrors).filter(([, v]) => v)) }}
+        />
+      )}
       <Field label="Note (optional)">
         <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Anything the reviewer should know" />
         <DictateButton className="justify-self-start" onText={(t) => setNote((cur) => addDictation(cur, t))} />

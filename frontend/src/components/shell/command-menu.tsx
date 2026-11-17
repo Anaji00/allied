@@ -4,7 +4,24 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from 'next-themes';
-import { Factory, FilePlus, LogOut, Monitor, Moon, ReceiptText, Sparkles, Sun } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  Factory,
+  FilePlus,
+  LayoutGrid,
+  LogOut,
+  MessageSquare,
+  Monitor,
+  Paperclip,
+  Moon,
+  ReceiptText,
+  Route,
+  Ship,
+  Sparkles,
+  Sun,
+  User,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   Command,
   CommandDialog,
@@ -16,11 +33,52 @@ import {
   CommandSeparator,
 } from '@/components/ui/command';
 import { useAuth } from '@/context/AuthContext';
-import { api, ok } from '@/lib/api/client';
-import { fetchRfqs, fetchVendorJobs } from '@/lib/opsApi';
+import { plain } from '@/lib/format';
+import { authFetch } from '@/lib/api';
 import { navFor } from '@/lib/nav';
+import { downloadFile } from '@/components/data/item-files';
 
-type Hit = { id: string | number; title: string; sub: string };
+type SearchHit = { type: string; title: string; sub?: string; ref: string; link?: string };
+type SearchGroup = { type: string; label: string; hits: SearchHit[] };
+type SearchResult = { query: string; total: number; groups: SearchGroup[] };
+
+const ICON: Record<string, LucideIcon> = {
+  job: Route,
+  order: ReceiptText,
+  rfq: FilePlus,
+  vendor_job: Factory,
+  shipment: Ship,
+  comment: MessageSquare,
+  board_item: LayoutGrid,
+  person: User,
+  file: Paperclip,
+};
+
+/** Where a search hit opens. The server gives a route hint, but comments and people have none, and the board route is "/". */
+export function routeFor(hit: SearchHit): string {
+  const enc = encodeURIComponent;
+  if (hit.type === 'person') return `mailto:${hit.ref}`;
+  if (hit.type === 'comment') {
+    const [kind, ...rest] = hit.ref.split(':');
+    return routeFor({ type: kind, title: hit.title, ref: rest.join(':'), link: '' });
+  }
+  // The server's link points at the record itself; the board route is "/" here. Without a link, it is built from the type and reference.
+  if (hit.link) return hit.link.replace(/^\/boards(?=[?/]|$)/, '/');
+  switch (hit.type) {
+    case 'order':
+      return `/orders?order=${enc(hit.ref)}`;
+    case 'rfq':
+      return `/rfqs?id=${enc(hit.ref)}`;
+    case 'vendor_job':
+      return `/vendors?job=${enc(hit.ref)}`;
+    case 'shipment':
+      return `/shipments?id=${enc(hit.ref)}`;
+    case 'milestone':
+      return `/projects?milestone=${enc(hit.ref)}`;
+    default:
+      return '/';
+  }
+}
 
 /** Typed text, once it has paused for a moment. */
 function useLater(value: string, ms = 250) {
@@ -49,8 +107,8 @@ function rank(value: string, search: string, keywords: string[] = []) {
 }
 
 /**
- * Ctrl+K: type to find an order, vendor job or quote request and open it, do a quick
- * action (new order, ask the assistant), or go to any page this role can open.
+ * Ctrl+K and the header search: type to find anything (orders, quote requests, vendor orders, shipments,
+ * comments, board rows, people) in one search, do a quick action, or go to any page this role can open.
  */
 export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter();
@@ -58,53 +116,46 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
   const { hasRole, logoutEmployee } = useAuth();
   const groups = navFor(hasRole);
   const [typed, setTyped] = useState('');
+  // Which item is lit. Until someone moves it, it is the first search result, even when the results arrive after typing.
+  const [picked, setPicked] = useState<string | null>(null);
   const text = useLater(typed.trim());
   const searching = open && text.length >= 2;
 
-  // Found as you type. Orders are searched on the server; vendor jobs and quote requests are short
-  // lists, so they are read once and matched here.
-  const orders = useQuery({
-    queryKey: ['palette', 'orders', text],
-    queryFn: async () =>
-      (
-        (await ok(api.GET('/api/v1/orders', { params: { query: { q: text, view: 'all', limit: 5, offset: 0 } } }))) as unknown as {
-          items: { sales_order_number: string; customer_name?: string | null }[];
-        }
-      ).items.map((o): Hit => ({ id: o.sales_order_number, title: o.sales_order_number, sub: o.customer_name ?? '' })),
+  // One search on the server covers every kind of record.
+  const found = useQuery({
+    queryKey: ['search', text],
+    queryFn: async (): Promise<SearchResult | null> => {
+      const res = await authFetch(`/api/v1/search?q=${encodeURIComponent(text)}&limit=8`, { cache: 'no-store' });
+      return res.ok ? ((await res.json()) as SearchResult) : null;
+    },
     enabled: searching,
     staleTime: 30_000,
+    retry: false,
   });
-  const jobs = useQuery({
-    queryKey: ['palette', 'jobs'],
-    queryFn: async () =>
-      ((await fetchVendorJobs()) as { jobs: { id: number; vendor: string; description?: string | null; po_number?: string | null }[] })
-        .jobs,
-    enabled: searching,
-    staleTime: 60_000,
-  });
-  const rfqs = useQuery({
-    queryKey: ['palette', 'rfqs'],
-    queryFn: async () =>
-      ((await fetchRfqs(true, false)) as { rfqs: { id: number; number: string; customer?: string | null; subject?: string | null }[] })
-        .rfqs,
-    enabled: searching,
-    staleTime: 60_000,
-  });
-  const has = (...parts: (string | null | undefined)[]) => {
-    const hay = parts.join(' ').toLowerCase();
-    return text
-      .toLowerCase()
-      .split(/\s+/)
-      .every((w) => hay.includes(w));
-  };
-  const jobHits = (jobs.data ?? []).filter((j) => has(j.vendor, j.description, j.po_number)).slice(0, 5);
-  const rfqHits = (rfqs.data ?? []).filter((r) => has(r.number, r.customer, r.subject)).slice(0, 5);
+  // The server's search lists Jobs first; keep it that way.
+  const resultGroups = [...(found.data?.groups ?? [])]
+    .sort((x, y) => Number(y.type === 'job') - Number(x.type === 'job'))
+    .filter((g) => g.hits.length > 0);
+  const firstHit = searching ? resultGroups[0]?.hits[0] : undefined;
+  const lit = picked ?? (firstHit ? `${resultGroups[0].type} ${firstHit.ref} ${firstHit.title}` : undefined);
 
   const run = (fn: () => void) => {
     onOpenChange(false);
     setTyped('');
     fn();
   };
+  const open_ = (hit: SearchHit) =>
+    run(() => {
+      // A file is downloaded with the sign-in, not opened as a page.
+      if (hit.type === 'file') {
+        const id = /\/files\/(\d+)/.exec(hit.link ?? '')?.[1] ?? hit.ref;
+        void downloadFile(id, hit.title).catch((e: Error) => toast.error('Couldn’t download it', { description: e.message }));
+        return;
+      }
+      const to = routeFor(hit);
+      if (to.startsWith('mailto:')) window.location.href = to;
+      else router.push(to);
+    });
 
   return (
     <CommandDialog
@@ -118,60 +169,42 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
       className="sm:max-w-xl"
     >
       {/* This CommandDialog leaves the cmdk root to the caller. */}
-      <Command filter={rank}>
-        <CommandInput value={typed} onValueChange={setTyped} placeholder="Find an order, vendor or request, or do something…" />
+      <Command filter={rank} value={lit} onValueChange={setPicked}>
+        <CommandInput
+          value={typed}
+          onValueChange={(v) => {
+            setTyped(v);
+            setPicked(null);
+          }}
+          placeholder="Search orders, requests, vendors, comments, people… or do something"
+        />
         <CommandList>
-          <CommandEmpty>Nothing matches. Try an order number, a vendor, or a page name like “shipments”.</CommandEmpty>
-          {searching && (orders.data?.length || jobHits.length || rfqHits.length) ? (
+          <CommandEmpty>
+            {found.isFetching
+              ? 'Searching…'
+              : 'No match yet. Try an order number, a vendor or a page name like “shipments”, or ask the assistant.'}
+          </CommandEmpty>
+          {searching && resultGroups.length > 0 ? (
             <>
-              {orders.data && orders.data.length > 0 && (
-                <CommandGroup heading="Orders">
-                  {orders.data.map((o) => (
-                    <CommandItem
-                      key={o.id}
-                      value={`order ${o.id}`}
-                      keywords={[text]}
-                      onSelect={() => run(() => router.push(`/orders?order=${encodeURIComponent(String(o.id))}`))}
-                    >
-                      <ReceiptText />
-                      <span className="font-mono text-xs">{o.title}</span>
-                      <span className="ml-auto truncate pl-4 text-xs text-muted-foreground">{o.sub}</span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              )}
-              {jobHits.length > 0 && (
-                <CommandGroup heading="Vendor orders">
-                  {jobHits.map((j) => (
-                    <CommandItem
-                      key={j.id}
-                      value={`vendor job ${j.id}`}
-                      keywords={[text]}
-                      onSelect={() => run(() => router.push(`/vendors?job=${j.id}`))}
-                    >
-                      <Factory />
-                      <span>{j.vendor}</span>
-                      <span className="ml-auto truncate pl-4 text-xs text-muted-foreground">{j.description || j.po_number}</span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              )}
-              {rfqHits.length > 0 && (
-                <CommandGroup heading="Quote requests">
-                  {rfqHits.map((r) => (
-                    <CommandItem
-                      key={r.id}
-                      value={`rfq ${r.id}`}
-                      keywords={[text]}
-                      onSelect={() => run(() => router.push(`/rfqs?id=${r.id}`))}
-                    >
-                      <FilePlus />
-                      <span className="font-mono text-xs">{r.number}</span>
-                      <span className="ml-auto truncate pl-4 text-xs text-muted-foreground">{r.customer || r.subject}</span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              )}
+              {resultGroups.map((g) => {
+                const Icon = ICON[g.type] ?? LayoutGrid;
+                return (
+                  <CommandGroup key={g.type} heading={g.label}>
+                    {g.hits.map((h) => (
+                      <CommandItem
+                        key={`${g.type}-${h.ref}-${h.title}`}
+                        value={`${g.type} ${h.ref} ${h.title}`}
+                        keywords={[text]}
+                        onSelect={() => open_(h)}
+                      >
+                        <Icon />
+                        <span className="truncate">{h.title}</span>
+                        {h.sub && <span className="ml-auto truncate pl-4 text-xs text-muted-foreground">{plain(h.sub)}</span>}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                );
+              })}
               <CommandSeparator />
             </>
           ) : null}
@@ -189,7 +222,7 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
               forceMount
               value="Ask the assistant"
               keywords={['question', 'help', 'ask', typed]}
-              onSelect={() => run(() => router.push(typed.trim() ? `/chat?prompt=${encodeURIComponent(typed.trim())}` : '/chat'))}
+              onSelect={() => run(() => window.dispatchEvent(new CustomEvent('allied:ask', { detail: { prompt: typed.trim() } })))}
             >
               <Sparkles /> {typed.trim().length > 2 ? `Ask the assistant: “${typed.trim().slice(0, 40)}”` : 'Ask the assistant'}
             </CommandItem>

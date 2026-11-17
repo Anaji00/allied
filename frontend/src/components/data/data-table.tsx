@@ -1,6 +1,6 @@
 'use client';
 
-import { ViewTransition, startTransition, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ViewTransition, startTransition, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   createColumnHelper,
   tableFeatures,
@@ -10,6 +10,7 @@ import {
   type RowData,
   type TableFeatures,
 } from '@tanstack/react-table';
+import { ArrowDown, ArrowUp, ChevronsUpDown, ListFilter, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useFreshKeys } from './motion';
 
@@ -18,11 +19,21 @@ declare module '@tanstack/react-table' {
   interface ColumnMeta<in out TFeatures extends TableFeatures, in out TData extends RowData, TValue extends CellData = CellData> {
     align?: 'right';
     className?: string;
+    /** Hide this column on screens narrower than this, so the table fits instead of scrolling sideways. */
+    hideBelow?: 'md' | 'lg' | 'xl' | '2xl';
+    /** A total for this column over the rows currently shown (after filtering): a sum, an average, a count. */
+    footer?: (rows: TData[]) => ReactNode;
   }
 }
 
-// Server-side paging and filtering: the table only lays rows out, so it needs
-// no optional features. Kept at module scope so the row model stays stable.
+// Server-side paging: the table only lays rows out, and sorts, filters and totals what it was given.
+// Kept at module scope so the row model stays stable.
+const HIDE = {
+  md: 'hidden md:table-cell',
+  lg: 'hidden lg:table-cell',
+  xl: 'hidden xl:table-cell',
+  '2xl': 'hidden 2xl:table-cell',
+} as const;
 export const tableFeatureSet = tableFeatures({});
 export type TableFeatureSet = typeof tableFeatureSet;
 export const columnHelper = <T extends RowData>() => createColumnHelper<TableFeatureSet, T>();
@@ -48,6 +59,8 @@ type Props<T extends RowData> = {
   checked?: Set<string>;
   onCheckedChange?: (ids: Set<string>) => void;
   canCheck?: (row: T) => boolean;
+  /** Turn off the per-column filter boxes (sorting and totals stay). */
+  filterable?: boolean;
 };
 
 const PREFETCH_DELAY = 100;
@@ -55,8 +68,19 @@ const PREFETCH_DELAY = 100;
 /** A view-transition name for one record, safe as a CSS identifier. */
 export const recordKey = (kind: string, id: string | number) => `${kind}-${String(id).replace(/[^A-Za-z0-9_-]/g, '_')}`;
 
+const blank = (v: unknown) => v === null || v === undefined || v === '';
+/** Numbers sort as numbers (even when they arrive as "1,200.50" text), everything else as words with numbers in order. */
+function compare(a: unknown, b: unknown) {
+  if (blank(a) || blank(b)) return blank(a) === blank(b) ? 0 : blank(a) ? 1 : -1;
+  const na = typeof a === 'number' ? a : Number(String(a).replace(/,/g, ''));
+  const nb = typeof b === 'number' ? b : Number(String(b).replace(/,/g, ''));
+  if (Number.isFinite(na) && Number.isFinite(nb) && !/[a-z]/i.test(String(a)) && !/[a-z]/i.test(String(b))) return na - nb;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 /**
- * A dense, read-only grid: 36px rows, sticky header, tabular figures.
+ * A dense grid: 36px rows, sticky header, tabular figures. Click a heading to sort by it (again to reverse,
+ * a third time to clear), open "Filter" to narrow any column by what it shows, and a totals row follows the filter.
  * Clicking a row selects it; the page decides what selecting means.
  */
 export function DataTable<T extends RowData>({
@@ -73,6 +97,7 @@ export function DataTable<T extends RowData>({
   checked,
   onCheckedChange,
   canCheck = () => true,
+  filterable = true,
 }: Props<T>) {
   const table = useTable({
     features: tableFeatureSet,
@@ -82,6 +107,10 @@ export function DataTable<T extends RowData>({
   });
   const bodyRef = useRef<HTMLTableSectionElement>(null);
   const prefetchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [sort, setSort] = useState<{ id: string; desc: boolean } | null>(null);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [showFilters, setShowFilters] = useState(false);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   // Selecting is a transition, so the record morph and panel slide can run.
   const select = (row: T) => onSelect && startTransition(() => onSelect(row));
@@ -99,7 +128,19 @@ export function DataTable<T extends RowData>({
     bodyRef.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
 
-  const rows = table.getRowModel().rows;
+  const baseRows = table.getRowModel().rows;
+  const rows = useMemo(() => {
+    if (!sort) return baseRows;
+    const sign = sort.desc ? -1 : 1;
+    // Blanks stay last either way round.
+    return [...baseRows].sort((x, y) => {
+      const a = x.getValue(sort.id);
+      const b = y.getValue(sort.id);
+      if (blank(a) || blank(b)) return compare(a, b);
+      return sign * compare(a, b);
+    });
+  }, [baseRows, sort]);
+
   const hasSelection = rows.some((r) => r.id === selectedId);
   // Rows that arrived in a refresh get a short wash; on first load they settle in.
   const fresh = useFreshKeys(rows.map((r) => r.id));
@@ -110,7 +151,42 @@ export function DataTable<T extends RowData>({
   }, []);
 
   const tickable = Boolean(checked && onCheckedChange);
-  const allowed = rows.filter((r) => canCheck(r.original)).map((r) => r.id);
+  const offset = tickable ? 1 : 0;
+  const active = Object.entries(filters).filter(([, v]) => v.trim());
+  const filterKey = JSON.stringify(active);
+  const rowKey = rows.map((r) => r.id).join('|');
+
+  // A filter matches what the cell shows (a label, a date, a name), read from the page after it draws.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const cols = table.getAllLeafColumns();
+    const next = new Set<string>();
+    if (active.length) {
+      body.querySelectorAll<HTMLTableRowElement>('tr[data-row-id]').forEach((tr) => {
+        const ok = active.every(([id, text]) => {
+          const i = cols.findIndex((c) => c.id === id);
+          const shown = (tr.children[i + offset]?.textContent ?? '').toLowerCase();
+          return text
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean)
+            .every((w) => shown.includes(w));
+        });
+        if (!ok) next.add(tr.dataset.rowId!);
+      });
+    }
+    setHidden((prev) => (prev.size === next.size && [...next].every((id) => prev.has(id)) ? prev : next));
+    // `active` is read through filterKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey, rowKey, offset]);
+
+  const visible = rows.filter((r) => !hidden.has(r.id));
+  const leaf = table.getAllLeafColumns();
+  const hasFooter = leaf.some((c) => c.columnDef.meta?.footer);
+  const sortable = (def: { accessorKey?: unknown; accessorFn?: unknown }) => Boolean(def.accessorKey || def.accessorFn);
+
+  const allowed = visible.filter((r) => canCheck(r.original)).map((r) => r.id);
   const allTicked = allowed.length > 0 && allowed.every((id) => checked?.has(id));
   const flip = (id: string) => {
     const next = new Set(checked);
@@ -118,11 +194,32 @@ export function DataTable<T extends RowData>({
     else next.add(id);
     onCheckedChange?.(next);
   };
+  const cycle = (id: string) => setSort((s) => (!s || s.id !== id ? { id, desc: false } : s.desc ? null : { id, desc: true }));
 
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
+      {filterable && rows.length > 1 && (
+        <div className="flex items-center justify-end gap-2 border-b px-2 py-1 text-xs text-muted-foreground">
+          {active.length > 0 && (
+            <button type="button" className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => setFilters({})}>
+              <X className="size-3" /> Clear filters
+            </button>
+          )}
+          <button
+            type="button"
+            aria-pressed={showFilters}
+            onClick={() => setShowFilters((v) => !v)}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-muted hover:text-foreground',
+              showFilters && 'bg-muted text-foreground',
+            )}
+          >
+            <ListFilter className="size-3.5" /> Filter{active.length > 0 ? ` (${active.length})` : ''}
+          </button>
+        </div>
+      )}
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-[13px]" style={{ minWidth }} aria-label={label}>
+        <table className="w-full border-collapse text-[13px] max-xl:min-w-0!" style={{ minWidth }} aria-label={label}>
           <thead>
             {table.getHeaderGroups().map((group) => (
               <tr key={group.id}>
@@ -141,22 +238,71 @@ export function DataTable<T extends RowData>({
                 )}
                 {group.headers.map((header) => {
                   const meta = header.column.columnDef.meta;
+                  const canSort = sortable(header.column.columnDef as never);
+                  const on = sort?.id === header.column.id ? sort : null;
                   return (
                     <th
                       key={header.id}
                       scope="col"
+                      aria-sort={on ? (on.desc ? 'descending' : 'ascending') : undefined}
                       className={cn(
                         'sticky top-0 z-[1] h-9 border-b bg-card px-3 text-left text-xs font-medium whitespace-nowrap text-muted-foreground',
                         meta?.align === 'right' && 'text-right',
+                        meta?.hideBelow && HIDE[meta.hideBelow],
                         meta?.className,
                       )}
                     >
-                      {header.isPlaceholder ? null : <table.FlexRender header={header} />}
+                      {header.isPlaceholder ? null : canSort ? (
+                        <button
+                          type="button"
+                          onClick={() => cycle(header.column.id)}
+                          className={cn('group inline-flex items-center gap-1 hover:text-foreground', on && 'text-foreground')}
+                          title="Sort by this column"
+                        >
+                          <table.FlexRender header={header} />
+                          {on ? (
+                            on.desc ? (
+                              <ArrowDown className="size-3" />
+                            ) : (
+                              <ArrowUp className="size-3" />
+                            )
+                          ) : (
+                            <ChevronsUpDown className="size-3 opacity-0 transition-opacity group-hover:opacity-50 group-focus-visible:opacity-50" />
+                          )}
+                        </button>
+                      ) : (
+                        <table.FlexRender header={header} />
+                      )}
                     </th>
                   );
                 })}
               </tr>
             ))}
+            {showFilters && (
+              <tr>
+                {tickable && <th className="border-b bg-card" />}
+                {leaf.map((c) => (
+                  <th
+                    key={c.id}
+                    className={cn(
+                      'border-b bg-card px-2 py-1 font-normal',
+                      c.columnDef.meta?.hideBelow && HIDE[c.columnDef.meta.hideBelow],
+                    )}
+                  >
+                    {sortable(c.columnDef as never) ? (
+                      <input
+                        type="search"
+                        value={filters[c.id] ?? ''}
+                        onChange={(e) => setFilters((f) => ({ ...f, [c.id]: e.target.value }))}
+                        aria-label={`Filter ${typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id}`}
+                        placeholder="Filter"
+                        className="h-7 w-full min-w-16 rounded-md border bg-transparent px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                    ) : null}
+                  </th>
+                ))}
+              </tr>
+            )}
           </thead>
           <tbody ref={bodyRef} className={cn(entering && 'rows-enter')}>
             {rows.map((row, i) => {
@@ -167,6 +313,8 @@ export function DataTable<T extends RowData>({
               return (
                 <tr
                   key={row.id}
+                  data-row-id={row.id}
+                  hidden={hidden.has(row.id)}
                   aria-current={selected || undefined}
                   tabIndex={onSelect ? (tabStop ? 0 : -1) : undefined}
                   onClick={() => select(row.original)}
@@ -184,9 +332,13 @@ export function DataTable<T extends RowData>({
                             // Moves focus only; the page's own J/K would move the selection too.
                             e.preventDefault();
                             e.stopPropagation();
-                            const next =
-                              e.key === 'ArrowDown' ? e.currentTarget.nextElementSibling : e.currentTarget.previousElementSibling;
-                            (next as HTMLElement | null)?.focus();
+                            let next = (
+                              e.key === 'ArrowDown' ? e.currentTarget.nextElementSibling : e.currentTarget.previousElementSibling
+                            ) as HTMLElement | null;
+                            // Skip rows a filter hides.
+                            while (next?.hidden)
+                              next = (e.key === 'ArrowDown' ? next.nextElementSibling : next.previousElementSibling) as HTMLElement | null;
+                            next?.focus();
                           }
                         }
                       : undefined
@@ -219,7 +371,12 @@ export function DataTable<T extends RowData>({
                     return (
                       <td
                         key={cell.id}
-                        className={cn('h-9 px-3 whitespace-nowrap', meta?.align === 'right' && 'text-right tabular-nums', meta?.className)}
+                        className={cn(
+                          'h-9 px-3 whitespace-nowrap',
+                          meta?.align === 'right' && 'text-right tabular-nums',
+                          meta?.hideBelow && HIDE[meta.hideBelow],
+                          meta?.className,
+                        )}
                       >
                         {morph ? (
                           <ViewTransition name={morph} share="record" default="none">
@@ -237,10 +394,44 @@ export function DataTable<T extends RowData>({
               );
             })}
           </tbody>
+          {hasFooter && visible.length > 0 && (
+            <tfoot>
+              <tr className="border-t bg-muted/30 text-xs font-medium">
+                {tickable && <td />}
+                {leaf.map((c, i) => {
+                  const meta = c.columnDef.meta;
+                  return (
+                    <td
+                      key={c.id}
+                      className={cn(
+                        'min-h-9 px-3 py-1.5',
+                        meta?.align === 'right' && 'text-right tabular-nums',
+                        meta?.hideBelow && HIDE[meta.hideBelow],
+                      )}
+                    >
+                      {meta?.footer ? (
+                        meta.footer(visible.map((r) => r.original))
+                      ) : i === 0 ? (
+                        <span className="text-muted-foreground">Totals · {visible.length} shown</span>
+                      ) : null}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
       {/* Outside the scrolling area, so the message stays in view on a phone. */}
       {rows.length === 0 && empty}
+      {rows.length > 0 && visible.length === 0 && (
+        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+          Nothing matches those filters.{' '}
+          <button type="button" className="underline" onClick={() => setFilters({})}>
+            Clear them
+          </button>
+        </p>
+      )}
     </div>
   );
 }

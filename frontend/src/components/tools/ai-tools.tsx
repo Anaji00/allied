@@ -167,7 +167,7 @@ export function TranslateTool() {
 const DRAFT_KINDS = [
   ['order_acknowledgement', 'Order received'],
   ['delivery_update', 'Delivery update'],
-  ['supplier_chaser', 'Chase a supplier'],
+  ['supplier_chaser', 'Follow up with a supplier'],
   ['invoice_dispute', 'Dispute a bill'],
   ['general_reply', 'General reply'],
 ] as const;

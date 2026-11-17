@@ -1,5 +1,6 @@
 'use client';
 
+import { OwnerPicker } from './board-owner';
 import Link from 'next/link';
 import { Facts } from '@/components/data/detail-panel';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
@@ -98,7 +99,7 @@ export function People({ names, max = 3 }: { names: string[]; max?: number }) {
           <span
             key={n}
             aria-hidden="true"
-            className={cn('grid size-6 place-items-center rounded-full border-2 border-card text-[10px] font-semibold', i > 0 && '-ml-1.5')}
+            className={cn('grid size-6 place-items-center rounded-full border-2 border-card text-xs font-semibold', i > 0 && '-ml-1.5')}
             style={{ background: colour, color: inkOn(colour) }}
           >
             {initials}
@@ -106,7 +107,7 @@ export function People({ names, max = 3 }: { names: string[]; max?: number }) {
         );
       })}
       {names.length > max && (
-        <span aria-hidden="true" className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-card bg-muted text-[10px]">
+        <span aria-hidden="true" className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-card bg-muted text-xs">
           +{names.length - max}
         </span>
       )}
@@ -207,8 +208,10 @@ export const NOTES_ON = new Set<Role>(['projects']);
 export function ItemCard({ board, item, automations }: { board: Board; item: Item; automations?: Automations }) {
   const columns = board.columns.filter((c) => c.type !== 'name');
   const tracked = TRACKED_ROLES.includes(board.role);
+  // The people named on this item in monday's People columns: the job's owners.
+  const owners = [...new Set(board.columns.filter(isPeople).flatMap((c) => peopleOf(item.values[c.id] ?? '')))];
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 gap-4">
       {tracked && (
         <div className="grid gap-1">
           <span className="text-xs font-medium text-muted-foreground">In the app</span>
@@ -216,7 +219,8 @@ export function ItemCard({ board, item, automations }: { board: Board; item: Ite
         </div>
       )}
       {tracked && <ItemAutomations boardId={board.board_id} itemId={item.id} data={automations} />}
-      {NOTES_ON.has(board.role) && <ItemNotes boardId={board.board_id} role={board.role} itemId={item.id} />}
+      {NOTES_ON.has(board.role) && <ItemNotes boardId={board.board_id} role={board.role} itemId={item.id} owners={owners} />}
+      {board.columns.some(isPeople) && <OwnerPicker boardId={board.board_id} itemId={item.id} />}
       <Facts
         items={[
           ['Group', item.group_title || '–'],

@@ -26,7 +26,11 @@ LANGUAGES = {"en": "English", "vi": "Vietnamese", "zh": "Simplified Chinese (Man
 _COMPANY = (
     "You work for Allied Welding Systems, a US supplier of wear-resistant steel plate, "
     "clad plate, ceramic-lined hose and fabricated wear parts, with yards in Lanett AL, "
-    "Edmonton AB and a partner mill in Zibo, China."
+    "Edmonton AB and a partner mill in Zibo, China. " + (
+        "Words Allied uses: a PO (purchase order) is what Allied issues to a VENDOR (for example HELEN); customers send RFQs "
+        "(requests for quote) and, when they accept a quote, an order carrying their own reference number: in your own words call "
+        "that the 'customer reference', never a PO. A sales order (SO) is Allied's INTERNAL document for the sale to the customer; "
+        "its number is never shown to customers.")
 )
 
 
@@ -99,7 +103,7 @@ class EmailTriage(BaseModel):
     language: str = Field(description="ISO 639-1 code of the email's language, e.g. en, vi, zh")
     summary: str = Field(description="One sentence in English saying what the sender wants")
     customer_name: str = Field(description="Company placing the order or asking; blank if unknown")
-    po_number: str = Field(description="Customer purchase order number exactly as written; blank if none")
+    po_number: str = Field(description="The customer's own order/reference number exactly as written (they may call it their PO number); blank if none")
     requested_date: str = Field(description="Requested delivery date as written; blank if none")
     lines: List[TriageLine]
     uncertain_fields: List[str] = Field(description="Fields you could not read with certainty")

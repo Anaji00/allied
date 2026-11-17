@@ -21,10 +21,12 @@ from app.services.coordination import notify as alerts
 # "PO 9277", "P.O. #9277", "Allied PO 9277"; never "P.O. Box 9277" in a signature.
 _PO = re.compile(r"\b(?:allied\s+)?p\.?\s*o\.?(?!\s*box)\s*(?:#|no\.?|number)?\s*:?\s*(\d{3,8})\b", re.I)
 _SHIPPED = re.compile(r"\b(?:has|have|was|were|been)\s+(?:been\s+)?shipped\b|\bshipped\s+(?:out|on|today|yesterday)\b"
-                      r"|\b(?:departed|loaded on|on board|sailed)\b", re.I)
-_PHOTOS = re.compile(r"\b(?:photos?|pictures?|pics|images?)\b", re.I)
+                      r"|\b(?:departed|loaded on|on board|sailed)\b|已发货|已出货|已经发货|已发出|已装柜|已装船|已出运|已离港|已开船", re.I)
+_PHOTOS = re.compile(r"\b(?:photos?|pictures?|pics|images?)\b|照片|图片|相片", re.I)
 _MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
-_DATES = re.compile(rf"\b\d{{4}}-\d{{1,2}}-\d{{1,2}}\b|\b\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?\b"
+_DATES = re.compile(rf"\d{{4}}\s*年\s*\d{{1,2}}\s*月\s*\d{{1,2}}\s*[日号]?|\d{{1,2}}\s*月\s*\d{{1,2}}\s*[日号]"          # 2026年11月12日, 11月12日
+                                    rf"|\b\d{{4}}[/.]\d{{1,2}}[/.]\d{{1,2}}\b|\b\d{{1,2}}\.\d{{1,2}}\.\d{{4}}\b"                             # 2026/11/12, 12.11.2026
+                    rf"|\b\d{{4}}-\d{{1,2}}-\d{{1,2}}\b|\b\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?\b"
                     rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH}(?:\s+\d{{4}})?\b|\b{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?\b",
                     re.I)
 # Free mail: the whole address identifies the vendor, not the domain.
@@ -89,10 +91,16 @@ def _parse(text: str, today: date) -> Optional[date]:
     "Dec 28" in January last month). Slashes are read month first (US), unless the first number is over 12."""
     t = text.strip().lower().replace(",", " ")
     try:
-        if m := re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", t):
+        if m := re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", t):
             return date(int(m[1]), int(m[2]), int(m[3]))
+        if m := re.fullmatch(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?", t):          # 2026年11月12日
+            return date(int(m[1]), int(m[2]), int(m[3]))
+        if m := re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", t):                                   # 12.11.2026: day first
+            return date(int(m[3]), int(m[2]), int(m[1]))
         year = None
-        if m := re.fullmatch(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", t):
+        if m := re.fullmatch(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", t):                              # 11月12日 (no year)
+            month, day = int(m[1]), int(m[2])
+        elif m := re.fullmatch(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", t):
             a, b = int(m[1]), int(m[2])
             month, day = (b, a) if a > 12 else (a, b)
             year = int(m[3]) if m[3] else None
@@ -119,6 +127,24 @@ def _parse(text: str, today: date) -> Optional[date]:
         return None
 
 
+def _ambiguous_in(text: str, today: date) -> List[List[date]]:
+    """Slash dates that could be read two ways (12/11 is 12 Nov to a Chinese or Vietnamese vendor, 11 Dec to an American):
+    each as [month-first reading, day-first reading]. Neither is trusted; a person reads the email."""
+    out = []
+    for m in re.finditer(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", text):
+        a, b = int(m[1]), int(m[2])
+        if a > 12 or b > 12 or a == b or a == 0 or b == 0:
+            continue
+        reads = []
+        for month, day in ((a, b), (b, a)):
+            d = _parse(f"{month}/{day}" + (f"/{m[3]}" if m[3] else ""), today)
+            if d and today - timedelta(days=45) <= d <= today + timedelta(days=365):
+                reads.append(d)
+        if len(reads) == 2 and reads[0] != reads[1]:
+            out.append(reads)
+    return out
+
+
 def _dates_in(text: str, today: date) -> List[date]:
     found = []
     for m in _DATES.finditer(text):
@@ -134,6 +160,7 @@ def read(sender: str, subject: str, body: str, today: Optional[date] = None) -> 
     today = today or alerts.today()
     text = f"{subject}\n{body}"
     in_text = _dates_in(body, today) or _dates_in(subject, today)
+    ambiguous = _ambiguous_in(body, today) or _ambiguous_in(subject, today)
     out: Dict[str, Any] = {"ship_date": None, "shipped": bool(_SHIPPED.search(body)), "shipped_on": None,
                            "photos": bool(_PHOTOS.search(body)), "summary": " ".join(body.split())[:200], "by": "rules"}
     ai = None
@@ -164,6 +191,12 @@ def read(sender: str, subject: str, body: str, today: Optional[date] = None) -> 
         elif len(future) == 1:
             out["ship_date"] = future[0]
         out["unclear"] = not out["shipped"] and out["ship_date"] is None
+    readings = {d for pair in ambiguous for d in pair}
+    if ambiguous and (out["ship_date"] in readings or out.get("shipped_on") in readings):
+        out["ambiguous"] = [[d.isoformat() for d in pair] for pair in ambiguous]
+        out["ship_date"] = out["ship_date"] if out["ship_date"] not in readings else None
+        out["shipped_on"] = out.get("shipped_on") if out.get("shipped_on") not in readings else None
+        out["unclear"] = out["ship_date"] is None and not out["shipped"] or out["ship_date"] is None
     return out
 
 

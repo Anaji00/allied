@@ -1,0 +1,3 @@
+Invoice/CM #,Customer ID,Customer,Date,Reference,Sales Order Number,Invoice Total,Amount Due,Due Date
+INV-30001,10195,Owens Corning Starr Composites,11/20/2026,4500912345,12930,"$2,770.00","$1,270.00",12/20/2026
+INV-30002,10195,Owens Corning Starr Composites,11/02/2026,4500911000,12911,"$1,500.00",$0.00,12/02/2026

@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.config import settings
 from app.core.audit import audit_log
 from app.core.database import SessionLocal
+from app.core import status_words
 from app.core.logging import logger
 from app.models.db_models import MondayMilestoneDB, MondayProjectDB, VendorJobDB
 from app.services.coordination import notify as alerts
@@ -35,6 +36,17 @@ TEXT_FIELDS = ("vendor", "description", "project_item_id", "po_number", "owner_e
 ALERT_KEYS = ("vendor-late:", "vendor-risk:", "vendor-noack:", "vendor-checkin:")
 # The last read of the vendor board, so other checks on the same board don't read it again.
 last_board: Dict[str, Any] = {"board": None, "at": 0.0, "items": []}
+
+
+def _nice(d: Any) -> str:
+    """A date inside a sentence the way people say it: "Nov 8" (with the year when it is not this year)."""
+    if d is None or d == "":
+        return "an unknown date"
+    try:
+        month = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[d.month - 1]      # not %b: that follows the server's language
+        return f"{month} {d.day}" + ("" if d.year == alerts.today().year else f", {d.year}")
+    except (AttributeError, ValueError, TypeError):
+        return str(d)
 
 
 def _transit(mode: str) -> int:
@@ -63,6 +75,7 @@ def _as_dict(j: VendorJobDB) -> Dict[str, Any]:
     d = {k: v for k, v in j.__dict__.items() if not k.startswith("_")}
     for k in ("created_at", "updated_at"):
         d[k] = d[k].isoformat() if d.get(k) else None
+    d["status_word"] = status_words.word("vendor_job", d.get("status"))
     return d
 
 
@@ -183,16 +196,16 @@ def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[
     if committed and committed < on:
         state = "late"
         out["days_late"] = (on - committed).days
-        said = "promised" if promised else f"quoted {j['quoted_lead_days']} days from {ordered.isoformat()}, so due"
-        reasons.append(f"{said} {committed.isoformat()}, not shipped ({out['days_late']} days late)")
+        said = "promised" if promised else f"quoted {j['quoted_lead_days']} days from {_nice(ordered)}, so due"
+        reasons.append(f"{said} {_nice(committed)}, not shipped ({out['days_late']} days late)")
     if need and expected and expected > need:
         if state != "late":
             state = "will_miss"
         whose = "the customer" if need_source and need_source.startswith("customer") else "the project"
-        reasons.append(f"expected {expected.isoformat()} but must ship by {need.isoformat()} for {whose}")
+        reasons.append(f"expected {_nice(expected)} but must ship by {_nice(need)} for {whose}")
     elif need and promised and forecast and history >= settings.VENDOR_HISTORY_MIN_JOBS and forecast > need and state == "on_track":
         state = "at_risk"
-        reasons.append(f"promise is in time, but this vendor usually takes longer (forecast {forecast.isoformat()})")
+        reasons.append(f"promise is in time, but this vendor usually takes longer (forecast {_nice(forecast)})")
     elif need and expected and state == "on_track" and (need - expected).days < settings.VENDOR_BUFFER_DAYS // 2:
         state = "at_risk"
         reasons.append(f"only {(need - expected).days} days of slack before the ship-by date")
@@ -203,10 +216,10 @@ def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[
         if on > due:
             if state == "on_track":
                 state = "no_ack"
-            reasons.append(f"PO sent {ordered.isoformat()}, vendor has not confirmed it or given a date")
+            reasons.append(f"PO sent {_nice(ordered)}, vendor has not confirmed it or given a date")
     if state == "on_track" and promised and 0 <= (promised - on).days <= settings.VENDOR_CHECKIN_DAYS:
         state = "checkin"
-        reasons.append(f"ships {promised.isoformat()}; ask the vendor to reconfirm")
+        reasons.append(f"ships {_nice(promised)}; ask the vendor to reconfirm")
     if state == "on_track" and not expected:
         state = "no_dates"
         reasons.append("no PO date, promise or quoted lead time yet")
@@ -216,7 +229,7 @@ def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[
 
 def _all() -> List[Dict[str, Any]]:
     with SessionLocal() as db:
-        return [_as_dict(j) for j in db.query(VendorJobDB).order_by(VendorJobDB.id)]
+        return [_as_dict(j) for j in db.query(VendorJobDB).order_by(VendorJobDB.id) if str(j.status or "").strip().upper() != "CANCELLED"]      # a cancelled order is not chased
 
 
 def _blocked_by(j: Dict[str, Any], p: Optional[Dict[str, Any]], on: date) -> Optional[Dict[str, Any]]:
@@ -522,7 +535,14 @@ def _person_promise_holds(row: VendorJobDB, from_board: Optional[str]) -> bool:
 
 def sync_vendor_board(client=None) -> Dict[str, Any]:
     with _write_lock:
-        return _sync_vendor_board(client)
+        out = _sync_vendor_board(client)
+    try:
+        from app.services.coordination import purchase_orders
+
+        purchase_orders.link_vendor_lines()      # a line with a PO number points at that purchase order's one record
+    except Exception as exc:  # noqa: BLE001 - linking is a convenience; the board read itself succeeded
+        logger.warning(f"Could not link vendor lines to purchase orders: {exc}")
+    return out
 
 
 def _sync_vendor_board(client=None) -> Dict[str, Any]:
@@ -564,6 +584,11 @@ def _sync_vendor_board(client=None) -> Dict[str, Any]:
                 "mode": _text(col("VENDOR_MODE_COLUMN_ID")) or _default_mode(vendor),
             }
             owners = _people(col("VENDOR_OWNER_COLUMN_ID"), users) if settings.VENDOR_OWNER_COLUMN_ID else []
+            if not owners and not settings.VENDOR_OWNER_COLUMN_ID:   # no owner column named: use the board's people column; names become emails (placeholders until real ones are known)
+                from app.services.coordination import owners as _owners
+
+                found = _owners.board_owner(item.get("column_values") or [])
+                owners = [found] if found else []
             if owners:
                 data["owner_email"] = owners[0]
             for f, setting in _COLUMN_FOR.items():
@@ -654,7 +679,10 @@ def run_checks(on: Optional[date] = None) -> Dict[str, int]:
         if state in ("shipped", "on_track", "no_dates"):
             continue
         p = projects.get(j.get("project_item_id") or "") or {}
-        owners = [j["owner_email"]] if j.get("owner_email") else []
+        from app.services.coordination import owners as _owners
+
+        who_owns = _owners.owner_of("vendor_job", str(jid), j.get("owner_email"))
+        owners = [who_owns] if who_owns else []
         project_owners = list(p.get("owner_emails") or [])
         label = f"{j['vendor']}: {j['description'] or j.get('po_number') or 'job ' + str(jid)}"
         on_project = f" for {p['name']}" if p.get("name") else ""

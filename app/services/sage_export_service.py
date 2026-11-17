@@ -8,8 +8,9 @@ granular General Ledger (GL) account assignment.
 import csv
 import io
 import re
+import threading
 from datetime import date, datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
@@ -50,8 +51,11 @@ def split_shipping_address(address: Optional[str]) -> Tuple[str, str, str, str]:
         return parts[0], "", "", ""
 
     line1 = parts[0]
-    # A trailing country token ("USA", "Canada") is not part of the locality.
-    if parts[-1].upper() in {"USA", "US", "U.S.A.", "CANADA", "CHINA", "CN", "CA"} and len(parts) > 2:
+    # A trailing country token is not part of the locality: a known country word, or any word with no digits that follows a part holding the postcode.
+    last = parts[-1]
+    known = {"USA", "US", "U.S.A.", "CANADA", "CHINA", "CN", "CA", "MEXICO", "MX", "VIETNAM", "VN", "INDIA", "IN", "JAPAN", "JP", "GERMANY", "DE", "UK", "UNITED KINGDOM",
+             "KOREA", "KR", "TAIWAN", "TW", "THAILAND", "TH", "BRAZIL", "BR", "AUSTRALIA", "AU", "ITALY", "IT", "FRANCE", "FR", "SPAIN", "ES"}
+    if len(parts) > 2 and (last.upper() in known or (not any(ch.isdigit() for ch in last) and len(last) > 3 and any(ch.isdigit() for ch in parts[-2]))):
         parts = parts[:-1]
 
     tail = parts[-1]
@@ -83,6 +87,24 @@ def money_line(qty: Any, unit: Any) -> Tuple[Decimal, Decimal]:
     return unit_rounded, amount
 
 
+def _dec(value: Any) -> Optional[Decimal]:
+    """A plain finite number from an order field, or None. ASCII digits only; text like 'N/A', '$12.50', '1,5' or 'NaN' is not a number."""
+    text = str(value).strip() if value is not None else ""
+    if not text or not text.isascii():
+        return None
+    try:
+        d = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    return d if d.is_finite() and abs(d) < Decimal("1e9") else None
+
+
+def safe_text(value: Any, limit: int = 200) -> str:
+    """Text for a Sage import cell: one line, no control characters, and never something a spreadsheet would run as a formula (a leading = + - @)."""
+    text = " ".join(re.sub(r"[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]+", " ", str(value if value is not None else "")).split())[:limit]
+    return "'" + text if text[:1] in ("=", "+", "-", "@") and text != "-" else text
+
+
 def sage_date(value: Any) -> str:
     """Formats a date the way Sage 50 US import expects it: mm/dd/yy.
 
@@ -93,12 +115,15 @@ def sage_date(value: Any) -> str:
         value = value.date()
     if isinstance(value, date):
         return value.strftime("%m/%d/%y")
-    text = str(value or "").strip()[:10]
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").strftime("%m/%d/%y")
-    except ValueError:
-        logger.warning(f"Order date '{value}' is not a date; using today for the Sage import.")
-        return date.today().strftime("%m/%d/%y")
+    text = str(value or "").strip()
+    if not text:
+        return date.today().strftime("%m/%d/%y")            # an order with no date at all is dated today
+    for fmt, size in (("%Y-%m-%d", 10), ("%m/%d/%Y", 10), ("%m/%d/%y", 8)):
+        try:
+            return datetime.strptime(text[:size] if fmt == "%Y-%m-%d" else text, fmt).strftime("%m/%d/%y")
+        except ValueError:
+            continue
+    raise ValueError(f"The order date '{text[:30]}' is not a date Sage can take (use 2026-11-20 or 11/20/2026).")
 
 
 def _mark_column(kind: str):
@@ -121,6 +146,33 @@ class SageExportService:
         self.gl_cogs_steel = "50000-00-STEEL"   # Steel Material Cost
         self.gl_cogs_ceramic = "51000-00-CER"   # Ceramic Material Cost
         self.gl_freight = "52000-00-FREIGHT"    # Inbound Freight Cost
+
+    _tls = threading.local()
+
+    @property
+    def last_skipped(self) -> List[str]:
+        """What the last export on THIS thread left out (two exports at once each see their own list)."""
+        return self._tls.__dict__.setdefault("skipped", [])
+
+    @last_skipped.setter
+    def last_skipped(self, value: List[str]) -> None:
+        self._tls.skipped = value
+
+    def _skip(self, why: str) -> None:
+        """An order or line left out of a file is said so (log and `last_skipped`), never silently."""
+        logger.warning(f"Sage export: {why}")
+        self.last_skipped.append(why)
+
+    @staticmethod
+    def _rate(currency: Any) -> Decimal:
+        """Units of the order's currency per US dollar (1 for USD). A currency with no configured rate is an error, never treated as dollars."""
+        code = str(currency or settings.DEFAULT_CURRENCY).upper()
+        if code == "USD":
+            return Decimal(1)
+        rate = _dec(settings.FX_RATES.get(code))
+        if not rate or rate <= 0:
+            raise ValueError(f"there is no exchange rate for {code[:10]} (set FX_RATES)")
+        return rate
 
     def _get_orders(
         self, facility: Optional[str] = None, only_new: bool = False, kind: str = "so"
@@ -244,8 +296,9 @@ class SageExportService:
         Customer ID,SO Number,Date,Ship to Name,Ship to Address-Line One,Ship to City,Ship to State,Ship to Zipcode,Terms,Item ID,Description,Quantity,Unit Price,Amount,GL Account
         """
         orders = self._get_orders(facility=facility, only_new=only_new, kind="so")
+        customer_filter = str(customer_filter or "").strip()          # blank or spaces means no filter, not "match nothing"
         if customer_filter:
-            orders = [o for o in orders if customer_filter.lower() in o.get("customer_name", "").lower()]
+            orders = [o for o in orders if customer_filter.lower() in str(o.get("customer_name") or "").lower()]
 
         output = io.StringIO()
         writer = csv.writer(output, lineterminator="\n")
@@ -276,11 +329,33 @@ class SageExportService:
             "GL Account",
         ])
 
+        self.last_skipped = []
+        seen_numbers: set = set()
         for o in orders:
             rows: List[List[Any]] = []
-            cust_id = o.get("customer_id") or o.get("customer_name", "CUST-GEN")
-            so_num = o.get("sales_order_number", "SO-12000")
-            po_date = sage_date(o.get("po_date"))
+            cust_id = safe_text(o.get("customer_id") or o.get("customer_name") or "")
+            so_num = str(o.get("sales_order_number") or "").strip()
+            if not cust_id.strip():
+                self._skip(f"order {so_num or '(no number)'} has no customer, so it was not exported (a made-up customer id would create a wrong customer in Sage)")
+                continue
+            if not so_num:
+                self._skip(f"an order for {o.get('customer_name') or 'a customer'} has no sales order number, so it was not exported")
+                continue
+            if so_num in seen_numbers:
+                self._skip(f"sales order {so_num} appears twice; only the first was exported")
+                continue
+            order_date = o.get("po_date") if str(o.get("po_date") or "").strip() not in ("", "None") else o.get("created_at")      # no PO date: the day the order was entered
+            if not str(order_date or "").strip():
+                self._skip(f"order {so_num} has no order date at all, so it was not exported (an invented date could put it in the wrong accounting period)")
+                continue
+            try:
+                po_date = sage_date(order_date)
+                rate = self._rate(o.get("currency"))
+            except ValueError as exc:
+                self._skip(f"order {so_num} was not exported: {exc}")
+                continue
+            seen_numbers.add(so_num)
+            cur = str(o.get("currency") or settings.DEFAULT_CURRENCY).upper()
             # Sage groups rows into one document by number and needs every row
             # to repeat how many lines the document has.
             exportable = [
@@ -288,27 +363,34 @@ class SageExportService:
                 if ln.get("item_id") and ln.get("unit_price") is not None
             ]
             distribution = 0
-            ship_name = o.get("customer_name") or "Plant Receiving"
-            ship_line1, ship_city, ship_state, ship_zip = split_shipping_address(
+            ship_name = safe_text(o.get("customer_name") or "Plant Receiving")
+            ship_line1, ship_city, ship_state, ship_zip = (safe_text(x) for x in split_shipping_address(
                 o.get("shipping_address")
-            )
-            terms = o.get("payment_terms", "Net 30 Days")
+            ))
+            terms = safe_text(o.get("payment_terms") or "Net 30 Days")
 
             for line in o.get("line_items", []):
                 item_id = line.get("item_id")
                 if not item_id:
-                    logger.warning(
-                        f"Skipping a line on {so_num}: no item_id. Defaulting it to a "
-                        f"wear-plate SKU would export the wrong part to Sage."
-                    )
+                    self._skip(f"a line on sales order {so_num} has no item id, so that line was left out")
                     continue
-                desc = line.get("description") or item_id
-                qty = line.get("quantity") or 1
+                desc = safe_text(line.get("description") or item_id)
                 price = line.get("unit_price")
                 if price is None:
-                    logger.warning(f"Skipping {item_id} on {so_num}: no unit price on the order line.")
+                    self._skip(f"{safe_text(item_id, 40)} on sales order {so_num} has no unit price, so that line was left out")
                     continue
-                unit_price, amount = money_line(qty, price)
+                qty_d = _dec(line.get("quantity") if line.get("quantity") is not None else 1)
+                price_d = _dec(price)
+                if qty_d is None or price_d is None:
+                    self._skip(f"a line on sales order {so_num} ({safe_text(item_id, 40)}) has a quantity or price that is not a number, so that line was left out")
+                    continue
+                if qty_d == 0:
+                    self._skip(f"a line on sales order {so_num} ({safe_text(item_id, 40)}) has quantity 0, so that line was left out")
+                    continue
+                if rate != 1:                               # Sage books in dollars: other currencies are converted at the configured rate and the original is kept in the description
+                    desc = safe_text(f"{desc} (orig. {cur} {price_d:.2f} each)")
+                    price_d = (price_d / rate).quantize(_CENT, rounding=ROUND_HALF_UP)
+                unit_price, amount = money_line(qty_d, price_d)
                 gl_account = self._resolve_sales_gl(item_id)
                 distribution += 1
 
@@ -316,7 +398,7 @@ class SageExportService:
                     cust_id,
                     so_num,
                     po_date,
-                    o.get("customer_po_number") or "",
+                    safe_text(o.get("customer_po_number") or ""),
                     len(exportable),
                     distribution,
                     ship_name,
@@ -325,41 +407,52 @@ class SageExportService:
                     ship_state,
                     ship_zip,
                     terms,
-                    item_id,
+                    safe_text(item_id, 64),
                     desc,
-                    qty,
+                    f"{qty_d:f}",
                     f"{unit_price:.2f}",
                     f"{amount:.2f}",
                     gl_account,
                 ])
             if distribution:
+                for r in rows:                              # every row says how many lines the document REALLY has (lines left out above are not counted)
+                    r[4] = distribution
                 order_rows.append((so_num, rows))
+            else:
+                self._skip(f"sales order {so_num} has no usable line, so it was not exported")
 
-        if mark_exported:
-            # Marking happens here, when the file is generated, not when it is
-            # delivered. Claiming first and exporting only what was claimed
-            # makes the mark atomic: an overlapping run cannot also export an
-            # order, and nothing is marked that is not in this file.
-            claimed = set(self.claim_for_export([so for so, _ in order_rows], kind="so"))
-            order_rows = [(so, rows) for so, rows in order_rows if so in claimed]
-        marked = [so for so, _ in order_rows] if mark_exported else []
+        marked: List[str] = []
+        try:
+            if mark_exported:
+                # Marking happens here, when the file is generated, not when it is
+                # delivered. Claiming first and exporting only what was claimed
+                # makes the mark atomic: an overlapping run cannot also export an
+                # order, and nothing is marked that is not in this file.
+                claimed = set(self.claim_for_export([so for so, _ in order_rows], kind="so"))
+                marked = [so for so, _ in order_rows if so in claimed]
+                order_rows = [(so, rows) for so, rows in order_rows if so in claimed]
 
-        for _, rows in order_rows:
-            writer.writerows(rows)
+            for _, rows in order_rows:
+                writer.writerows(rows)
 
-        csv_content = output.getvalue()
-        output.close()
+            csv_content = output.getvalue()
+            output.close()
 
-        # Audit log entry
-        audit_log(
-            action="SAGE_50_EXPORT",
-            resource_type="SAGE_SO_CSV",
-            detail=(
-                f"Generated Sage 50 SO Import CSV ({len(order_rows)} orders, facility={facility or 'ALL'}"
-                + (", marked exported" if mark_exported else "")
-                + ")"
-            ),
-        )
+            # Audit log entry
+            audit_log(
+                action="SAGE_50_EXPORT",
+                resource_type="SAGE_SO_CSV",
+                detail=(
+                    f"Generated Sage 50 SO Import CSV ({len(order_rows)} orders, facility={facility or 'ALL'}"
+                    + (", marked exported" if mark_exported else "")
+                    + (f"; {len(self.last_skipped)} skipped" if self.last_skipped else "")
+                    + ")"
+                ),
+            )
+        except Exception:
+            if marked:                                  # nothing reached the caller: the orders go back in the next "only new" file
+                self.unmark_exported(marked, kind="so", actor="system")
+            raise
 
         return csv_content, marked
 
@@ -417,17 +510,23 @@ class SageExportService:
             "GL Account",
         ])
 
+        self.last_skipped = []
         for o in orders:
             rows: List[List[Any]] = []
-            po_date = sage_date(o.get("po_date"))
-            ship_name = o.get("customer_name") or "Allied Facility"
-            ship_line1, ship_city, ship_state, ship_zip = split_shipping_address(
+            try:
+                po_date = sage_date(o.get("po_date"))
+            except ValueError as exc:
+                self._skip(f"the purchase orders of order {o.get('sales_order_number')} were not exported: {exc}")
+                continue
+            ship_name = safe_text(o.get("customer_name") or "Allied Facility")
+            ship_line1, ship_city, ship_state, ship_zip = (safe_text(x) for x in split_shipping_address(
                 o.get("shipping_address")
-            )
+            ))
             issued_pos = o.get("purchase_orders") or {}
 
             for line in o.get("line_items", []):
                 vend_id = line.get("preferred_vendor")
+                vend_id = str(vend_id).strip() if vend_id is not None else ""
                 if not vend_id:
                     logger.warning(
                         f"Skipping a line on {o.get('sales_order_number')}: no vendor. "
@@ -447,9 +546,13 @@ class SageExportService:
                         f"missing item_id or unit_cost."
                     )
                     continue
-                desc = line.get("description") or item_id
-                qty = line.get("quantity") or 1
-                unit_cost, amount = money_line(qty, cost)
+                desc = safe_text(line.get("description") or item_id)
+                qty_d, cost_d = _dec(line.get("quantity") if line.get("quantity") is not None else 1), _dec(cost)
+                if qty_d is None or cost_d is None or qty_d == 0:
+                    self._skip(f"a {safe_text(vend_id, 40)} line on order {o.get('sales_order_number')} has a quantity or cost that is not usable, so that line was left out")
+                    continue
+                qty = qty_d
+                unit_cost, amount = money_line(qty_d, cost_d)
                 # Use the PO number Sage actually issued for this vendor, so the
                 # export reconciles against the 3-way match. Synthesising
                 # "PO-<vendor>-<customerPO>" invented a number that matched nothing.
@@ -463,17 +566,17 @@ class SageExportService:
                 gl_account = self._resolve_cogs_gl(item_id)
 
                 rows.append([
-                    vend_id,
-                    po_num,
+                    safe_text(vend_id, 64),
+                    safe_text(po_num, 64),
                     po_date,
                     ship_name,
                     ship_line1,
                     ship_city,
                     ship_state,
                     ship_zip,
-                    item_id,
+                    safe_text(item_id, 64),
                     desc,
-                    qty,
+                    f"{qty:f}",
                     f"{unit_cost:.2f}",
                     f"{amount:.2f}",
                     gl_account,
@@ -492,28 +595,34 @@ class SageExportService:
                     r[3:3] = [totals[r[1]], seen[r[1]]]
                 order_rows.append((o.get("sales_order_number"), rows))
 
-        if mark_exported:
-            claimed = set(self.claim_for_export([so for so, _ in order_rows], kind="po"))
-            order_rows = [(so, rows) for so, rows in order_rows if so in claimed]
-        marked = [so for so, _ in order_rows] if mark_exported else []
-        po_lines_written = 0
-        for _, rows in order_rows:
-            writer.writerows(rows)
-            po_lines_written += len(rows)
+        marked: List[str] = []
+        try:
+            if mark_exported:
+                claimed = set(self.claim_for_export([so for so, _ in order_rows], kind="po"))
+                marked = [so for so, _ in order_rows if so in claimed]
+                order_rows = [(so, rows) for so, rows in order_rows if so in claimed]
+            po_lines_written = 0
+            for _, rows in order_rows:
+                writer.writerows(rows)
+                po_lines_written += len(rows)
 
-        csv_content = output.getvalue()
-        output.close()
+            csv_content = output.getvalue()
+            output.close()
 
-        # Audit log entry
-        audit_log(
-            action="SAGE_50_EXPORT",
-            resource_type="SAGE_PO_CSV",
-            detail=(
-                f"Generated Sage 50 PO Import CSV ({po_lines_written} lines, vendor={vendor_filter or 'ALL'}"
-                + (", marked exported" if mark_exported else "")
-                + ")"
-            ),
-        )
+            # Audit log entry
+            audit_log(
+                action="SAGE_50_EXPORT",
+                resource_type="SAGE_PO_CSV",
+                detail=(
+                    f"Generated Sage 50 PO Import CSV ({po_lines_written} lines, vendor={vendor_filter or 'ALL'}"
+                    + (", marked exported" if mark_exported else "")
+                    + ")"
+                ),
+            )
+        except Exception:
+            if marked:
+                self.unmark_exported(marked, kind="po", actor="system")
+            raise
 
         return csv_content, marked
 
@@ -525,10 +634,11 @@ class SageExportService:
         settings but never read anywhere.
         """
         code = (currency or settings.DEFAULT_CURRENCY).upper()
+        if code == "USD":
+            return amount
         rate = settings.FX_RATES.get(code)
         if not rate:
-            logger.warning(f"No FX rate configured for '{code}'; treating the amount as USD.")
-            return amount
+            raise ValueError(f"No exchange rate is configured for '{code}' (set FX_RATES); the amount is not treated as dollars.")
         # FX_RATES holds units-per-USD, so dividing converts back to USD.
         return (amount / Decimal(str(rate))).quantize(Decimal("0.01"))
 
@@ -545,22 +655,27 @@ class SageExportService:
         po_count = 0
         currencies = set()
 
+        unconverted = 0
         for o in orders:
-            order_currency = (o.get("currency") or settings.DEFAULT_CURRENCY).upper()
+            order_currency = str(o.get("currency") or settings.DEFAULT_CURRENCY).upper()
             currencies.add(order_currency)
 
-            revenue = Decimal(str(o.get("total_revenue") or o.get("total_amount") or 0))
-            total_sales += self.to_usd(revenue, order_currency)
+            revenue = _dec(o.get("total_revenue") or o.get("total_amount") or 0)
+            try:
+                if revenue is not None:
+                    total_sales += self.to_usd(revenue, order_currency)
+            except ValueError:
+                unconverted += 1                          # no exchange rate: left out of the totals, and said so below
+                continue
 
             for line in o.get("line_items", []):
-                vend_id = (line.get("preferred_vendor") or "").upper()
+                vend_id = str(line.get("preferred_vendor") or "").upper()
                 if not vend_id or vend_id == "STOCK":
                     continue
-                cost = line.get("unit_cost")
-                if cost is None:
+                cost, qty = _dec(line.get("unit_cost")), _dec(line.get("quantity") if line.get("quantity") is not None else 1)
+                if cost is None or qty is None:
                     continue
-                qty = Decimal(str(line.get("quantity") or 1))
-                total_purchases += self.to_usd(qty * Decimal(str(cost)), order_currency)
+                total_purchases += self.to_usd(qty * cost, order_currency)
                 po_count += 1
 
         # Report the batch currency honestly: USD once normalised, and say so
@@ -569,6 +684,8 @@ class SageExportService:
             batch_currency = f"USD (normalised from {'/'.join(sorted(currencies))})"
         else:
             batch_currency = "USD"
+        if unconverted:
+            batch_currency += f"; {unconverted} order(s) left out of the totals: no exchange rate"
 
         return SageExportSummary(
             sales_orders_count=len(orders),

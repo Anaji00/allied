@@ -53,7 +53,7 @@ export const STATUS: Record<string, { label: string; tone: Tone }> = {
   RECEIVED: { label: 'Received', tone: 'neutral' },
   VALIDATED: { label: 'Checked', tone: 'info' },
   PROCESSING: { label: 'Writing to Sage', tone: 'info' },
-  SYNCED_TO_SAGE: { label: 'In Sage', tone: 'ok' },
+  SYNCED_TO_SAGE: { label: 'Made; not in a Sage file yet', tone: 'ok' },
   VALIDATION_ERROR: { label: 'Failed checks', tone: 'bad' },
   SAGE_ERROR: { label: 'Sage write failed', tone: 'bad' },
 };

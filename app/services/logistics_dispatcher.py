@@ -10,12 +10,14 @@ Generates:
 from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.services import fx
 from app.core.logging import logger
 from app.core.audit import audit_log
 from app.services.agent_memory_cache import agent_memory_cache
@@ -42,7 +44,7 @@ def _cci_number(customer_po: str, so_number: str) -> str:
     of one PO (partial deliveries) must not share a number, so a short code worked out from the SO is added."""
     ref = _safe_ref(customer_po)
     if not ref:
-        return f"CCI-2026-{so_number}"
+        return f"CCI-2026-{hashlib.sha1(str(so_number).encode()).hexdigest()[:8].upper()}"      # never our SO number on a customer paper
     return f"CCI-2026-{ref}-{hashlib.sha1(str(so_number).encode()).hexdigest()[:4].upper()}"
 
 
@@ -127,8 +129,7 @@ class CanadaCustomsInvoice(BaseModel):
     hs_tariff_lines: List[Dict[str, Any]] = Field(default_factory=list)
     customs_broker: str = "Livingston International / Border Pro"
     declaration_statement: str = (
-        "The exporter certifies that the goods described in this commercial customs invoice "
-        "comply strictly with USMCA / NAFTA Rules of Origin where applicable and declared values reflect transaction value."
+        "The exporter certifies that the goods described in this commercial customs invoice are as declared and that declared values reflect transaction value."
     )
 
 
@@ -186,8 +187,8 @@ class LogisticsDispatcher:
 
     def calculate_tri_currency_rates(self, base_usd: float) -> Tuple[float, float]:
         """Converts a USD rate to its CAD and CNY equivalents."""
-        cad_rate = round(base_usd / settings.CAD_TO_USD_RATE, 2)
-        cny_rate = round(base_usd / settings.CNY_TO_USD_RATE, 2)
+        cad_rate = round(base_usd / fx.cad_to_usd(), 2)
+        cny_rate = round(base_usd / fx.cny_to_usd(), 2)
         return cad_rate, cny_rate
 
     def get_carrier_quotes(self, origin_facility: str, destination_address: str,
@@ -212,7 +213,7 @@ class LogisticsDispatcher:
                     continue
                 for q in provider.quotes(destination_address, weight_lbs)[:3]:
                     cur = (q.get("currency") or "USD").upper()
-                    usd = q["price"] * (settings.CAD_TO_USD_RATE if cur == "CAD" else 1.0)
+                    usd = q["price"] * (fx.cad_to_usd() if cur == "CAD" else 1.0)
                     quotes.append(make(q["name"], f"Live {provider.name} price ({q.get('transit') or 'transit time not given'})", 1, usd))
             except Exception as exc:  # noqa: BLE001 - one carrier being down must not stop a dispatch
                 logger.warning(f"Live {provider.name} prices unavailable: {exc}")
@@ -245,13 +246,28 @@ class LogisticsDispatcher:
         hs_lines = []
         total_val = 0.0
         for it in items:
-            qty = float(it.get("quantity", 1))
-            unit_price = float(it.get("unit_price", 100.0))
+            label = it.get("item_id") or "a line"
+            if it.get("unit_price") in (None, ""):
+                # A customs declaration states a value under the law: an invented price is a false declaration.
+                raise ValueError(f"Cannot raise a customs invoice for SO-{so_number}: {label} has no unit price.")
+            try:
+                qty = float(it.get("quantity", 1))
+                unit_price = float(it["unit_price"])
+            except (TypeError, ValueError):
+                raise ValueError(f"Cannot raise a customs invoice for SO-{so_number}: {label} has a quantity or unit price that is not a number.") from None
+            if not (math.isfinite(qty) and math.isfinite(unit_price)) or qty <= 0 or unit_price <= 0:
+                raise ValueError(f"Cannot raise a customs invoice for SO-{so_number}: {label} needs a quantity and a unit price above zero.")
             line_val = qty * unit_price
             total_val += line_val
 
             sku = str(it.get("item_id", "")).upper()
-            if "PLATE" in sku or "300XL" in sku:
+            entered_hts = str(it.get("hts_code") or "").strip()
+            if entered_hts:                         # what was entered on the PO line is what is declared, if it is a tariff number
+                if not re.fullmatch(r"\d{4}(?:\.\d{2}(?:\.\d{2,4})?)?|\d{6,10}", entered_hts, re.ASCII):
+                    raise ValueError(f"Cannot raise a customs invoice for SO-{so_number}: the HTS code '{entered_hts[:30]}' on {label} is not a tariff number (like 7208.39.0030).")
+                hs_code = entered_hts
+                desc = str(it.get("description") or it.get("item_id") or "")[:200]
+            elif "PLATE" in sku or "300XL" in sku:
                 hs_code = "7210.90.0000"
                 desc = "Clad Wear Plate Chromium Carbide Overlay"
             elif "HOSE" in sku or "CERAMIC" in sku:
@@ -282,12 +298,18 @@ class LogisticsDispatcher:
                 f"Cannot raise a customs invoice for SO-{so_number}: the order has no line items."
             )
 
-        # Calculate currency declared values
+        # Calculate currency declared values: any currency with a configured rate is converted; one without is refused, never declared as dollars
         total_usd = total_val
-        if currency.upper() == "CAD":
-            total_usd = total_val * settings.CAD_TO_USD_RATE
-        elif currency.upper() == "CNY":
-            total_usd = total_val * settings.CNY_TO_USD_RATE
+        code = currency.upper()
+        if code == "CAD":
+            total_usd = total_val * fx.cad_to_usd()
+        elif code == "CNY":
+            total_usd = total_val * fx.cny_to_usd()
+        elif code != "USD":
+            rate = settings.FX_RATES.get(code)
+            if not rate:
+                raise ValueError(f"Cannot raise a customs invoice in {code[:10]}: no exchange rate is configured (set FX_RATES).")
+            total_usd = total_val / float(rate)
 
         return CanadaCustomsInvoice(
             # Customs sees this number, so it comes from the customer's PO, not Allied's internal sales order.
@@ -303,6 +325,8 @@ class LogisticsDispatcher:
             total_declared_value=round(total_val, 2),
             total_declared_usd=round(total_usd, 2),
             hs_tariff_lines=hs_lines,
+            **({"declaration_statement": "The exporter certifies that the goods described in this commercial customs invoice comply with USMCA rules of origin where "
+                                          "applicable and that declared values reflect transaction value."} if country_orig in ("United States", "Canada") else {}),
         )
 
     def _generate_packing_slip(
@@ -515,7 +539,7 @@ class LogisticsDispatcher:
 
         # What the customer sees: their own PO. Allied's sales order number is internal, and so is the
         # stored file's name (it carries that number), so the attachment is named after the PO.
-        ref = f"your PO {customer_po}" if customer_po else "your order"
+        ref = f"your reference {customer_po}" if customer_po else "your order"
         shown_name = f"packing_list_{_safe_ref(customer_po)}.pdf" if customer_po else "packing_list.pdf"
         slip_line = (
             f"Attachment: {shown_name} (Official Allied Packing List with MTR Heat Certs)"

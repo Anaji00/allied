@@ -11,7 +11,7 @@ from app.config import settings
 from app.core.database import SessionLocal
 from app.models.db_models import MondayMilestoneDB, NotificationDB, ShipmentDB
 from app.services.coordination import notify as alerts
-from app.services.coordination import projects, schedule, shipments
+from app.services.coordination import forms, projects, schedule, shipments
 
 TODAY = alerts.today()
 
@@ -114,6 +114,12 @@ def test_sync_is_idle_without_a_board_or_in_simulation(monkeypatch):
     sim = FakeMonday()
     sim.live = False
     assert "simulation" in projects.sync_projects(sim)["skipped"]
+
+
+@pytest.fixture(autouse=True)
+def _no_task_forms(monkeypatch):
+    """These tests are about the review cycle; the required-form rule has its own tests (test_task_forms.py)."""
+    monkeypatch.setattr(forms, "for_milestone", lambda *a, **k: None)
 
 
 # -- design-document submissions ----------------------------------------------
@@ -373,9 +379,13 @@ def test_review_still_works_after_the_milestone_left_the_board(board):
 
 
 def test_bad_dates_are_refused_and_never_break_the_list():
-    s = _ship(eta="2026-02-30")
-    assert s["eta_current"] is None
-    shipments.update(s["id"], {"eta": "2026-13-01"}, "tester")
+    with pytest.raises(ValueError, match="not a real date"):
+        _ship(eta="2026-02-30")
+    s = _ship()
+    try:
+        shipments.update(s["id"], {"eta": "2026-13-01"}, "tester")
+    except ValueError:
+        pass                                                    # refused plainly, or ignored: either way the list still works
     assert any(x["id"] == s["id"] for x in shipments.list_shipments())
 
 

@@ -4,7 +4,7 @@
 // It never caches pages or API answers: orders, stock and dates must always
 // come fresh from the server, so a stale copy is worse than none.
 
-const CACHE = 'allied-offline-v1';
+const CACHE = 'allied-offline-v2';
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {

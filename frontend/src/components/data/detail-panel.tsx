@@ -55,7 +55,7 @@ export function DetailPanel({
               <X />
             </Button>
           </header>
-          <div className="overflow-y-auto px-4 py-4">{children}</div>
+          <div className="min-w-0 overflow-y-auto overflow-x-hidden px-4 py-4">{children}</div>
         </aside>
       </ViewTransition>
     );

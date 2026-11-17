@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { Facts } from '@/components/data/detail-panel';
+import { UpdatesPanel } from '@/components/data/updates-panel';
 import { Field, NativeSelect, PanelHeading } from '@/components/data/filters';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
@@ -67,6 +68,8 @@ export function ShipmentDetail({ shipment: s, statuses, canEdit }: { shipment: S
       />
 
       {canEdit && <RecordChange key={`${s.id}-${s.status}-${s.last_update_at}`} shipment={s} statuses={statuses} />}
+
+      <UpdatesPanel itemType="shipment" itemRef={String(s.id)} />
 
       <div className="grid gap-2">
         <PanelHeading>History</PanelHeading>

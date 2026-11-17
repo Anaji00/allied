@@ -7,20 +7,14 @@ import { Loader2 } from 'lucide-react';
 import { Facts } from '@/components/data/detail-panel';
 import { Field, NativeSelect } from '@/components/data/filters';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { PersonSelect, SuggestInput } from '@/components/data/pick';
 import { useAuth } from '@/context/AuthContext';
 import { api, ok } from '@/lib/api/client';
 import { day } from '@/lib/format';
-import { identifier, statusLabel, statusOptions, type Shipment } from './use-shipments';
+import { identifier, statusLabel, statusOptions, useShipments, type Shipment } from './use-shipments';
 
 const EMPTY = {
   forwarder: '',
@@ -51,6 +45,7 @@ export function AddShipmentDialog({
 }) {
   const { employeeEmail } = useAuth();
   const client = useQueryClient();
+  const known = useShipments().data?.shipments ?? [];
   const [form, setForm] = useState({ ...EMPTY, owner_email: employeeEmail ?? '' });
   const set = (key: keyof typeof EMPTY) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const numbered = Boolean(form.container_no.trim() || form.awb.trim() || form.reference.trim());
@@ -75,7 +70,9 @@ export function AddShipmentDialog({
       <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Add a shipment</DialogTitle>
-          <DialogDescription>For goods booked with a forwarder. A container, air waybill or booking number is enough; dates can come later.</DialogDescription>
+          <DialogDescription>
+            For goods booked with a forwarder. A container, air waybill or booking number is enough; dates can come later.
+          </DialogDescription>
         </DialogHeader>
         <form
           id="add-shipment"
@@ -85,8 +82,12 @@ export function AddShipmentDialog({
             if (numbered) add.mutate();
           }}
         >
-          <Field label="Forwarder">
-            <Input value={form.forwarder} onChange={set('forwarder')} />
+          <Field label="Forwarder" hint="The company that books the shipping for you.">
+            <SuggestInput
+              value={form.forwarder}
+              onChange={(v) => setForm((f) => ({ ...f, forwarder: v }))}
+              options={known.flatMap((s) => (s.forwarder ? [s.forwarder] : []))}
+            />
           </Field>
           <Field label="How it travels">
             <NativeSelect value={form.mode} onChange={set('mode')}>
@@ -104,9 +105,6 @@ export function AddShipmentDialog({
               <Input value={form.container_no} onChange={set('container_no')} placeholder="MSCU1234567" />
             </Field>
           )}
-          <Field label="Booking reference">
-            <Input value={form.reference} onChange={set('reference')} />
-          </Field>
           <Field label="From">
             <Input value={form.origin} onChange={set('origin')} placeholder="Shanghai" />
           </Field>
@@ -119,9 +117,6 @@ export function AddShipmentDialog({
           <Field label="Arrives">
             <Input type="date" value={form.eta} onChange={set('eta')} />
           </Field>
-          <Field label="Port free time ends">
-            <Input type="date" value={form.free_time_ends} onChange={set('free_time_ends')} />
-          </Field>
           <Field label="Status">
             <NativeSelect value={form.status} onChange={set('status')}>
               {statusOptions(statuses.length ? statuses : ['BOOKED']).map((o) => (
@@ -131,12 +126,28 @@ export function AddShipmentDialog({
               ))}
             </NativeSelect>
           </Field>
-          <Field label="Carrier">
-            <Input value={form.carrier} onChange={set('carrier')} placeholder="Shipping line or airline" />
-          </Field>
           <Field label="Owner" hint="Gets the alerts for this shipment.">
-            <Input type="email" value={form.owner_email} onChange={set('owner_email')} />
+            <PersonSelect value={form.owner_email} onChange={(v) => setForm((f) => ({ ...f, owner_email: v }))} />
           </Field>
+          <details className="sm:col-span-2">
+            <summary className="cursor-pointer text-sm text-muted-foreground">More details (optional)</summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="Booking reference">
+                <Input value={form.reference} onChange={set('reference')} />
+              </Field>
+              <Field label="Carrier">
+                <SuggestInput
+                  value={form.carrier}
+                  onChange={(v) => setForm((f) => ({ ...f, carrier: v }))}
+                  options={known.flatMap((s) => (s.carrier ? [s.carrier] : []))}
+                  placeholder="Shipping line or airline"
+                />
+              </Field>
+              <Field label="Port free time ends" hint="The last day the container can sit at the port before extra charges start.">
+                <Input type="date" value={form.free_time_ends} onChange={set('free_time_ends')} />
+              </Field>
+            </div>
+          </details>
         </form>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
@@ -199,8 +210,8 @@ export function ForwarderEmailDialog({
         <DialogHeader>
           <DialogTitle>Read a forwarder email</DialogTitle>
           <DialogDescription>
-            Paste the email. The AI reads the status, dates and reference numbers and updates the matching shipment. It can take
-            up to a minute.
+            Paste the email. The AI reads the status, dates and reference numbers and updates the matching shipment. It can take up to a
+            minute.
           </DialogDescription>
         </DialogHeader>
         <form

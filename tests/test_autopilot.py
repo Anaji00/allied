@@ -238,21 +238,21 @@ def test_any_reviewer_can_act_on_a_draft_and_an_acknowledgement_acknowledges(mon
     second = {"email": "lead.two@allied.test", "role": "MANAGER"}
     r = rfqs.create({"customer": "Vulcan", "subject": "Chute", "contact_email": f"ack{uuid.uuid4().hex[:6]}@v.test"},
                     OWNER, source="email")
-    [draft] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r["number"] in p["summary"]]
+    [draft] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r["number"] in p["summary"] and p.get("tool") == "send_email"]
     assert agent.decide(draft["id"], True, second)["status"] == "DONE"     # not only the first reviewer
     assert rfqs.get(r["id"])["status"] == "NEW"        # mail is off: only drafted, the customer heard nothing
 
     from app.services.outbound_email_service import outbound_email_service
     r2 = rfqs.create({"customer": "Vulcan", "subject": "Liner", "contact_email": f"ack{uuid.uuid4().hex[:6]}@v.test"},
                      OWNER, source="email")
-    [draft2] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r2["number"] in p["summary"]]
+    [draft2] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r2["number"] in p["summary"] and p.get("tool") == "send_email"]
     monkeypatch.setattr(outbound_email_service, "send", lambda *a, **kw: {"status": "SENT"})
     assert agent.decide(draft2["id"], True, second)["status"] == "DONE"
     assert rfqs.get(r2["id"])["status"] == "ACKNOWLEDGED"                  # really sent: acknowledged
 
     r3 = rfqs.create({"customer": "Vulcan", "subject": "Chute 2", "contact_email": f"ack{uuid.uuid4().hex[:6]}@v.test"},
                      OWNER, source="email")
-    [draft3] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r3["number"] in p["summary"]]
+    [draft3] = [p for p in agent.pending(second) if p["from"] == "autopilot" and r3["number"] in p["summary"] and p.get("tool") == "send_email"]
     monkeypatch.setattr(outbound_email_service, "send", lambda *a, **kw: {"status": "FAILED"})
     assert agent.decide(draft3["id"], True, second)["status"] == "FAILED"  # a refused send is not "done"
     assert rfqs.get(r3["id"])["status"] == "NEW"

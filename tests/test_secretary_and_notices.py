@@ -176,7 +176,7 @@ def test_another_customers_order_is_never_described(day):
     day["gmail"].add(nosy, f"Where is {po}?", f"Status of {po}?", headers="Authentication-Results: mx.google.com; dmarc=pass\r\n")
     day["read_mail"]()
     [draft] = _drafts_to(nosy)
-    assert po not in draft.args["body"] and "PO number" in draft.args["body"]   # asks for their own PO instead
+    assert po not in draft.args["body"] and "order reference number" in draft.args["body"]   # asks for their own reference instead
 
 
 def test_a_complaint_gets_an_acknowledgement_draft_and_forged_mail_gets_nothing(day):

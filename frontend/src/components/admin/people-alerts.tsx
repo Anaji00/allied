@@ -12,14 +12,7 @@ import { Field, FilterChips, NativeSelect, PanelHeading, SectionTabs } from '@/c
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
@@ -94,7 +87,8 @@ const CHECKED: Record<string, string> = {
 };
 
 // Only same-site paths: '//host' and '/\host' would leave the site.
-const internal = (link?: string | null) => typeof link === 'string' && link.startsWith('/') && !link.startsWith('//') && !link.startsWith('/\\');
+const internal = (link?: string | null) =>
+  typeof link === 'string' && link.startsWith('/') && !link.startsWith('//') && !link.startsWith('/\\');
 
 function delivery(value: unknown) {
   if (value == null) return '–';
@@ -120,7 +114,9 @@ function History() {
   const list = useQuery({
     queryKey: ['alerts', 'history', show, everyone],
     queryFn: async () =>
-      (await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: show === 'open', everyone: everyone && isManager, limit: 200 } } }))) as { items: Alert[]; open: number },
+      (await ok(
+        api.GET('/api/v1/alerts', { params: { query: { open_only: show === 'open', everyone: everyone && isManager, limit: 200 } } }),
+      )) as { items: Alert[]; open: number },
   });
   const ackSave = optimistic<number>(client, ['alerts', 'history'], (old: { items: Alert[]; open: number }, id) => ({
     ...old,
@@ -128,7 +124,8 @@ function History() {
     items: old.items.map((a) => (a.id === id && !a.acknowledged_at ? { ...a, acknowledged_at: new Date().toISOString() } : a)),
   }));
   const ack = useMutation({
-    mutationFn: async (id: number) => ok(api.POST('/api/v1/alerts/{notification_id}/acknowledge', { params: { path: { notification_id: id } } })),
+    mutationFn: async (id: number) =>
+      ok(api.POST('/api/v1/alerts/{notification_id}/acknowledge', { params: { path: { notification_id: id } } })),
     onMutate: ackSave.onMutate,
     onSuccess: () => void client.invalidateQueries({ queryKey: ['inbox'] }),
     onError: (e, _id, context) => {
@@ -142,7 +139,10 @@ function History() {
     onSuccess: (counts) => {
       const parts = Object.entries(counts).filter(([, n]) => n > 0);
       const total = parts.reduce((s, [, n]) => s + n, 0);
-      if (total) toast.success(`Sent ${total} new alert${total === 1 ? '' : 's'}`, { description: parts.map(([k, n]) => `${n} ${CHECKED[k] ?? k}`).join(', ') });
+      if (total)
+        toast.success(`Sent ${total} new alert${total === 1 ? '' : 's'}`, {
+          description: parts.map(([k, n]) => `${n} ${CHECKED[k] ?? k}`).join(', '),
+        });
       else toast.success('Schedules checked', { description: 'No new alerts were needed. Nobody is told twice about the same thing.' });
       void client.invalidateQueries({ queryKey: ['alerts'] });
       void client.invalidateQueries({ queryKey: ['inbox'] });
@@ -165,7 +165,8 @@ function History() {
     acol.accessor('title', { header: 'Alert', meta: { className: 'max-w-[28rem] truncate' } }),
     acol.accessor('acknowledged_at', {
       header: 'Handled',
-      cell: (c) => (c.getValue() ? <span className="text-muted-foreground">{since(c.getValue())}</span> : <ToneBadge tone="warn">Open</ToneBadge>),
+      cell: (c) =>
+        c.getValue() ? <span className="text-muted-foreground">{since(c.getValue())}</span> : <ToneBadge tone="warn">Open</ToneBadge>,
     }),
   ]);
 
@@ -200,7 +201,11 @@ function History() {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">
-        Open alerts are also in the <Link className="underline underline-offset-2" href="/inbox">Inbox</Link>, where you can work through them with the keyboard.
+        Open alerts are also in the{' '}
+        <Link className="underline underline-offset-2" href="/inbox">
+          Inbox
+        </Link>
+        , where you can work through them with the keyboard.
       </p>
 
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_26rem]')}>
@@ -222,7 +227,12 @@ function History() {
             />
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => setOpenId(null)} title={selected?.title ?? ''} description={selected ? dateTime(selected.created_at) : undefined}>
+        <DetailPanel
+          open={Boolean(selected)}
+          onClose={() => setOpenId(null)}
+          title={selected?.title ?? ''}
+          description={selected ? dateTime(selected.created_at) : undefined}
+        >
           {selected && (
             <div className="grid gap-3 text-[13px]">
               {selected.body && <p className="whitespace-pre-wrap">{selected.body}</p>}
@@ -258,13 +268,24 @@ function History() {
 function TestAlert({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const client = useQueryClient();
   const send = useMutation({
-    mutationFn: async () => (await ok(api.POST('/api/v1/alerts/test', { params: { query: { severity: 'warning' } } }))) as { id: number | null; delivered: Record<string, unknown> | null },
+    mutationFn: async () =>
+      (await ok(api.POST('/api/v1/alerts/test', { params: { query: { severity: 'warning' } } }))) as {
+        id: number | null;
+        delivered: Record<string, unknown> | null;
+      },
     onSuccess: (r) => {
       onOpenChange(false);
-      if (!r.id || !r.delivered) toast.warning('No test alert was sent', { description: 'You may not be set up to get alerts yet. Ask an admin to add you under Who gets told.' });
+      if (!r.id || !r.delivered)
+        toast.warning('No test alert was sent', {
+          description: 'You may not be set up to get alerts yet. Ask an admin to add you under Who gets told.',
+        });
       else {
         const parts = Object.entries(r.delivered);
-        toast.success('Test alert sent', { description: parts.length ? parts.map(([w, v]) => `${CHANNEL[w] ?? w}: ${delivery(v)}`).join(' | ') : 'It’s in your alerts. No email, push or text went out.' });
+        toast.success('Test alert sent', {
+          description: parts.length
+            ? parts.map(([w, v]) => `${CHANNEL[w] ?? w}: ${delivery(v)}`).join(' | ')
+            : 'It’s in your alerts. No email, push or text went out.',
+        });
       }
       void client.invalidateQueries({ queryKey: ['alerts'] });
       void client.invalidateQueries({ queryKey: ['inbox'] });
@@ -306,10 +327,15 @@ const SECTIONS: [string, string, Tone][] = [
 function Summary() {
   const { hasRole } = useAuth();
   const [confirming, setConfirming] = useState(false);
-  const data = useQuery({ queryKey: ['alerts', 'summary'], queryFn: async () => (await ok(api.GET('/api/v1/alerts/summary'))) as Record<string, unknown> & { text?: string; urgent_open?: number } });
+  const data = useQuery({
+    queryKey: ['alerts', 'summary'],
+    queryFn: async () => (await ok(api.GET('/api/v1/alerts/summary'))) as Record<string, unknown> & { text?: string; urgent_open?: number },
+  });
   const channels = useQuery({
     queryKey: ['alerts', 'channels-public'],
-    queryFn: async () => ((await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: true, limit: 1 } } }))) as { channels?: Channels }).channels ?? {},
+    queryFn: async () =>
+      ((await ok(api.GET('/api/v1/alerts', { params: { query: { open_only: true, limit: 1 } } }))) as { channels?: Channels }).channels ??
+      {},
     staleTime: 10 * 60_000,
   });
   const send = useMutation({
@@ -393,7 +419,15 @@ function Summary() {
 
 /* -------------------------------------------------------------- contacts */
 
-type Contact = { email: string; name: string; role_tag: string; phone?: string | null; channels: string[]; daily_summary: boolean; active: boolean };
+type Contact = {
+  email: string;
+  name: string;
+  role_tag: string;
+  phone?: string | null;
+  channels: string[];
+  daily_summary: boolean;
+  active: boolean;
+};
 const GROUPS = [
   ['leadership', 'Leadership'],
   ['engineer', 'Engineer'],
@@ -406,7 +440,15 @@ const CHANNELS = [
   ['sms', 'Text message'],
 ] as const;
 const E164 = /^\+[1-9]\d{6,14}$/;
-const EMPTY_CONTACT: Contact = { email: '', name: '', role_tag: 'staff', phone: '', channels: ['email'], daily_summary: false, active: true };
+const EMPTY_CONTACT: Contact = {
+  email: '',
+  name: '',
+  role_tag: 'staff',
+  phone: '',
+  channels: ['email'],
+  daily_summary: false,
+  active: true,
+};
 
 const ccol = columnHelper<Contact>();
 const contactColumns = ccol.columns([
@@ -415,14 +457,24 @@ const contactColumns = ccol.columns([
     cell: (c) => (
       <span className="grid">
         <span className="font-medium">{c.getValue() || '–'}</span>
-        <span className="text-[11px] text-muted-foreground">{c.row.original.email}</span>
+        <span className="text-xs text-muted-foreground">{c.row.original.email}</span>
       </span>
     ),
   }),
   ccol.accessor('role_tag', { header: 'Group', cell: (c) => GROUPS.find(([v]) => v === c.getValue())?.[1] ?? c.getValue() }),
-  ccol.accessor('channels', { header: 'Told by', cell: (c) => c.getValue().map((x) => CHANNELS.find(([v]) => v === x)?.[1] ?? x).join(', ') || '–' }),
+  ccol.accessor('channels', {
+    header: 'Told by',
+    cell: (c) =>
+      c
+        .getValue()
+        .map((x) => CHANNELS.find(([v]) => v === x)?.[1] ?? x)
+        .join(', ') || '–',
+  }),
   ccol.accessor('daily_summary', { header: 'Summary', cell: (c) => (c.getValue() ? 'Yes' : 'No') }),
-  ccol.accessor('active', { header: 'Active', cell: (c) => <ToneBadge tone={c.getValue() ? 'ok' : 'neutral'}>{c.getValue() ? 'Yes' : 'Paused'}</ToneBadge> }),
+  ccol.accessor('active', {
+    header: 'Active',
+    cell: (c) => <ToneBadge tone={c.getValue() ? 'ok' : 'neutral'}>{c.getValue() ? 'Yes' : 'Paused'}</ToneBadge>,
+  }),
 ]);
 
 function Contacts() {
@@ -443,7 +495,10 @@ function Contacts() {
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm text-muted-foreground">Email for every alert; phone push for urgent and late work; texts only when urgent. Push and texts wait out quiet hours unless urgent.</p>
+          <p className="text-sm text-muted-foreground">
+            Email for every alert; phone push for urgent and late work; texts only when urgent. Push and texts wait out quiet hours unless
+            urgent.
+          </p>
           {isAdmin && (
             <Button size="sm" className="ml-auto" onClick={() => setEditing(EMPTY_CONTACT)}>
               <Plus /> Add a person
@@ -501,18 +556,17 @@ function ContactDialog({ initial, onClose }: { initial: Contact; onClose: () => 
   function submit() {
     const email = form.email.trim();
     const phone = (form.phone ?? '').trim().replace(/[\s()-]/g, '');
-    const issue =
-      !email.includes('@')
-        ? 'Enter an email address.'
-        : !form.name.trim()
-          ? 'Enter a name.'
-          : phone && !E164.test(phone)
-            ? 'Write the phone number with + and the country code, like +12055550100.'
-            : form.channels.includes('sms') && !phone
-              ? 'Text messages need a phone number.'
-              : !form.channels.length
-                ? 'Pick at least one way to tell them.'
-                : '';
+    const issue = !email.includes('@')
+      ? 'Enter an email address.'
+      : !form.name.trim()
+        ? 'Enter a name.'
+        : phone && !E164.test(phone)
+          ? 'Write the phone number with + and the country code, like +12055550100.'
+          : form.channels.includes('sms') && !phone
+            ? 'Text messages need a phone number.'
+            : !form.channels.length
+              ? 'Pick at least one way to tell them.'
+              : '';
     setProblem(issue);
     if (!issue) save.mutate({ ...form, email, name: form.name.trim(), phone: phone || null });
   }
@@ -549,7 +603,12 @@ function ContactDialog({ initial, onClose }: { initial: Contact; onClose: () => 
               </NativeSelect>
             </Field>
             <Field label="Mobile phone" hint="With + and country code.">
-              <Input type="tel" value={form.phone ?? ''} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+12055550100" />
+              <Input
+                type="tel"
+                value={form.phone ?? ''}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                placeholder="+12055550100"
+              />
             </Field>
           </div>
           <fieldset className="grid gap-1.5">
@@ -560,7 +619,12 @@ function ContactDialog({ initial, onClose }: { initial: Contact; onClose: () => 
                   <input
                     type="checkbox"
                     checked={form.channels.includes(v)}
-                    onChange={(e) => setForm({ ...form, channels: e.target.checked ? [...new Set([...form.channels, v])] : form.channels.filter((c) => c !== v) })}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        channels: e.target.checked ? [...new Set([...form.channels, v])] : form.channels.filter((c) => c !== v),
+                      })
+                    }
                   />
                   {l}
                 </label>
@@ -597,7 +661,15 @@ function ContactDialog({ initial, onClose }: { initial: Contact; onClose: () => 
 
 /* -------------------------------------------------------------- accounts */
 
-type User = { user_id: string; email: string; full_name: string; role: string; facility: string; is_active: boolean; last_login?: string | null };
+type User = {
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  facility: string;
+  is_active: boolean;
+  last_login?: string | null;
+};
 const ROLES = [
   ['VIEWER', 'Viewer', 'Sees everything, changes nothing'],
   ['OPERATOR', 'Operator', 'Day-to-day work: orders, shipments, reviews'],
@@ -616,14 +688,20 @@ const userColumns = ucol.columns([
     cell: (c) => (
       <span className="grid">
         <span className="font-medium">{c.getValue()}</span>
-        <span className="text-[11px] text-muted-foreground">{c.row.original.email}</span>
+        <span className="text-xs text-muted-foreground">{c.row.original.email}</span>
       </span>
     ),
   }),
-  ucol.accessor('role', { header: 'Access', cell: (c) => <ToneBadge tone={ROLE_TONE[c.getValue()] ?? 'neutral'}>{words(c.getValue())}</ToneBadge> }),
+  ucol.accessor('role', {
+    header: 'Access',
+    cell: (c) => <ToneBadge tone={ROLE_TONE[c.getValue()] ?? 'neutral'}>{words(c.getValue())}</ToneBadge>,
+  }),
   ucol.accessor('facility', { header: 'Site', cell: (c) => siteName(c.getValue()) }),
   ucol.accessor('last_login', { header: 'Last signed in', cell: (c) => (c.getValue() ? since(c.getValue()) : 'Never') }),
-  ucol.accessor('is_active', { header: 'Account', cell: (c) => <ToneBadge tone={c.getValue() ? 'ok' : 'neutral'}>{c.getValue() ? 'Active' : 'Disabled'}</ToneBadge> }),
+  ucol.accessor('is_active', {
+    header: 'Account',
+    cell: (c) => <ToneBadge tone={c.getValue() ? 'ok' : 'neutral'}>{c.getValue() ? 'Active' : 'Disabled'}</ToneBadge>,
+  }),
 ]);
 
 function Accounts() {
@@ -649,10 +727,25 @@ function Accounts() {
           ) : users.error ? (
             <ErrorState error={users.error} onRetry={() => void users.refetch()} />
           ) : (
-            <DataTable label="User accounts" columns={userColumns} data={rows} getRowId={(u) => u.email} recordName={(u) => recordKey('user', u.email)} selectedId={open} onSelect={(u) => setOpen(open === u.email ? null : u.email)} minWidth={640} />
+            <DataTable
+              label="User accounts"
+              columns={userColumns}
+              data={rows}
+              getRowId={(u) => u.email}
+              recordName={(u) => recordKey('user', u.email)}
+              selectedId={open}
+              onSelect={(u) => setOpen(open === u.email ? null : u.email)}
+              minWidth={640}
+            />
           )}
         </div>
-        <DetailPanel open={Boolean(selected)} onClose={() => setOpen(null)} recordName={selected ? recordKey('user', selected.email) : undefined} title={selected?.full_name ?? ''} description={selected?.email}>
+        <DetailPanel
+          open={Boolean(selected)}
+          onClose={() => setOpen(null)}
+          recordName={selected ? recordKey('user', selected.email) : undefined}
+          title={selected?.full_name ?? ''}
+          description={selected?.email}
+        >
           {selected && <UserForm key={`${selected.email}-${selected.role}-${selected.facility}-${selected.is_active}`} user={selected} />}
         </DetailPanel>
       </div>
@@ -680,7 +773,13 @@ function UserForm({ user }: { user: User }) {
     mutationFn: async (body: Change) => ok(api.PATCH('/api/v1/auth/users/{email}', { params: { path: { email: user.email } }, body })),
     onMutate: userSave.onMutate,
     onSuccess: (_r, body) => {
-      toast.success(body.is_active === false ? `${user.full_name} can no longer sign in` : body.is_active ? `${user.full_name} can sign in again` : 'Saved');
+      toast.success(
+        body.is_active === false
+          ? `${user.full_name} can no longer sign in`
+          : body.is_active
+            ? `${user.full_name} can sign in again`
+            : 'Saved',
+      );
       setPassword('');
       setConfirmDisable(false);
     },
@@ -694,7 +793,12 @@ function UserForm({ user }: { user: User }) {
 
   return (
     <div className="grid gap-4">
-      <Facts items={[['Last signed in', user.last_login ? dateTime(user.last_login) : 'Never'], ['Account', user.is_active ? 'Active' : 'Disabled']]} />
+      <Facts
+        items={[
+          ['Last signed in', user.last_login ? dateTime(user.last_login) : 'Never'],
+          ['Account', user.is_active ? 'Active' : 'Disabled'],
+        ]}
+      />
       <form
         className="grid gap-3"
         onSubmit={(e) => {
@@ -743,6 +847,7 @@ function UserForm({ user }: { user: User }) {
         <Button type="submit" size="sm" variant="outline" className="justify-self-start" disabled={password.length < 8 || save.isPending}>
           Set password
         </Button>
+        {password.length < 8 && <span className="text-xs text-muted-foreground">At least 8 characters.</span>}
       </form>
 
       {!me &&
@@ -765,7 +870,13 @@ function UserForm({ user }: { user: User }) {
             </Button>
           )
         ) : (
-          <Button size="sm" variant="outline" className="justify-self-start" disabled={save.isPending} onClick={() => save.mutate({ is_active: true })}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="justify-self-start"
+            disabled={save.isPending}
+            onClick={() => save.mutate({ is_active: true })}
+          >
             Enable the account
           </Button>
         ))}
@@ -773,12 +884,21 @@ function UserForm({ user }: { user: User }) {
   );
 }
 
-function AddUser({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (open: boolean) => void; onAdded: (email: string) => void }) {
+function AddUser({
+  open,
+  onOpenChange,
+  onAdded,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAdded: (email: string) => void;
+}) {
   const client = useQueryClient();
   const empty = { email: '', full_name: '', role: 'VIEWER', facility: 'HQ', password: '' };
   const [form, setForm] = useState(empty);
   const add = useMutation({
-    mutationFn: async () => (await ok(api.POST('/api/v1/auth/users', { body: { ...form, email: form.email.trim(), full_name: form.full_name.trim() } }))) as User,
+    mutationFn: async () =>
+      (await ok(api.POST('/api/v1/auth/users', { body: { ...form, email: form.email.trim(), full_name: form.full_name.trim() } }))) as User,
     onSuccess: (u) => {
       toast.success(`Added ${u.full_name}`, { description: 'Give them their password in person.' });
       void client.invalidateQueries({ queryKey: ['users'] });
@@ -830,7 +950,13 @@ function AddUser({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange:
             </NativeSelect>
           </Field>
           <Field label="Password" hint="At least 8 characters." className="sm:col-span-2">
-            <Input type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              required
+            />
           </Field>
         </form>
         <DialogFooter>

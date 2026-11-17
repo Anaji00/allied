@@ -96,8 +96,11 @@ def check_fields(data: Dict[str, Any], partial: bool = False) -> Dict[str, Any]:
         out["regions"] = list(dict.fromkeys(regions))
     for key, label, top in (("rate_usd", "The price", 1_000_000), ("per_lb_usd", "The price per pound", 1000)):
         if key in data:
+            raw = data[key]
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                raise RateCardError(f"{label} must be a number.")
             try:
-                v = float(data[key] or 0)
+                v = float(raw)
             except (TypeError, ValueError):
                 raise RateCardError(f"{label} must be a number.")
             if not 0 <= v <= top:
@@ -116,6 +119,8 @@ def check_fields(data: Dict[str, Any], partial: bool = False) -> Dict[str, Any]:
             out["as_of"] = date.fromisoformat(str(data["as_of"])).isoformat() if data["as_of"] else None
         except ValueError:
             raise RateCardError("The checked date must look like 2026-11-05.")
+        if out["as_of"] and out["as_of"] > date.today().isoformat():
+            raise RateCardError("A price can't have been checked in the future.")
     if "note" in data:
         out["note"] = str(data["note"] or "")[:300]
     if "enabled" in data:

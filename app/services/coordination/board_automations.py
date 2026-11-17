@@ -44,9 +44,9 @@ def _recipes(role: str) -> List[Dict[str, str]]:
     if role == "vendors":
         return [
             {"name": "vendor_chaser", "kind": "play",
-             "when": "When an order hasn't shipped its wait after the PO (its quoted lead time, or set on the order)",
+             "when": "When an order has not shipped and the waiting time after the PO is over (the vendor's quoted lead time, or the time set on the order)",
              "then": "draft one follow-up asking the vendor for its ship date; after that, staff follow up from the row"},
-            {"name": "vendor_late_chase", "kind": "reaction", "when": "When an order turns late and its wait after the PO is over",
+            {"name": "vendor_late_chase", "kind": "reaction", "when": "When an order turns late and the waiting time after the PO is over",
              "then": "draft that same follow-up straight away"},
             {"name": "order_photos", "kind": "reaction", "when": "When Status changes to waiting on photos",
              "then": "tell staff to check the photos against the drawing"},
