@@ -59,7 +59,7 @@ def test_attempting_failed_drafted_and_redirected_are_never_really_sent(smtp, mo
 
 def _to_vendor(smtp):
     """Mail that went to the vendor-side test address (a late staff alert from an earlier test is not that)."""
-    return [m for m in smtp if any('example.com' in str(r) and 'admin' not in str(r) for r in (m[0] if isinstance(m[0], (list, tuple)) else [m[0]]))]
+    return [m for m in smtp if "Email failed to send" not in str(m[1]) and any('example.com' in str(r) and 'admin' not in str(r) for r in (m[0] if isinstance(m[0], (list, tuple)) else [m[0]]))]
 
 
 def test_a_purchase_order_is_never_sent_when_the_attempting_row_cannot_be_written(smtp, monkeypatch):

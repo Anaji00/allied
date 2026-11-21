@@ -624,3 +624,36 @@ def options(role: str) -> Dict[str, Any]:
         "labels": labels, "dates": dates, "fields": ["item", "board", "status", "date", "days"] + fields,
         "people": people, "board_people": board_people, "email_to": email_to,
     }
+
+
+def gallery() -> List[Dict[str, Any]]:
+    """The automations gallery in one call: each ready-made starter with its plain title, what it would act on today, whether it is added (and its mode), when it last made a draft, and how many
+    of its drafts wait for an OK or failed. Reading only; nothing is added, run or sent."""
+    from app.core.database import SessionLocal as _S
+    from app.models.db_models import AssistantActionDB
+
+    saved = {_same_rule(r): r for r in list_recipes()}
+    stats: Dict[str, Dict[str, Any]] = {}
+    with _S() as db:
+        for status, args, created in db.query(AssistantActionDB.status, AssistantActionDB.args, AssistantActionDB.created_at).filter(AssistantActionDB.user_role == "AUTOPILOT").limit(5000):
+            play = (args or {}).get("_play") or ""
+            if not play.startswith("recipe_"):
+                continue
+            s = stats.setdefault(play, {"waiting": 0, "failed": 0, "last": None})
+            s["waiting"] += status in ("PENDING", "RUNNING")
+            s["failed"] += status == "FAILED"
+            if created and (s["last"] is None or created > s["last"]):
+                s["last"] = created
+    out = []
+    for st in STARTERS:
+        rule = _same_rule(st["recipe"])
+        mine = saved.get(rule)
+        s = stats.get(f"recipe_{mine['id']}", {}) if mine else {}
+        try:
+            today = len(preview(st["recipe"]))
+        except Exception:  # noqa: BLE001 - one starter whose board is not read yet shows 0
+            today = 0
+        out.append({"slug": st["slug"], "title": st["recipe"]["name"], "description": describe({"mode": "suggest", **st["recipe"]}), "why": st.get("why"), "saves": st.get("saves"),
+                    "added": bool(mine), "recipe_id": mine["id"] if mine else None, "enabled": bool(mine and mine["enabled"]), "mode": mine["mode"] if mine else "off",
+                    "would_act_on_today": today, "last_run": s["last"].isoformat() if s.get("last") else None, "waiting_for_ok": int(s.get("waiting", 0)), "failed": int(s.get("failed", 0))})
+    return out

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Bookmark, Loader2, Trash2 } from 'lucide-react';
+import { Bookmark, Loader2, Trash2, Pin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
@@ -19,7 +19,15 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { authFetch } from '@/lib/api';
 
-type View = { id: number | string; name: string; screen: string; filters: { query?: string }; shared?: boolean; mine?: boolean };
+type View = {
+  id: number | string;
+  name: string;
+  screen: string;
+  filters: { query?: string };
+  shared?: boolean;
+  mine?: boolean;
+  pinned?: boolean;
+};
 
 const BASE = '/api/v1/workspace/views';
 
@@ -72,6 +80,11 @@ export function SavedViews({ screen, className }: { screen: string; className?: 
     },
     onError: (e) => toast.error('The view wasn’t saved', { description: e.message }),
   });
+  const pin = useMutation({
+    mutationFn: ({ id, on }: { id: View['id']; on: boolean }) => send(`/${id}/pin`, on ? 'POST' : 'DELETE'),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['views', screen] }),
+    onError: (e) => toast.error('That couldn’t be pinned', { description: e.message }),
+  });
   const remove = useMutation({
     mutationFn: (id: View['id']) => send(`/${id}`, 'DELETE'),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['views', screen] }),
@@ -95,6 +108,20 @@ export function SavedViews({ screen, className }: { screen: string; className?: 
               <DropdownMenuItem key={v.id} onClick={() => go(v)} className="gap-2">
                 <span className="min-w-0 flex-1 truncate">{v.name}</span>
                 {v.shared && <span className="text-xs text-muted-foreground">Shared</span>}
+                {v.pinned !== undefined && (
+                  <button
+                    type="button"
+                    aria-label={v.pinned ? `Unpin ${v.name}` : `Pin ${v.name} to the top`}
+                    aria-pressed={v.pinned}
+                    className={`grid size-6 place-items-center rounded-md hover:bg-muted ${v.pinned ? 'text-foreground' : 'text-muted-foreground'}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      pin.mutate({ id: v.id, on: !v.pinned });
+                    }}
+                  >
+                    <Pin className={`size-3.5 ${v.pinned ? 'fill-current' : ''}`} />
+                  </button>
+                )}
                 {v.mine && (
                   <button
                     type="button"

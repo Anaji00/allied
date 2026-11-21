@@ -1,7 +1,7 @@
 'use client';
 
 import { useDeferredValue, useMemo, useRef, useState } from 'react';
-import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
+import { parseAsBoolean, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { ArrowRight, Mail, Plus, Search } from 'lucide-react';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
@@ -48,6 +48,8 @@ export function ShipmentsView() {
   // `id` is the link alerts and other pages already use.
   const [id, setId] = useQueryState('id', parseAsInteger);
   const [adding, setAdding] = useState(false);
+  // "+ New" lands here with ?new=true: open the form once, then clear the flag.
+  const [wantsNew, setWantsNew] = useQueryState('new', parseAsBoolean);
   const [reading, setReading] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -127,7 +129,7 @@ export function ShipmentsView() {
         const moved = s.eta_original && s.eta_current && s.eta_original !== s.eta_current;
         return (
           <span title={moved ? `First promised ${day(s.eta_original)}` : undefined}>
-            {day(c.getValue())}
+            {c.getValue() ? day(c.getValue()) : <span className="text-muted-foreground">Arrives: unknown</span>}
             {moved && <span className="text-warn"> (moved)</span>}
           </span>
         );
@@ -142,11 +144,22 @@ export function ShipmentsView() {
               {f.charAt(0).toUpperCase() + f.slice(1)}
             </ToneBadge>
           ))}
+          {(c.row.original.quiet_flag || (c.row.original.quiet_days ?? 0) >= 7) && (
+            <ToneBadge tone="warn">{c.row.original.quiet_flag ?? `Quiet ${c.row.original.quiet_days} days: ask the forwarder`}</ToneBadge>
+          )}
         </span>
       ),
     }),
-    col.accessor('forwarder', { header: 'Forwarder', meta: { className: 'max-w-40 truncate' }, cell: (c) => c.getValue() || '–' }),
-    col.accessor('owner_email', { header: 'Owner', cell: (c) => person(c.getValue(), employeeEmail) || '–' }),
+    col.accessor('forwarder', {
+      header: 'Forwarder',
+      meta: { className: 'max-w-40 truncate' },
+      cell: (c) => c.getValue() || <span className="text-muted-foreground">Not set</span>,
+    }),
+    col.accessor('owner_email', {
+      header: 'Owner',
+      cell: (c) =>
+        c.row.original.owner_name || person(c.getValue(), employeeEmail) || <span className="text-muted-foreground">No owner yet</span>,
+    }),
   ]);
 
   return (
@@ -247,8 +260,11 @@ export function ShipmentsView() {
       {canEdit && (
         <>
           <AddShipmentDialog
-            open={adding}
-            onOpenChange={setAdding}
+            open={adding || Boolean(wantsNew)}
+            onOpenChange={(o) => {
+              setAdding(o);
+              if (!o) void setWantsNew(null);
+            }}
             statuses={statuses}
             onAdded={(sid) => void setId(sid).then(() => setView('active'))}
           />

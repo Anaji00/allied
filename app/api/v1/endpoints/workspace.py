@@ -101,7 +101,27 @@ def mine(user: dict = Depends(require_viewer)) -> Dict[str, Any]:
 
 @router.get("/views", summary="My saved filters and the shared ones")
 def views(screen: Optional[str] = Query(None, max_length=24), user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
-    return my_views.list_views(user.get("email", ""), screen)
+    from app.services import organize
+
+    pins = organize.pinned_ids(user.get("email", ""))
+    rows = my_views.list_views(user.get("email", ""), screen)
+    return sorted(({**v, "pinned": v["id"] in pins} for v in rows), key=lambda v: not v["pinned"])                  # pinned ones first, then the usual order
+
+
+@router.post("/views/{view_id}/pin", summary="Pin a saved view to the top of my lists (only mine)")
+def pin_view(view_id: str, user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services import organize
+
+    if not any(v["id"] == view_id for v in my_views.list_views(user.get("email", ""))):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That view is gone.")
+    return organize.pin_view(user.get("email", ""), view_id, True)
+
+
+@router.delete("/views/{view_id}/pin", summary="Unpin a saved view")
+def unpin_view(view_id: str, user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services import organize
+
+    return organize.pin_view(user.get("email", ""), view_id, False)
 
 
 @router.post("/views", status_code=status.HTTP_201_CREATED, summary="Save a filter (the same name on the same screen replaces it)")

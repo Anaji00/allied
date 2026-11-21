@@ -513,14 +513,26 @@ export async function loginUser(email, password) {
  * handler would recurse.
  */
 export async function refreshAccessToken(refreshToken) {
-  const res = await fetch(`${API_BASE}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+  } catch (e) {
+    // No answer at all (server restarting, network): not a rejection, so the caller keeps the session and tries again.
+    const err = new Error('The server did not answer.');
+    err.transient = true;
+    throw err;
+  }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || 'Session expired');
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.detail || 'Session expired');
+    err.status = res.status;
+    // Only 401 and 403 mean the session is really over; a 5xx or a proxy error is the server having a bad moment.
+    err.transient = res.status !== 401 && res.status !== 403;
+    throw err;
   }
   return res.json();
 }

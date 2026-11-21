@@ -32,6 +32,7 @@ from app.core.logging import logger
 # Attachments larger than this are left on the message. A supplier sending a
 # 40 MB drawing set should not be read into memory by a background thread.
 _MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+_INLINE_IMAGE_BYTES = 200 * 1024
 
 
 def _decode(value: Optional[str]) -> str:
@@ -43,13 +44,86 @@ def _decode(value: Optional[str]) -> str:
         return str(value)
 
 
+def _decode_part(part: Message, payload: bytes) -> str:
+    """The part's text. An unknown or malformed charset name never stops a message being read: it falls back to UTF-8 with replacement characters."""
+    try:
+        charset = part.get_content_charset()
+    except Exception:  # noqa: BLE001
+        charset = None
+    try:
+        return payload.decode(charset or "utf-8", errors="replace")
+    except (LookupError, ValueError, TypeError, UnicodeError):
+        return payload.decode("utf-8", errors="replace")
+
+
+_SKIP_TAGS = {"script", "style", "head", "template", "noscript", "title", "svg"}
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+
+def _visible_html_text(html: str) -> str:
+    """Only the text a reader sees: script, style and comment contents and hidden elements (display:none, visibility:hidden, the hidden attribute, zero font size or opacity) are dropped."""
+    import re
+    from html.parser import HTMLParser
+
+    hidden_style = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?:px|pt|em|%)?\s*(?:;|$)|opacity\s*:\s*0(?:\.0+)?\s*(?:;|$)|max-height\s*:\s*0|(?<![-\w])height\s*:\s*0(?:px|pt|em|%)?\s*(?:;|$)"
+                              r"|mso-hide\s*:\s*all|text-indent\s*:\s*-\s*\d{3,}|(?:left|top|right|bottom)\s*:\s*-\s*\d{3,}", re.I)
+    colour = re.compile(r"(?<![-\w])color\s*:\s*([^;]+)", re.I)
+    background = re.compile(r"background(?:-color)?\s*:\s*([^;]+)", re.I)
+
+    def same_colour(style: str) -> bool:
+        c, b = colour.search(style), background.search(style)
+        return bool(c and b and c.group(1).strip().lower().replace(" ", "") == b.group(1).strip().lower().replace(" ", ""))
+
+    class _P(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.out: List[str] = []
+            self.stack: List[tuple] = []
+            self.hidden = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in _VOID_TAGS:
+                if tag == "br" and not self.hidden:
+                    self.out.append(" ")
+                return
+            a = {k: (v or "") for k, v in attrs}
+            hides = tag in _SKIP_TAGS or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or bool(hidden_style.search(a.get("style", ""))) or same_colour(a.get("style", ""))
+            self.stack.append((tag, hides))
+            if hides:
+                self.hidden += 1
+
+        def handle_endtag(self, tag):
+            for i in range(len(self.stack) - 1, -1, -1):
+                if self.stack[i][0] == tag:
+                    for _t, h in self.stack[i:]:
+                        if h:
+                            self.hidden -= 1
+                    del self.stack[i:]
+                    break
+            if tag in ("p", "div", "tr", "li") and not self.hidden:
+                self.out.append(" ")
+
+        def handle_data(self, data):
+            if not self.hidden:
+                self.out.append(data)
+
+    p = _P()
+    try:
+        p.feed(html[:400000])
+        p.close()
+    except Exception:  # noqa: BLE001 - a malformed page gives what was read so far
+        pass
+    return re.sub(r"[ \t\r\f\v]+", " ", "".join(p.out)).strip()
+
+
 def _body_text(msg: Message) -> str:
     """Extracts the plain-text body, preferring text/plain over HTML."""
     if not msg.is_multipart():
         payload = msg.get_payload(decode=True)
         if payload is None:
             return str(msg.get_payload())
-        return payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+        text = _decode_part(msg, payload)
+        return _visible_html_text(text) if msg.get_content_type() == "text/html" else text
 
     html_fallback = ""
     for part in msg.walk():
@@ -61,27 +135,31 @@ def _body_text(msg: Message) -> str:
         payload = part.get_payload(decode=True)
         if payload is None:
             continue
-        text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        text = _decode_part(part, payload)
         if part.get_content_type() == "text/plain":
             return text
         if part.get_content_type() == "text/html" and not html_fallback:
             html_fallback = text
 
     if html_fallback:
-        import re
-
-        return re.sub(r"<[^>]+>", " ", html_fallback)
+        return _visible_html_text(html_fallback)
     return ""
 
 
 def _attachments(msg: Message) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for part in msg.walk():
+        if part.is_multipart():
+            continue
         disposition = str(part.get("Content-Disposition") or "")
-        if "attachment" not in disposition.lower():
+        # an attachment is anything marked so, anything with a file name (Apple Mail sends "inline; filename=..."), and any part that is not text
+        if not ("attachment" in disposition.lower() or part.get_filename() or part.get_content_maintype() not in ("text", "multipart")):
             continue
         filename = _decode(part.get_filename()) or "attachment"
         payload = part.get_payload(decode=True)
+        if (part.get_content_maintype() == "image" and part.get("Content-ID") and "attachment" not in disposition.lower()
+                and payload is not None and len(payload) <= _INLINE_IMAGE_BYTES):
+            continue                                                       # a signature logo or a tracking pixel the body shows inline
         if payload is None or len(payload) > _MAX_ATTACHMENT_BYTES:
             continue
         out.append({
@@ -92,25 +170,42 @@ def _attachments(msg: Message) -> List[Dict[str, Any]]:
     return out
 
 
+_PUBLIC_SUFFIXES = {"co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp", "com.br", "com.cn", "com.mx", "co.in", "co.za", "com.sg", "com.hk", "com.tw", "com.tr"}
+
+
+def _same_org(sender_domain: str, signing_domain: str) -> bool:
+    """True when the signing domain is the sender's own domain or a parent of it that is a real registrable domain: never a bare suffix like "com" or "co.uk"."""
+    d = (signing_domain or "").strip(".").lower()
+    if not sender_domain or d.count(".") < 1 or d in _PUBLIC_SUFFIXES or len(d.rsplit(".", 1)[-1]) < 2:
+        return False
+    return sender_domain == d or sender_domain.endswith("." + d)
+
+
 def _authenticated(msg: Message, sender: str) -> Optional[bool]:
     """Gmail's verdict on the sender, from its Authentication-Results header: dmarc=pass, or a
     passing DKIM/SPF check for the sender's own domain, is genuine; dmarc=fail is forged.
     None when there is no verdict to read."""
     import re
 
-    results = " ".join(str(v) for v in (msg.get_all("Authentication-Results") or [])).lower()
-    if not results:
+    # Only our own mail server's verdict counts. A sender can write an "Authentication-Results" header of their own, so only the TOPMOST one (the server prepends its own)
+    # and any whose authserv-id is the mail provider's are read; if any of those says fail, fail beats pass.
+    headers = [str(v) for v in (msg.get_all("Authentication-Results") or [])]
+    if not headers:
         return None
+    everything = " ".join(headers).lower()
+    if re.search(r"\bdmarc=fail\b", everything):                        # a "fail" written anywhere only ever hurts the sender who wrote it, so it always counts
+        return False
+    results = headers[0].lower()                                          # a "pass" counts only from the topmost header: the one our own server wrote last
     domain = (sender or "").rsplit("@", 1)[-1].lower()
-    if re.search(r"\bdmarc=pass\b", results):
-        return True
     if re.search(r"\bdmarc=fail\b", results):
         return False
+    if re.search(r"\bdmarc=pass\b", results):
+        return True
     for m in re.finditer(r"\bdkim=pass\b[^;]*?header\.(?:d|i)=@?([a-z0-9.-]+)", results):
-        if domain and (m.group(1) == domain or domain.endswith("." + m.group(1))):
+        if _same_org(domain, m.group(1)):
             return True
     for m in re.finditer(r"\bspf=pass\b[^;]*?smtp\.mailfrom=[^@\s;]*@?([a-z0-9.-]+)", results):
-        if domain and (m.group(1) == domain or domain.endswith("." + m.group(1))):
+        if _same_org(domain, m.group(1)):
             return True
     return False if re.search(r"\b(?:spf|dkim)=(?:fail|softfail)\b", results) else None
 
@@ -160,7 +255,9 @@ class MailboxPoller:
             "orders_created": 0,
             "errors": 0,
             "last_poll_at": None,
+            "last_ok_at": None,
             "last_error": None,
+            "last_error_at": None,
         }
 
     # ----------------------------------------------------------------- state
@@ -217,9 +314,11 @@ class MailboxPoller:
         while not self._stop.is_set():
             try:
                 self.poll_once()
+                self._stats["last_ok_at"] = datetime.now(timezone.utc).isoformat()
             except Exception as exc:  # noqa: BLE001 - the loop outlives any single failure
                 self._stats["errors"] += 1
                 self._stats["last_error"] = f"{type(exc).__name__}: {exc}"
+                self._stats["last_error_at"] = datetime.now(timezone.utc).isoformat()
                 logger.error(f"Mailbox poll failed: {exc}")
             self._stop.wait(max(15, settings.IMAP_POLL_SECONDS))
 
@@ -293,6 +392,21 @@ class MailboxPoller:
         return out
 
     def _one(self, msg: Message, folder: str, act_after: datetime) -> Optional[str]:
+        """Handles one new message (see _one_inner), then lets the lead engine read it: a reply, bounce, out-of-office or unsubscribe from a lead is marked by rule. Only mail that did not fail the sender check counts."""
+        result = self._one_inner(msg, folder, act_after)
+        if result is not None:
+            try:
+                from app.services import leads
+
+                sender = email.utils.parseaddr(msg.get("From", ""))[1] or ""
+                message_id = _decode(msg.get("Message-ID")).strip() or _fallback_id(msg)
+                leads.on_mail_by_message(message_id, sender, _decode(msg.get("Subject")), _body_text(msg), trusted=_authenticated(msg, sender) is not False,
+                                         dsn=msg.get_content_type() == "multipart/report" and "delivery-status" in str(msg.get("Content-Type") or "").lower())
+            except Exception as exc:  # noqa: BLE001 - the email is logged either way
+                logger.info(f"Lead mail rules skipped: {type(exc).__name__}")
+        return result
+
+    def _one_inner(self, msg: Message, folder: str, act_after: datetime) -> Optional[str]:
         """Handles one new message and logs it: ingested / orders_created / logged_only, or None
         if it was logged already (another poll got there first)."""
         from app.services import mail_log, mail_tags

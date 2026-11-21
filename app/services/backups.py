@@ -5,9 +5,12 @@ After each backup a restore check opens the copy, runs SQLite's integrity check 
 database, so a backup that cannot be restored is found the same night, not the day it is needed. Old backups are removed after
 BACKUP_KEEP_DAYS. Nothing here writes to monday or Sage, and nothing but new backup files is ever written."""
 
+import os
 import re
 import shutil
 import sqlite3
+import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -36,24 +39,47 @@ def folder() -> Path:
     return base
 
 
+def _made(name: str) -> Optional[datetime]:
+    """When a backup file says it was made, or None for a name that is not a real date (allied-99999999-999999.db passes the name pattern but is not a time): such a file is ignored, never an error."""
+    m = _NAME.match(name or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _plausible(made: Optional[datetime], now: Optional[datetime] = None) -> bool:
+    """A real backup is not dated in the future (a planted allied-2099... file would otherwise count as the newest and make every real backup "not due")."""
+    return made is not None and made <= (now or datetime.now(timezone.utc)) + timedelta(days=1)
+
+
 def listing() -> List[Dict[str, Any]]:
     out = []
     for p in sorted(folder().glob("allied-*.db"), reverse=True):
-        m = _NAME.match(p.name)
-        if m:
-            out.append({"name": p.name, "size": p.stat().st_size, "made": datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc).isoformat()})
+        made = _made(p.name)
+        if _plausible(made):
+            try:
+                out.append({"name": p.name, "size": p.stat().st_size, "made": made.isoformat()})
+            except OSError:
+                continue
     return out
 
 
 def _counts(path: Path) -> Dict[str, int]:
-    with sqlite3.connect(f"file:{path}?mode=ro&immutable=1" if path != _live_path() else f"file:{path}?mode=ro", uri=True) as c:
+    from contextlib import closing
+
+    with closing(sqlite3.connect(f"file:{path}?mode=ro&immutable=1" if path != _live_path() else f"file:{path}?mode=ro", uri=True)) as c:      # closed, so the file can be moved or removed afterwards
         have = {r[0] for r in c.execute("select name from sqlite_master where type='table'")}
         return {t: c.execute(f'select count(*) from "{t}"').fetchone()[0] for t in COUNT_TABLES if t in have}
 
 
 def check(backup: Path, live: Path) -> Dict[str, Any]:
     """Opens the backup read-only: SQLite's own integrity check, and the same tables with about the same number of rows as the live one."""
-    with sqlite3.connect(f"file:{backup}?mode=ro&immutable=1", uri=True) as c:      # immutable: opening it never creates side files
+    from contextlib import closing
+
+    with closing(sqlite3.connect(f"file:{backup}?mode=ro&immutable=1", uri=True)) as c:      # immutable: opening it never creates side files
         integrity = c.execute("pragma integrity_check").fetchone()[0]
     mine, theirs = _counts(backup), _counts(live)
     # The live database may have moved on since the copy was taken, so only a table that LOST rows is a problem.
@@ -61,8 +87,88 @@ def check(backup: Path, live: Path) -> Dict[str, Any]:
     return {"integrity": integrity, "ok": integrity == "ok" and not lost, "lost": lost, "rows": mine}
 
 
-def run(now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Makes a backup, checks it, and removes the ones past the keep time. Never raises: the result says what happened."""
+def staging_dir() -> Path:
+    """Where a backup is made first: the machine's own temporary disk (inside a container, its own filesystem), not the shared folder, because a copy written straight onto a bind-mounted
+    folder (Docker on Windows) can fail with "disk I/O error" half way."""
+    import tempfile
+
+    d = Path(tempfile.gettempdir()) / "allied-backup-staging"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def pending() -> List[Path]:
+    """Backups that were made and checked but could not yet be put in the backup folder; they are kept and delivered on the next pass."""
+    from app.core.database import database_problems
+
+    try:
+        found = [p for p in sorted(staging_dir().glob("allied-*.db")) if _plausible(_made(p.name))]      # a name with an impossible or future date is not a backup of ours
+    except OSError:
+        return []
+    return [p for p in found if p.stat().st_size > 0 and not database_problems(p)]                     # and only a file that opens and passes the database check is ever delivered
+
+
+def _retry(fn, tries: int = 5, waits=(0.5, 1.0, 2.0, 3.0), sleep=None):
+    """Calls fn up to `tries` times with a growing wait; returns (result, None) or (None, last error)."""
+    import time
+
+    sleep = sleep or time.sleep
+    last_exc: Optional[BaseException] = None
+    for n in range(tries):
+        try:
+            return fn(), None
+        except (OSError, sqlite3.Error) as exc:
+            last_exc = exc
+            if n < tries - 1:
+                sleep(waits[min(n, len(waits) - 1)])
+    return None, last_exc
+
+
+def _take(live: Path, tmp: Path) -> None:
+    """The consistent copy, made with SQLite's backup call into the staging file."""
+    tmp.unlink(missing_ok=True)
+    src = sqlite3.connect(f"file:{live}?mode=ro", uri=True)
+    dst = sqlite3.connect(tmp)
+    try:
+        src.backup(dst)
+        dst.execute("pragma journal_mode=delete")      # the live file is in WAL mode; a backup is one plain file, no -wal / -shm beside it
+    finally:
+        dst.close()
+        src.close()
+
+
+def _deliver(tmp: Path, target: Path) -> Optional[BaseException]:
+    """Puts the finished, checked file in the backup folder, with retries; the folder copy is written under a temporary name and renamed, so a half file is never taken for a backup. None when done."""
+    def once() -> None:
+        part = target.with_name(target.name + ".part")
+        part.unlink(missing_ok=True)
+        shutil.copyfile(tmp, part)
+        if _sha(part) != _sha(tmp):
+            part.unlink(missing_ok=True)
+            raise OSError("the copy in the backup folder differs from the checked file")
+        part.replace(target)
+
+    _done, err = _retry(once)
+    return err
+
+
+_state = {"failures": 0}
+
+
+_run_lock = threading.Lock()
+
+
+def run(now: Optional[datetime] = None, sleep=None) -> Dict[str, Any]:
+    """One backup run at a time: the nightly worker and someone pressing "Run now" are served one after the other (see _run)."""
+    with _run_lock:
+        return _run(now, sleep)
+
+
+def _run(now: Optional[datetime] = None, sleep=None) -> Dict[str, Any]:
+    """Makes a backup, checks it, and removes the ones past the keep time. Never raises: the result says what happened.
+
+    The backup is made and checked on the local temporary disk first, then copied into the backup folder with retries. If the folder cannot be written, the checked file is kept and tried again on the next pass
+    (not a day later)."""
     live = _live_path()
     if live is None or not live.is_file():
         out = {"ok": False, "error": "The database is not a local SQLite file, so there is nothing to copy." if live is None
@@ -70,33 +176,85 @@ def run(now: Optional[datetime] = None) -> Dict[str, Any]:
         last.update(out, at=datetime.now(timezone.utc).isoformat())
         return out
     now = now or datetime.now(timezone.utc)
-    target = folder() / f"allied-{now.strftime('%Y%m%d-%H%M%S')}.db"
+    from app.core.database import database_problems
+
+    damage = database_problems(live)
+    if damage:                                                  # a damaged database is told at once, plainly: this is not an ordinary failed try
+        out = {"ok": False, "damaged": True, "error": "The live database file is damaged: " + " ".join(damage[:3])}
+        logger.critical(f"Backup not made: {out['error']}")
+        last.clear()
+        last.update(out, at=datetime.now(timezone.utc).isoformat())
+        _state["failures"] += 1
+        _state["last_fail_at"] = last["at"]
+        _tell(out)
+        return out
     try:
-        src = sqlite3.connect(f"file:{live}?mode=ro", uri=True)
-        dst = sqlite3.connect(target)
-        try:
-            src.backup(dst)
-            dst.execute("pragma journal_mode=delete")      # the live file is in WAL mode; a backup is one plain file, no -wal / -shm beside it
-        finally:
-            dst.close()
-            src.close()
-        verdict = check(target, live)
-        pruned = prune(now)
-        out = {"ok": verdict["ok"], "file": target.name, "size": target.stat().st_size, "check": verdict, "pruned": pruned}
-        copy = copy_off_server(target, live, now) if verdict["ok"] else {"configured": bool(settings.BACKUP_COPY_DIR), "ok": False, "error": "not copied: the backup did not pass its check"}
-        out["copy"] = copy
-        if copy["configured"] and not copy["ok"]:
-            out["ok"] = False
-            out["error"] = f"The backup is fine, but its second copy failed: {copy.get('error')}"
+        folder_ = folder()
+    except OSError as exc:
+        folder_ = None
+        folder_error = exc
+    delivered_old = []
+    if folder_ is not None:
+        for stale in folder_.glob("allied-*.db.part"):                         # half copies left by an interrupted copy (runs are one at a time, so none is in use)
+            stale.unlink(missing_ok=True)
+        for old in pending():
+            if not (folder_ / old.name).exists() and _deliver(old, folder_ / old.name) is None:
+                old.unlink(missing_ok=True)
+                delivered_old.append(old.name)
+            elif (folder_ / old.name).exists():
+                old.unlink(missing_ok=True)
+    name = f"allied-{now.strftime('%Y%m%d-%H%M%S')}.db"
+    tmp = staging_dir() / f"{name}.{uuid.uuid4().hex[:8]}.tmp"                          # a name of its own for this run, so nothing else can hold or delete it
+    out: Dict[str, Any]
+    try:
+        _x, err = _retry(lambda: _take(live, tmp), tries=3, waits=(0.5, 1.5), sleep=sleep)
+        if err is not None:
+            raise err
+        verdict = check(tmp, live)
+        copy_problems = database_problems(tmp)
+        if copy_problems:
+            verdict = {**verdict, "ok": False, "unreadable": copy_problems[:3]}
         if not verdict["ok"]:
-            logger.error(f"Backup {target.name} failed its restore check: {verdict}")
+            logger.error(f"Backup {name} failed its restore check: {verdict}")
+            tmp.unlink(missing_ok=True)
+            out = {"ok": False, "file": name, "check": verdict, "error": "The new backup did not pass its restore check, so it was thrown away."}
+        else:
+            target = folder_ / name if folder_ is not None else None
+            err = _deliver(tmp, target) if target is not None else folder_error
+            if err is not None:
+                logger.warning(f"Backup {name} is made and checked but could not be copied to the backup folder yet: {err}")
+                try:
+                    os.replace(tmp, staging_dir() / name)                              # kept under its real name: pending() will deliver it on the next pass
+                except OSError:
+                    pass
+                out = {"ok": False, "file": name, "kept_for_retry": True, "error": f"{type(err).__name__}: {err}"[:300], "check": verdict}
+            else:
+                tmp.unlink(missing_ok=True)
+                pruned = prune(now)
+                out = {"ok": True, "file": name, "size": target.stat().st_size, "check": verdict, "pruned": pruned}
+                copy = copy_off_server(target, live, now)
+                out["copy"] = copy
+                if copy["configured"] and not copy["ok"]:
+                    out["ok"] = False
+                    out["error"] = f"The backup is fine, but its second copy failed: {copy.get('error')}"
     except Exception as exc:  # noqa: BLE001 - reported in the result and the system screen, never crashing the worker
         logger.exception(f"Backup failed: {exc}")
-        out = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        out = {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+    if delivered_old:
+        out["delivered_earlier"] = delivered_old
     last.clear()
     last.update(out, at=datetime.now(timezone.utc).isoformat())
-    if not out["ok"]:
-        _tell(out)
+    if out["ok"]:
+        _state["failures"] = 0
+        _state["last_ok_at"] = datetime.now(timezone.utc).isoformat()
+    else:
+        _state["failures"] += 1
+        _state["last_fail_at"] = datetime.now(timezone.utc).isoformat()
+        from app.core.database import invalidate_check
+
+        invalidate_check()                                                    # a failed backup may mean a bad file: the next health look checks again
+        if _state["failures"] >= 3:                  # told once the problem has repeated (and then once a day), not at every try
+            _tell(out)
     return out
 
 
@@ -149,9 +307,9 @@ def copy_off_server(backup: Path, live: Path, now: Optional[datetime] = None) ->
             return {"configured": True, "ok": False, "error": "the copy did not pass the integrity check"}
         tmp.replace(final)
         cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=max(1, settings.BACKUP_KEEP_DAYS))
-        olds = sorted((p for p in target_dir.glob("allied-*.db") if _NAME.match(p.name)), reverse=True)
+        olds = sorted((p for p in target_dir.glob("allied-*.db") if _plausible(_made(p.name))), reverse=True)
         for p in olds[max(0, settings.BACKUP_KEEP_MIN):]:
-            if datetime.strptime(_NAME.match(p.name).group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc) < cutoff:
+            if _made(p.name) < cutoff:
                 p.unlink(missing_ok=True)
         return {"configured": True, "ok": True, "file": final.name, "at": datetime.now(timezone.utc).isoformat()}
     except Exception as exc:  # noqa: BLE001 - reported in the result and the health line
@@ -166,12 +324,12 @@ def copy_line(now: Optional[datetime] = None) -> Dict[str, Any]:
     if target_dir is None:
         return {"state": "not_set_up", "text": "No second copy: set BACKUP_COPY_DIR to another disk or a synced folder, so a lost server does not take the backups with it."}
     try:
-        have = sorted((p.name for p in target_dir.glob("allied-*.db") if _NAME.match(p.name)), reverse=True)
+        have = sorted((p.name for p in target_dir.glob("allied-*.db") if _plausible(_made(p.name))), reverse=True)
     except OSError as exc:
         return {"state": "not_made", "text": f"Second copy: not made. The folder cannot be read ({type(exc).__name__})."}
     if not have:
         return {"state": "not_made", "text": "Second copy: not made yet."}
-    made = datetime.strptime(_NAME.match(have[0]).group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+    made = _made(have[0])
     fresh = made > now - timedelta(hours=settings.BACKUP_EVERY_HOURS * 2)
     return {"state": "made" if fresh else "not_made", "newest": have[0], "made": made.isoformat(),
             "text": f"Second copy: made {made:%Y-%m-%d %H:%M} UTC." if fresh else f"Second copy: NOT made recently (the newest is from {made:%Y-%m-%d %H:%M} UTC)."}
@@ -194,23 +352,64 @@ def prune(now: Optional[datetime] = None) -> int:
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max(1, settings.BACKUP_KEEP_DAYS))
     items = listing()
-    removed = 0
-    for it in items[max(0, settings.BACKUP_KEEP_MIN):]:
-        if datetime.fromisoformat(it["made"]) < cutoff:
+    removed, good_seen = 0, 0
+    for it in items:                                                                    # newest first
+        good = _is_good(folder() / it["name"])
+        good_seen += int(good)
+        old = datetime.fromisoformat(it["made"]) < cutoff
+        keep_for_safety = good and good_seen <= max(0, settings.BACKUP_KEEP_MIN)           # the newest N GOOD backups are never deleted, whatever newer (empty or damaged) files exist
+        if old and not keep_for_safety:
             for suffix in ("", "-wal", "-shm"):
                 (folder() / (it["name"] + suffix)).unlink(missing_ok=True)
             removed += 1
     return removed
 
 
+def _is_good(path: Path) -> bool:
+    """A backup that is really there and opens: not empty, a SQLite file, and it passes the quick check."""
+    from contextlib import closing
+
+    try:
+        if path.stat().st_size < 100:
+            return False
+        with open(path, "rb") as f:
+            if f.read(16) != b"SQLite format 3\x00":
+                return False
+        with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro&immutable=1", uri=True, timeout=5)) as c:
+            return [str(r[0]) for r in c.execute("pragma quick_check")] == ["ok"]
+    except (OSError, sqlite3.Error):
+        return False
+
+
 def due(now: Optional[datetime] = None) -> bool:
     """True when there is no backup from the last BACKUP_EVERY_HOURS hours (so a restart never makes two, and a missed night is made up)."""
     now = now or datetime.now(timezone.utc)
     items = listing()
+    if pending() or (last and last.get("ok") is False and last.get("at")):               # a checked file is waiting to be delivered, or the last pass failed: try again after a few minutes
+        again = datetime.fromisoformat(last["at"]) + timedelta(minutes=settings.BACKUP_RETRY_MINUTES) if last.get("at") else now
+        if now >= again:
+            return True
     return not items or datetime.fromisoformat(items[0]["made"]) < now - timedelta(hours=settings.BACKUP_EVERY_HOURS)
+
+
+def plain_text(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """"The last backup worked at <time>" or "The last backup failed at <time>; it will try again at <time>", with the raw error only in `details`."""
+    when = lambda iso: datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC")      # noqa: E731
+    items = listing()
+    ran = last.get("at")
+    if ran and last.get("ok") is False:
+        again = datetime.fromisoformat(ran) + timedelta(minutes=settings.BACKUP_RETRY_MINUTES)
+        kept = " The finished backup is kept safely and will be copied across." if last.get("kept_for_retry") else ""
+        return {"state": "failed", "text": f"The last backup failed at {when(ran)}; it will try again at {again:%H:%M} UTC.{kept}", "details": str(last.get("error") or last.get("check") or "")[:400],
+                "last_good": items[0]["made"] if items else None}
+    if ran and last.get("ok"):
+        return {"state": "ok", "text": f"The last backup worked at {when(ran)}.", "details": "", "last_good": items[0]["made"] if items else None}
+    if items:
+        return {"state": "unknown", "text": f"The newest backup was made at {when(items[0]['made'])}. No backup has run since the app started.", "details": "", "last_good": items[0]["made"]}
+    return {"state": "none", "text": "No backup has been made yet.", "details": "", "last_good": None}
 
 
 def status() -> Dict[str, Any]:
     items = listing()
-    return {"enabled": settings.BACKUP_ENABLED, "every_hours": settings.BACKUP_EVERY_HOURS, "keep_days": settings.BACKUP_KEEP_DAYS,
+    return {"summary": plain_text(), "waiting_to_copy": [p.name for p in pending()], "enabled": settings.BACKUP_ENABLED, "every_hours": settings.BACKUP_EVERY_HOURS, "keep_days": settings.BACKUP_KEEP_DAYS,
             "count": len(items), "newest": items[0] if items else None, "last_run": dict(last), "backups": items[:30], "copy": copy_line()}

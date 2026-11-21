@@ -63,7 +63,7 @@ export function routeFor(hit: SearchHit): string {
     return routeFor({ type: kind, title: hit.title, ref: rest.join(':'), link: '' });
   }
   // The server's link points at the record itself; the board route is "/" here. Without a link, it is built from the type and reference.
-  if (hit.link) return hit.link.replace(/^\/boards(?=[?/]|$)/, '/');
+  if (hit.link) return hit.link;
   switch (hit.type) {
     case 'order':
       return `/orders?order=${enc(hit.ref)}`;
@@ -208,6 +208,27 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
               <CommandSeparator />
             </>
           ) : null}
+          {typed.trim().length >= 2 && (
+            <CommandGroup heading={`Add “${typed.trim().slice(0, 30)}”`}>
+              {(
+                [
+                  ['job', 'a job'],
+                  ['po', 'a purchase order'],
+                  ['product', 'a product or part'],
+                  ['board_row', 'a row on a board'],
+                ] as const
+              ).map(([kind, label]) => (
+                <CommandItem
+                  key={kind}
+                  forceMount
+                  value={`add ${kind} ${typed}`}
+                  onSelect={() => run(() => window.dispatchEvent(new CustomEvent('allied:new', { detail: { kind, text: typed.trim() } })))}
+                >
+                  <FilePlus /> Add {label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
           <CommandGroup heading="Do something">
             {hasRole('OPERATOR') && (
               <CommandItem
@@ -218,6 +239,13 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
                 <FilePlus /> New order
               </CommandItem>
             )}
+            <CommandItem
+              value="Compare two drawings"
+              keywords={['drawing', 'revision', 'overlay', 'compare']}
+              onSelect={() => run(() => window.dispatchEvent(new Event('allied:compare')))}
+            >
+              <FilePlus /> Compare two drawings
+            </CommandItem>
             <CommandItem
               forceMount
               value="Ask the assistant"

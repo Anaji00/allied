@@ -457,6 +457,11 @@ def suggest_item(raw_text: str, actor="system"):
     )
 
     def call(p):
+        top = candidates[0]
+        exact = next((c for c in candidates if c["item_id"].upper() == raw_text.strip().upper()), None)
+        if exact or top["score"] >= 97:                      # a part number that matches outright is settled without asking the AI
+            pick = exact or top
+            return ItemChoice(item_id=pick["item_id"], reason="The part number matches directly.", confidence=1.0 if exact else round(min(1.0, pick["score"] / 100), 2))
         choice = p.structured(system, prompt, ItemChoice)
         if choice.item_id and choice.item_id not in {c["item_id"] for c in candidates}:
             # A model that names something outside the list is not trusted.

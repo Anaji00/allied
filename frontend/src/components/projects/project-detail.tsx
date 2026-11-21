@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { downloadSubmissionFile, reviewSubmission, submitDesignDocs } from '@/lib/api';
-import { day, dateTime, person } from '@/lib/format';
+import { day, dateTime, person, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { RequiredForm, missingAnswers, useMilestoneForm, useTranslatedForm, type Answers } from './required-form';
 import { useLanguage } from '@/lib/language';
@@ -212,7 +212,7 @@ function MilestoneBody({
 }
 
 function SubmissionItem({ submission: s, me }: { submission: Submission; me: string }) {
-  const state = SUBMISSION[s.status] ?? { label: s.status, tone: 'neutral' as const };
+  const state = SUBMISSION[s.status] ?? { label: words(s.status), tone: 'neutral' as const };
   const download = useMutation({
     mutationFn: ({ index, name }: { index: number; name: string }) => downloadSubmissionFile(s.id, index, name),
     onError: (e) => toast.error('Couldn’t download the file', { description: e.message }),

@@ -35,7 +35,7 @@ function hrefFor(type: string, ref: string) {
     case 'milestone':
       return `/projects?milestone=${encodeURIComponent(ref)}`;
     case 'board_item':
-      return ref ? `/?item=${encodeURIComponent(ref)}` : '/';
+      return ref ? `/boards?item=${encodeURIComponent(ref)}` : '/boards';
     default:
       return '/';
   }
@@ -147,7 +147,7 @@ export function MineView() {
         {m.notes.map((r, i) => (
           <Line
             key={`n${i}`}
-            href="/"
+            href="/boards"
             title={first(r, ['item_name', 'title', 'item_id']) || 'Note from management'}
             meta={first(r, ['body', 'text'])}
             tail={r.urgent ? <ToneBadge tone="bad">Urgent</ToneBadge> : undefined}

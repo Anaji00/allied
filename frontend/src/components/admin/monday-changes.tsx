@@ -10,7 +10,7 @@ import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { authFetch } from '@/lib/api';
-import { dateTime, since } from '@/lib/format';
+import { dateTime, since, words } from '@/lib/format';
 
 const BASE = '/api/v1/monday-push';
 
@@ -191,7 +191,7 @@ export function MondayChanges() {
         <ul className="grid gap-3">
           {rows.map((c) => {
             const d = detail.get(c.id);
-            const st = LABEL[c.status as State] ?? { label: c.status, tone: 'neutral' as Tone };
+            const st = LABEL[c.status as State] ?? { label: words(c.status), tone: 'neutral' as Tone };
             return (
               <li key={c.id} className="grid gap-2 rounded-lg border bg-card p-4 text-[13px]">
                 <div className="flex flex-wrap items-center gap-2">

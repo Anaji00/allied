@@ -22,6 +22,9 @@ config = context.config
 if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
+from app.core.database import assert_may_use_database  # noqa: E402
+
+assert_may_use_database(_get_db_url())                                  # a migration run by hand never reaches the real file unless it is allowed
 config.set_main_option("sqlalchemy.url", _get_db_url().replace("%", "%%"))
 
 target_metadata = Base.metadata

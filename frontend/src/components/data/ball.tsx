@@ -133,7 +133,7 @@ export function HandOver({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Who is it waiting on?</DialogTitle>
+          <DialogTitle>Hand off</DialogTitle>
           <DialogDescription>The person gets told, and the wait starts again from today.</DialogDescription>
         </DialogHeader>
         <form
@@ -198,7 +198,7 @@ export function HandOver({
           </Button>
           <Button type="submit" form="hand-over" disabled={save.isPending || !person.trim()}>
             {save.isPending && <Loader2 className="animate-spin" />}
-            Pass to someone
+            Hand off
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -206,7 +206,7 @@ export function HandOver({
   );
 }
 
-/** "It is waiting on …" for one item, with Pass to someone and Done. Says nothing until the server has it. */
+/** "It is waiting on …" for one item, with Hand off and Done. Says nothing until the server has it. */
 export function BallStrip({ itemType, itemRef }: { itemType: ItemType; itemRef: string }) {
   const { hasRole } = useAuth();
   const client = useQueryClient();
@@ -262,7 +262,7 @@ export function BallStrip({ itemType, itemRef }: { itemType: ItemType; itemRef: 
         {canWrite && (
           <span className="ml-auto flex gap-2">
             <Button size="sm" variant="outline" onClick={() => setHanding(true)}>
-              {open ? 'Pass to someone' : 'Who is it waiting on?'}
+              {open ? 'Hand off' : 'Who is it waiting on?'}
             </Button>
             {open && (
               <Button size="sm" variant="ghost" disabled={done.isPending} onClick={() => done.mutate()}>

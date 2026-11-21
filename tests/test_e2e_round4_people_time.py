@@ -94,7 +94,7 @@ def test_everything_answers_sensibly_before_the_boards_are_read_again(client, mo
         activity._logs.clear()
     try:
         monkeypatch.setattr(settings, "MONDAY_VENDOR_BOARD_ID", "18394243717")
-        assert client.get("/api/v1/boards").json() == []
+        assert [b for b in client.get("/api/v1/boards").json() if b["board_id"] != "jobs"] == []
         assert client.get("/api/v1/boards/18394243717/timeline").status_code == 404
         assert client.get("/api/v1/boards/18394243717/dashboard").status_code == 404
         starters = client.get("/api/v1/autopilot/recipes/starters", params={"preview": True})

@@ -43,7 +43,7 @@ def _hit(kind: str, title: str, sub: str, ref: str, link: str) -> Dict[str, Any]
     return {"type": kind, "title": title[:140], "sub": sub[:160], "ref": ref, "link": link}
 
 
-def search(q: str, limit: int = PER_KIND) -> Dict[str, Any]:
+def search(q: str, limit: int = PER_KIND, staff: bool = True) -> Dict[str, Any]:
     terms = _terms(q)
     if not terms or sum(len(t) for t in terms) < 2:
         return {"query": q, "total": 0, "groups": []}
@@ -63,7 +63,7 @@ def search(q: str, limit: int = PER_KIND) -> Dict[str, Any]:
             _hit("rfq", f"{r.number} · {r.customer or r.subject}", f"{r.status} · {r.subject}", r.number, item_link("rfq", str(r.id))) for r in rows]})
         rows = db.query(VendorJobDB).filter(*_all_terms([VendorJobDB.vendor, VendorJobDB.po_number, VendorJobDB.description, VendorJobDB.status], terms)
                                             ).order_by(VendorJobDB.id.desc()).limit(limit).all()
-        groups.append({"type": "vendor_job", "label": "Vendor jobs", "hits": [
+        groups.append({"type": "vendor_job", "label": "Vendor jobs", "hits": [] if not staff else [
             _hit("vendor_job", f"{j.vendor} · PO {j.po_number or '-'}", f"{j.status or ''} · {j.description}", str(j.id), item_link("vendor_job", str(j.id))) for j in rows]})
         rows = db.query(ShipmentDB).filter(*_all_terms([ShipmentDB.reference, ShipmentDB.container_no, ShipmentDB.awb, ShipmentDB.forwarder,
                                                          ShipmentDB.carrier, ShipmentDB.origin, ShipmentDB.destination], terms)
@@ -73,17 +73,75 @@ def search(q: str, limit: int = PER_KIND) -> Dict[str, Any]:
             for s in rows]})
         rows = db.query(ItemUpdateDB).filter(ItemUpdateDB.deleted_at.is_(None), *_all_terms([ItemUpdateDB.body], terms)
                                              ).order_by(ItemUpdateDB.created_at.desc()).limit(limit).all()
-        groups.append({"type": "comment", "label": "Comments", "hits": [
+        groups.append({"type": "comment", "label": "Comments", "hits": [] if not staff else [
             _hit("comment", c.body.replace("\n", " "), f"{c.author_name or c.author_email} on {c.item_type} {c.item_ref}", f"{c.item_type}:{c.item_ref}", item_link(c.item_type, c.item_ref))
             for c in rows]})
     with SessionLocal() as db:
         rows = db.query(ItemFileDB).filter(ItemFileDB.deleted_at.is_(None), *_all_terms([ItemFileDB.filename], terms)).order_by(ItemFileDB.id.desc()).limit(limit).all()
         groups.append({"type": "file", "label": "Files", "hits": [
             _hit("file", f.filename, f"{f.item_type} {f.item_ref} · {f.uploaded_by}", str(f.id), f"/api/v1/files/{f.id}/download") for f in rows]})
+    _jobs_by_monday_name(groups, terms, limit)
     groups.append(_board_rows(terms, limit))
+    if staff:
+        groups.append(_pending_rows(terms, limit))                                   # staff only, and by the row's name: its cells (a cost, a customer) are not searched
     groups.append(_people(terms, limit))
     groups = [g for g in groups if g["hits"]]
+    for g in groups:                                                                  # every hit says in plain words where it is
+        for h in g["hits"]:
+            h.setdefault("where", _where(g, h))
     return {"query": q, "total": sum(len(g["hits"]) for g in groups), "groups": groups}
+
+
+_WHERE = {"job": "Job, on the Jobs board", "order": "Sales order, under Orders", "rfq": "Quote request, under Orders", "vendor_job": "Vendor order", "shipment": "Shipment",
+          "file": "A file on an item", "person": "A person in Contacts", "pending_row": "A new row waiting to be pushed to monday"}
+
+
+def _where(group: Dict[str, Any], hit: Dict[str, Any]) -> str:
+    t = hit["type"]
+    if t == "board_item":
+        return f"A row on the board {hit['sub'].split(' · ')[0]}" if hit.get("sub") else "A row on a board"
+    if t == "comment":
+        return f"A comment ({hit['sub']})"
+    return _WHERE.get(t, group.get("label") or t)
+
+
+def _jobs_by_monday_name(groups: List[Dict[str, Any]], terms: List[str], limit: int) -> None:
+    """A job is also found by the name of the monday item it is linked to (or seems to be): a person types what the board shows."""
+    from app.services import jobs_board
+
+    job_group = next((g for g in groups if g["type"] == "job"), None)
+    if job_group is None:
+        return
+    have = {h["ref"] for h in job_group["hits"]}
+    try:
+        for r in jobs_board.rows():
+            name = str(r.get("monday_item_name") or "")
+            if r.get("job") and r["id"] not in have and name and all(t in name.casefold() for t in terms) and len(job_group["hits"]) < limit:
+                job_group["hits"].append({**_hit("job", f"{r['id']} · {r['name']}", f"on monday as '{name}'" + (" (suggested link)" if r.get("link_state") == "suggested" else ""), r["id"], item_link("job", r["id"])),
+                                          "where": "Job, found by its monday item's name"})
+    except Exception:  # noqa: BLE001 - the rest of the search still answers
+        return
+
+
+def _pending_rows(terms: List[str], limit: int) -> Dict[str, Any]:
+    """New rows made on a board and not pushed yet: by name or any cell. They are rows like any other, so they are found like any other."""
+    from app.models.db_models import MondayChangeDB
+    from app.services import monday_push
+    from app.services.coordination import boards
+
+    hits: List[Dict[str, Any]] = []
+    with SessionLocal() as db:
+        for r in db.query(MondayChangeDB).filter(MondayChangeDB.status == "STAGED", MondayChangeDB.kind == "create_item").order_by(MondayChangeDB.id.desc()).limit(500):
+            pl = r.payload or {}
+            hay = str(pl.get("item_name") or "").casefold()
+            if all(t in hay for t in terms):
+                b = boards._mirror.get(str(r.board_id)) or {}
+                g = next((x["title"] for x in b.get("groups", []) if x["id"] == pl.get("group_id")), "")
+                hits.append({**_hit("pending_row", str(pl.get("item_name") or "(no name)"), f"New row on {b.get('name') or r.board_id}" + (f" · {g}" if g else "") + " · waiting to be pushed", f"new:{r.id}",
+                                    f"/boards?board={r.board_id}&item=new:{r.id}"), "where": f"A new row on {b.get('name') or 'a board'}, not pushed to monday yet"})
+                if len(hits) >= limit:
+                    break
+    return {"type": "pending_row", "label": "New rows waiting for monday", "hits": hits}
 
 
 def _board_rows(terms: List[str], limit: int) -> Dict[str, Any]:

@@ -61,7 +61,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main
           id="main"
           tabIndex={-1}
-          className="mx-auto w-full max-w-[1440px] min-w-0 flex-1 px-4 pt-6 pb-[calc(9rem+env(safe-area-inset-bottom))] outline-none md:px-8 md:pb-6"
+          className="mx-auto w-full max-w-[1440px] min-w-0 flex-1 px-4 pt-6 pb-[calc(9rem+env(safe-area-inset-bottom))] outline-none md:px-8 md:pb-20"
         >
           {/* A quick crossfade when moving between areas; filters and rows change in place. */}
           <ViewTransition key={pathname} enter="page-in" exit="page-out" default="none">

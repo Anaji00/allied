@@ -74,7 +74,7 @@ export function BoardChanges({ boardId }: { boardId: string }) {
   if (rows.length === 0) return null;
   const held = rows.filter((r) => r.status === 'CONFLICT').length;
   return (
-    <section aria-label="Changes waiting for monday" className="rounded-lg border bg-card text-[13px]">
+    <section aria-label="Changes waiting for monday" className="sticky bottom-20 z-10 rounded-lg border bg-card text-[13px] shadow-md md:bottom-3">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex items-center gap-2 text-left">
           <ChevronRight className={cn('size-4 transition-transform', open && 'rotate-90')} aria-hidden />

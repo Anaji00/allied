@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -14,7 +15,17 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { dateTime, day, since, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { STAGES, jobsCall, stageLabel, type Job } from './job-types';
+import { ActionBar } from '@/components/data/action-bar';
+import { RecordFields } from '@/components/data/record-fields';
+import { SinceStrip } from '@/components/data/since-strip';
+import { CompareJobFiles } from './compare-job-files';
+import { CallNote } from './call-note';
+import { GoTo } from '@/components/data/go-to';
+import { Tags } from '@/components/organize/tags';
+import { AutomationLog } from './automation-log';
+import { PacketRead } from './packet-read';
+import { PrepDialog } from './prep-dialog';
+import { STAGES, downloadBlob, jobsCall, stageLabel, type Job } from './job-types';
 import { AddJobShipment } from './add-shipment';
 import { JobPacket } from './job-packet';
 import { VendorQuoteButton } from './vendor-quote';
@@ -105,6 +116,10 @@ export function JobPage() {
     onError: (e) => toast.error('The design wasn’t approved', { description: e.message }),
   });
 
+  const [comparing, setComparing] = useState(false);
+  const [prepping, setPrepping] = useState(false);
+  const [noting, setNoting] = useState(false);
+  const [packet, setPacket] = useState(false);
   if (q.isPending) return <RowsSkeleton rows={6} />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   const job = q.data;
@@ -134,6 +149,56 @@ export function JobPage() {
           {job.updated_at ? ` · updated ${since(job.updated_at)}` : ''}
         </p>
       </div>
+
+      <ActionBar
+        server={{ kind: 'job', ref: job.ref }}
+        subject={`${job.ref}: ${job.title}`}
+        text={[
+          `${job.ref}: ${job.title}`,
+          job.customer ? `Customer: ${job.customer}` : '',
+          job.customer_reference ? `Their reference: ${job.customer_reference}` : '',
+          `Stage: ${stageLabel(job.stage)}`,
+          ...(job.waiting ?? []).map((w) => `Waiting: ${w.what}${w.who ? ` (${w.who})` : ''}`),
+          ...(job.purchase_orders ?? []).map((p) => `PO ${p.po_number} to ${p.vendor}: ${p.status}`),
+          `${typeof window === 'undefined' ? '' : window.location.origin}/jobs/${job.ref}`,
+        ]
+          .filter(Boolean)
+          .join('\n')}
+        thread={job.thread ? { itemType: job.thread.entity === 'rfq' ? 'rfq' : 'order', itemRef: String(job.thread.id) } : undefined}
+        onDownload={
+          hasRole('OPERATOR')
+            ? () =>
+                void downloadBlob(`/api/v1/jobs/${encodeURIComponent(job.ref)}/sheet.pdf`, `${job.ref}.pdf`).catch((e: Error) =>
+                  toast.error('Couldn’t make it', { description: e.message }),
+                )
+            : undefined
+        }
+        downloadLabel="Job sheet"
+        more={[
+          { label: 'Add a call note', onClick: () => setNoting(true) },
+          { label: 'Read a scanned packet', onClick: () => setPacket(true) },
+          { label: 'Prepare for a meeting', onClick: () => setPrepping(true) },
+          { label: 'Compare drawings', onClick: () => setComparing(true) },
+        ]}
+      />
+
+      <Tags kind="job" refId={job.ref} />
+      <GoTo
+        links={[
+          { label: 'Sales order', href: job.sales_order?.number ? `/orders?order=${encodeURIComponent(job.sales_order.number)}` : null },
+          { label: 'Quote request', href: job.rfq?.number ? '/orders?tab=rfqs' : null },
+          { label: 'Shipments', href: (job.shipments?.length ?? 0) > 0 ? '/logistics' : null },
+          { label: 'On the Jobs board', href: `/boards?board=jobs&q=${encodeURIComponent(job.ref)}` },
+          { label: 'Mill certificates', href: '/logistics?section=certificates' },
+        ]}
+      />
+      {comparing && <CompareJobFiles job={job} onClose={() => setComparing(false)} />}
+      {packet && <PacketRead jobRef={job.ref} onClose={() => setPacket(false)} />}
+      {noting && <CallNote jobRef={job.ref} onClose={() => setNoting(false)} />}
+      {prepping && <PrepDialog kind="job" refId={job.ref} onClose={() => setPrepping(false)} />}
+      <SinceStrip kind="job" refId={job.ref} />
+      <AutomationLog jobRef={job.ref} />
+      <RecordFields kind="job" refId={job.ref} title="Details (click to change)" />
 
       <StageBar job={job} />
 
@@ -192,6 +257,9 @@ export function JobPage() {
         </Card>
 
         <Card title="Design">
+          <Button size="xs" variant="outline" className="mb-2 justify-self-start" onClick={() => setComparing(true)}>
+            Compare drawings
+          </Button>
           <div className="grid gap-2 text-[13px]">
             {approved ? (
               <p className="flex items-center gap-2">
@@ -282,7 +350,7 @@ export function JobPage() {
       <ResearchCard job={job} />
 
       {job.thread ? (
-        <div className="grid gap-2">
+        <div id="item-thread" className="grid gap-2">
           <h3 className="text-sm font-semibold">Discussion, files and who has the ball</h3>
           <UpdatesPanel itemType={job.thread.entity === 'rfq' ? 'rfq' : (job.thread.entity as 'order')} itemRef={String(job.thread.id)} />
         </div>

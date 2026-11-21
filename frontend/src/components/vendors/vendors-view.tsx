@@ -25,7 +25,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
-import { dateTime, day, person, practice, since } from '@/lib/format';
+import { dateTime, day, person, practice, since, words } from '@/lib/format';
 import { api, ok } from '@/lib/api/client';
 import { addVendorJob, fetchVendorJobs, syncVendorBoard, updateVendorJob } from '@/lib/opsApi';
 import { cn } from '@/lib/utils';
@@ -46,6 +46,10 @@ type Job = {
   mode: string;
   state: string;
   reasons?: string[];
+  /** The server's plain reading of this job and what to do next. */
+  assessment?: { text?: string | null; next_step_suggested?: string | null } | null;
+  text?: string | null;
+  next_step_suggested?: string | null;
   ordered_on?: string | null;
   requested_on?: string | null;
   acknowledged_on?: string | null;
@@ -408,7 +412,7 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
     },
     onError: (e) => toast.error('Not saved', { description: e.message }),
   });
-  const st = STATE[j.state] ?? { label: j.state, tone: 'neutral' as Tone };
+  const st = STATE[j.state] ?? { label: words(j.state), tone: 'neutral' as Tone };
   const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
 
   return (
@@ -421,6 +425,12 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
           </ToneBadge>
         ))}
       </div>
+      {(j.assessment?.text ?? j.text) && <p className="text-[13px]">{j.assessment?.text ?? j.text}</p>}
+      {(j.assessment?.next_step_suggested ?? j.next_step_suggested) && (
+        <p className="rounded-md bg-info-soft px-3 py-2 text-[13px]">
+          Suggested next step: {j.assessment?.next_step_suggested ?? j.next_step_suggested}
+        </p>
+      )}
       <Facts
         items={[
           [

@@ -5,6 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'next-themes';
 import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import { LangSync } from '@/components/lang-sync';
+import { QuickCreate } from '@/components/quick-create';
+import { CompareHost } from '@/components/tools/compare-dialog';
+import { ShortcutsSheet } from '@/components/shortcuts-sheet';
 import { ServiceWorker } from '@/components/service-worker';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -43,6 +46,9 @@ export function Providers({ children }: { children: ReactNode }) {
           <AuthProvider>
             <TooltipProvider>
               <LangSync />
+              <ShortcutsSheet />
+              <QuickCreate />
+              <CompareHost />
               {children}
               {/* On phones toasts span the width; lift them clear of the tab bar and assistant button. */}
               <Toaster position="bottom-center" mobileOffset={{ bottom: 'calc(144px + env(safe-area-inset-bottom))' }} />

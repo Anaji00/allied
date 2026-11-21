@@ -29,7 +29,12 @@ export function ProposalCard({ proposal, onOutcome }: { proposal: Proposal; onOu
     onSuccess: (d) =>
       onOutcome({
         status: d.status,
-        text: d.status === 'DONE' ? (d.result?.done ?? 'Done.') : d.status === 'FAILED' ? (d.result?.error ?? 'It didn’t work.') : 'Cancelled. Nothing was changed.',
+        text:
+          d.status === 'DONE'
+            ? (d.result?.done ?? 'Done.')
+            : d.status === 'FAILED'
+              ? (d.result?.error ?? 'It didn’t work.')
+              : 'Cancelled. Nothing was changed.',
         data: d.result?.data,
       }),
     onError: (e) => onOutcome({ status: 'FAILED', text: e.message }),
@@ -37,7 +42,9 @@ export function ProposalCard({ proposal, onOutcome }: { proposal: Proposal; onOu
 
   return (
     <div className="grid gap-3">
-      <pre className="max-h-72 overflow-auto rounded-md border bg-muted/40 p-3 font-sans text-[13px] whitespace-pre-wrap">{proposal.summary}</pre>
+      <pre className="max-h-72 overflow-auto rounded-md border bg-muted/40 p-3 font-sans text-[13px] whitespace-pre-wrap">
+        {proposal.summary}
+      </pre>
       <p className="text-xs text-muted-foreground">Nothing has changed yet. Run it to go ahead.</p>
       <div className="flex justify-end gap-2">
         <Button variant="ghost" disabled={decide.isPending} onClick={() => decide.mutate(false)}>

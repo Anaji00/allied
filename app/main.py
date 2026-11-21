@@ -48,6 +48,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.core.database import init_database
     init_database()
     logger.info("Database initialized (SQLite WAL mode)")
+    from app.core.database import check_live_database
+
+    sound = check_live_database(force=True)
+    if not sound["ok"]:
+        logger.critical("DATABASE DAMAGED at start-up: %s", " | ".join(sound["problems"][:5]))
+        try:
+            from app.services.coordination import notify
+
+            notify.notify("database_damaged", f"db-damaged:{sound['checked_at'][:10]}", "The database file is damaged", sound["text"], severity="critical", include_leadership=True)
+        except Exception:  # noqa: BLE001 - the log line above and the health page still say it
+            pass
 
     # Seed admin account
     from app.core.security import seed_admin_user
@@ -121,6 +132,16 @@ async def body_size_limit(request: Request, call_next):
     return await call_next(request)
 
 
+# A database newer than this app (migrated by a newer version): refuse normal requests with a plain message, answer /health so the cause is visible, and never write.
+@app.middleware("http")
+async def database_newer_than_app_middleware(request: Request, call_next):
+    from app.core.database import schema_state
+
+    if schema_state.get("mode") == "newer" and not request.url.path.rstrip("/").startswith("/api/v1/health") and request.url.path not in ("/", "/docs", "/openapi.json"):
+        return JSONResponse(status_code=503, content={"detail": schema_state["message"], "mode": "database_newer_than_app"})
+    return await call_next(request)
+
+
 # Correlation ID Middleware — injects X-Correlation-ID into every request/response
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
@@ -140,6 +161,16 @@ async def correlation_id_middleware(request: Request, call_next):
 
 
 # Global Exception Handlers
+@app.exception_handler(Exception)
+async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Any error nobody planned for: the full traceback goes to the log with the request's method, path and an id, and the caller gets that id in a short plain answer (never the raw error)."""
+    import uuid
+
+    error_id = uuid.uuid4().hex[:10]
+    logger.exception(f"Unexpected error {error_id} on {request.method} {request.url.path}: {type(exc).__name__}: {exc}")
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "Something went wrong on our side. Try again; if it happens again, quote this number: " + error_id, "error_id": error_id})
+
+
 @app.exception_handler(EntityNotFoundError)
 async def entity_not_found_handler(request: Request, exc: EntityNotFoundError) -> JSONResponse:
     logger.warning(f"Entity matching failure on {request.url.path}: {exc.message}")

@@ -307,21 +307,22 @@ class MondayClient:
             return False
 
     def create_item(self, board_id: Any, item_name: str, column_values: Optional[Dict[str, Any]] = None,
-                    idempotency_key: Optional[str] = None) -> Optional[str]:
+                    idempotency_key: Optional[str] = None, group_id: Optional[str] = None) -> Optional[str]:
         """Adds a row to a board and returns its id; None when nothing was created (read-only, simulation, or monday said no)."""
         if not (board_id and (item_name or "").strip()):
             return None
         query = """
-        mutation ($boardId: ID!, $name: String!, $columnValues: JSON) {
-            create_item (board_id: $boardId, item_name: $name, column_values: $columnValues, create_labels_if_missing: true) {
+        mutation ($boardId: ID!, $name: String!, $columnValues: JSON, $groupId: String) {
+            create_item (board_id: $boardId, item_name: $name, column_values: $columnValues, group_id: $groupId, create_labels_if_missing: true) {
                 id
             }
         }
         """
+        variables = {"boardId": str(board_id), "name": item_name.strip()[:255], "columnValues": json.dumps({k: v for k, v in (column_values or {}).items() if k})}
+        if group_id:
+            variables["groupId"] = str(group_id)
         try:
-            data = self.execute_query(
-                query, {"boardId": str(board_id), "name": item_name.strip()[:255],
-                        "columnValues": json.dumps({k: v for k, v in (column_values or {}).items() if k})}, idempotency_key)
+            data = self.execute_query(query, variables, idempotency_key)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Could not add a row to board {board_id}: {exc}")
             return None
@@ -329,6 +330,90 @@ class MondayClient:
             return None
         created = ((data or {}).get("data") or {}).get("create_item") or {}
         return str(created["id"]) if created.get("id") else None
+
+    def _row_action(self, kind: str, board_id: Any, item_id: Any, payload: Dict[str, Any], summary: str, query: str, variables: Dict[str, Any],
+                    idempotency_key: Optional[str], answer: str = "") -> Optional[Any]:
+        """One change to a row (archive, move, duplicate). Saved for a later push when monday is connected (see app/services/monday_push.py); when it
+        is sent, it goes through execute_query like every other write, so the read-only switch guards it. Returns True/the new id, or None/False."""
+        if not item_id:
+            return None if answer else False
+        if self._staged(kind, board_id, item_id, payload, summary, idempotency_key or ""):
+            return True
+        try:
+            data = self.execute_query(query, variables, idempotency_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Could not {kind.replace('_', ' ')} on item #{item_id}: {exc}")
+            return None if answer else False
+        if not answer:
+            return True
+        made = (((data or {}).get("data") or {}).get(answer) or {}) if self.writable else {}
+        return str(made["id"]) if made.get("id") else None
+
+    def archive_item(self, item_id: Any, idempotency_key: Optional[str] = None, board_id: Any = "") -> bool:
+        """Archives a row (monday keeps it for 30 days)."""
+        return bool(self._row_action("archive_item", board_id, item_id, {}, f"Archive item {item_id}",
+                                     "mutation ($itemId: ID!) { archive_item (item_id: $itemId) { id } }", {"itemId": str(item_id)}, idempotency_key))
+
+    def move_item_to_group(self, item_id: Any, group_id: str, idempotency_key: Optional[str] = None, board_id: Any = "") -> bool:
+        return bool(group_id) and bool(self._row_action("move_item", board_id, item_id, {"group_id": str(group_id)}, f"Move item {item_id} to group {group_id}",
+                                                        "mutation ($itemId: ID!, $groupId: String!) { move_item_to_group (item_id: $itemId, group_id: $groupId) { id } }",
+                                                        {"itemId": str(item_id), "groupId": str(group_id)}, idempotency_key))
+
+    def duplicate_item(self, board_id: Any, item_id: Any, with_updates: bool = False, idempotency_key: Optional[str] = None) -> Optional[Any]:
+        """Copies a row (and, if asked, its comments). Returns the new item's id once sent, True when only saved for a push."""
+        return self._row_action("duplicate_item", board_id, item_id, {"with_updates": bool(with_updates)}, f"Duplicate item {item_id}",
+                                "mutation ($boardId: ID!, $itemId: ID!, $withUpdates: Boolean) { duplicate_item (board_id: $boardId, item_id: $itemId, with_updates: $withUpdates) { id } }",
+                                {"boardId": str(board_id), "itemId": str(item_id), "withUpdates": bool(with_updates)}, idempotency_key, answer="duplicate_item")
+
+    def _board_action(self, kind: str, board_id: Any, payload: Dict[str, Any], summary: str, query: str, variables: Dict[str, Any],
+                      idempotency_key: Optional[str], answer: str = "") -> Optional[Any]:
+        """One change to a board's layout (a column or a group). Saved for a later push when monday is connected; when sent, it goes through
+        execute_query, so the read-only switch guards it. Returns True/the new id, or None/False."""
+        if not board_id:
+            return None if answer else False
+        if self._staged(kind, board_id, "", payload, summary, idempotency_key or ""):
+            return True
+        try:
+            data = self.execute_query(query, variables, idempotency_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Could not {kind.replace('_', ' ')} on board {board_id}: {exc}")
+            return None if answer else False
+        if not answer:
+            return True
+        made = (((data or {}).get("data") or {}).get(answer) or {}) if self.writable else {}
+        return str(made["id"]) if made.get("id") else None
+
+    def create_column(self, board_id: Any, title: str, column_type: str, defaults: Optional[Dict[str, Any]] = None, idempotency_key: Optional[str] = None) -> Optional[Any]:
+        variables: Dict[str, Any] = {"boardId": str(board_id), "title": str(title)[:255], "type": str(column_type)}
+        if defaults:
+            variables["defaults"] = json.dumps(defaults)
+        return self._board_action("create_column", board_id, {"title": variables["title"], "column_type": variables["type"], "defaults": defaults or {}},
+                                  f"Add a {column_type} column '{title}' to board {board_id}",
+                                  "mutation ($boardId: ID!, $title: String!, $type: ColumnType!, $defaults: JSON) { create_column (board_id: $boardId, title: $title, column_type: $type, defaults: $defaults) { id } }",
+                                  variables, idempotency_key, answer="create_column")
+
+    def rename_column(self, board_id: Any, column_id: str, title: str, idempotency_key: Optional[str] = None) -> bool:
+        return bool(column_id and title) and bool(self._board_action(
+            "rename_column", board_id, {"column_id": str(column_id), "title": str(title)[:255]}, f"Rename column {column_id} on board {board_id} to '{title}'",
+            "mutation ($boardId: ID!, $columnId: String!, $title: String!) { change_column_title (board_id: $boardId, column_id: $columnId, title: $title) { id } }",
+            {"boardId": str(board_id), "columnId": str(column_id), "title": str(title)[:255]}, idempotency_key))
+
+    def delete_column(self, board_id: Any, column_id: str, idempotency_key: Optional[str] = None) -> bool:
+        return bool(column_id) and bool(self._board_action(
+            "delete_column", board_id, {"column_id": str(column_id)}, f"Delete column {column_id} from board {board_id}",
+            "mutation ($boardId: ID!, $columnId: String!) { delete_column (board_id: $boardId, column_id: $columnId) { id } }",
+            {"boardId": str(board_id), "columnId": str(column_id)}, idempotency_key))
+
+    def create_group(self, board_id: Any, group_name: str, idempotency_key: Optional[str] = None) -> Optional[Any]:
+        return self._board_action("create_group", board_id, {"title": str(group_name)[:255]}, f"Add a group '{group_name}' to board {board_id}",
+                                  "mutation ($boardId: ID!, $name: String!) { create_group (board_id: $boardId, group_name: $name) { id } }",
+                                  {"boardId": str(board_id), "name": str(group_name)[:255]}, idempotency_key, answer="create_group")
+
+    def rename_group(self, board_id: Any, group_id: str, title: str, idempotency_key: Optional[str] = None) -> bool:
+        return bool(group_id and title) and bool(self._board_action(
+            "rename_group", board_id, {"group_id": str(group_id), "title": str(title)[:255]}, f"Rename group {group_id} on board {board_id} to '{title}'",
+            "mutation ($boardId: ID!, $groupId: String!, $title: String!) { update_group (board_id: $boardId, group_id: $groupId, group_attribute: title, new_value: $title) { id } }",
+            {"boardId": str(board_id), "groupId": str(group_id), "title": str(title)[:255]}, idempotency_key))
 
     def get_item(self, item_id: int) -> Optional[Dict[str, Any]]:
         """Fetches one item with its column values, keyed by column id.

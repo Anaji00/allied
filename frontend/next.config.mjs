@@ -32,12 +32,22 @@ const nextConfig = {
     return [
       { source: '/ai', destination: '/chat?tab=translate', permanent: false },
       { source: '/documents', destination: '/chat?tab=documents', permanent: false },
-      { source: '/automation', destination: '/?automate=true', permanent: false },
-      { source: '/boards', destination: '/', permanent: false },
+      { source: '/automation', destination: '/boards?automate=true', permanent: false },
       { source: '/integrations', destination: '/health?tab=monday', permanent: false },
       { source: '/audit', destination: '/admin/audit', permanent: false },
+      // Folded into Jobs and Orders as sections, so staff work from one place.
+      { source: '/shipments', destination: '/logistics', permanent: false },
+      { source: '/vendors', destination: '/contacts', permanent: false },
+      { source: '/projects', destination: '/jobs?section=projects', permanent: false },
+      { source: '/carriers', destination: '/logistics?section=carriers', permanent: false },
+      { source: '/rfqs', destination: '/orders?tab=rfqs', permanent: false },
+      // My day and who-is-it-waiting-on are lines in the one Today list now.
+      { source: '/mine', destination: '/inbox', permanent: false },
+      { source: '/ball', destination: '/inbox', permanent: false },
+      { source: '/operations', destination: '/orders?tab=sage', permanent: false },
+      { source: '/sales/leads', destination: '/sales?tab=leads', permanent: false },
+      { source: '/sales/pipeline', destination: '/sales?tab=wear', permanent: false },
       { source: '/today', destination: '/inbox', permanent: false },
-      { source: '/sales', destination: '/sales/pipeline', permanent: false },
       { source: '/compliance', destination: '/compliance/vault', permanent: false },
       { source: '/system', destination: '/health', permanent: false },
     ];

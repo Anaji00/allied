@@ -231,9 +231,28 @@ def _deliver(nid: int) -> None:
             continue
         channels = set(contact.get("channels") or ["email"])
         result: Dict[str, str] = {}
+        # The person's own choices (when they saved any): which channels this group may use, their own quiet hours, and instant or digest. The alert itself is always in their in-app list; a critical alert
+        # ignores quiet hours and digest. With nothing saved, nothing here changes.
+        mine = None
+        try:
+            from app.services import my_prefs
+
+            mine = my_prefs.saved_prefs(email)
+            if mine is not None:
+                channels &= set(mine["groups"].get(my_prefs.pref_group(n["kind"]), ["app", "email"]))
+        except Exception as exc:  # noqa: BLE001 - a problem reading choices never stops an alert
+            logger.warning(f"Notification choices not read for {email}: {type(exc).__name__}")
+        outward_off = ""
+        if mine is not None and n["severity"] != "critical":
+            from app.services import my_prefs as _mp
+
+            if _mp.in_quiet_hours(mine, now_local()):
+                outward_off = "skipped: your quiet hours (it is in your alerts)"
+            elif mine.get("delivery") == "digest":
+                outward_off = "skipped: you chose the daily digest (it is in your alerts)"
         if "email" in channels and n["kind"] not in _APP_AND_PHONE_ONLY:
-            result["email"] = _email(email, n, url)
-        if "push" in channels and n["severity"] in ("warning", "critical"):
+            result["email"] = outward_off or _email(email, n, url)
+        if "push" in channels and n["severity"] in ("warning", "critical") and not outward_off:
             wants_push = True
         if "sms" in channels and n["severity"] == "critical" and contact.get("phone"):
             result["sms"] = HELD if quiet else _sms(contact["phone"], n, url)
@@ -391,7 +410,9 @@ def inbox(email: Optional[str] = None, open_only: bool = False, limit: int = 100
         if email:
             # Narrow in SQL (the JSON list as text, case-insensitive), then check exactly below.
             q = q.filter(or_(cast(NotificationDB.recipients, String).ilike('%"' + _like_safe(email.strip()) + '"%', escape="\\"), func.lower(NotificationDB.assignee) == email.strip().lower()))
-        out = [_as_dict(r) for r in q.limit(limit).all()]
+        rows_ = q.limit(limit).all()
+        hidden = {r.id for r in rows_ if email and email.strip().lower() in {str(x).lower() for x in ((r.deliveries or {}).get("_hidden_for") or [])}}      # "dismiss for me": gone from this person's list only
+        out = [_as_dict(r) for r in rows_ if r.id not in hidden]
     if email:
         e = email.strip().lower()
         out = [n for n in out if e in {r.lower() for r in n["recipients"] or []} or (n["assignee"] or "").lower() == e]
@@ -497,6 +518,41 @@ def assign(nid: int, email: str, to: str, any_alert: bool = False) -> str:
     return "ok"
 
 
+def _close_old(rows, why: str) -> int:
+    """Closes these alerts (acknowledged by "system") and writes one audit line for each."""
+    from app.core.audit import audit_log
+
+    now = datetime.now(timezone.utc)
+    n = 0
+    with SessionLocal() as db:
+        for r in rows(db):
+            r.acknowledged_at, r.acknowledged_by = now, "system"
+            n += 1
+            try:
+                audit_log("ALERT_AUTO_CLOSED", "notification", str(r.id), actor_email="system", actor_role="SYSTEM", detail=f"{why}: {str(r.title)[:120]}")
+            except Exception:  # noqa: BLE001 - housekeeping never stops on a log line
+                pass
+        db.commit()
+    return n
+
+
+def expire_tests(hours: int = 24) -> int:
+    """A test alert (the "send me a test" button) closes itself after a day, so one never lingers in someone's list. Returns how many were closed; each gets an audit line."""
+    cut = datetime.now(timezone.utc) - timedelta(hours=hours)
+    return _close_old(lambda db: db.query(NotificationDB).filter(NotificationDB.kind == "test", NotificationDB.acknowledged_at.is_(None), NotificationDB.created_at < cut).limit(500).all(),
+                      f"A test alert older than {hours} hours closed itself")
+
+
+def expire_old_info(days: Optional[int] = None) -> int:
+    """An information-only alert nobody closed within NOTICE_AUTOCLOSE_DAYS (default 14) closes itself, so "older notices" clears on its own. Warnings and urgent alerts are never closed this way."""
+    days = settings.NOTICE_AUTOCLOSE_DAYS if days is None else days
+    if not days or days <= 0:
+        return 0
+    cut = datetime.now(timezone.utc) - timedelta(days=days)
+    return _close_old(lambda db: db.query(NotificationDB).filter(NotificationDB.severity == "info", NotificationDB.acknowledged_at.is_(None), NotificationDB.created_at < cut).limit(500).all(),
+                      f"An information-only alert older than {days} days closed itself")
+
+
 def acknowledge_group(group: str, email: str, any_alert: bool = False) -> int:
     """Closes every open alert in a group that this person may close. Returns how many."""
     closed = 0
@@ -521,6 +577,31 @@ def acknowledge(nid: int, email: str, any_alert: bool = False) -> str:
             return "forbidden"
         row.acknowledged_at = datetime.now(timezone.utc)
         row.acknowledged_by = email
+        db.commit()
+    return "ok"
+
+
+def dismiss_for_me(nid: int, email: str) -> str:
+    """Takes an alert off THIS person's list. An alert sent to several people stays open for the others (it is remembered as hidden for this person); an alert only they hold is closed as usual.
+    Returns "ok", "missing", "done" or "forbidden"."""
+    e = (email or "").strip().lower()
+    with SessionLocal() as db:
+        row = db.get(NotificationDB, nid)
+        if row is None:
+            return "missing"
+        if row.acknowledged_at is not None:
+            return "done"
+        holders = {str(r).lower() for r in (row.recipients or [])} | ({row.assignee.lower()} if row.assignee else set())
+        if e not in holders:
+            return "forbidden"
+        if len(holders) <= 1:
+            row.acknowledged_at, row.acknowledged_by = datetime.now(timezone.utc), email
+        else:
+            d = dict(row.deliveries or {})
+            d["_hidden_for"] = sorted(set(d.get("_hidden_for") or []) | {e})
+            row.deliveries = d
+            if holders <= set(d["_hidden_for"]):                                   # everyone has dismissed it: now it is closed
+                row.acknowledged_at, row.acknowledged_by = datetime.now(timezone.utc), email
         db.commit()
     return "ok"
 
@@ -585,3 +666,17 @@ def channel_status() -> Dict[str, Any]:
         "quiet_hours": f"{settings.QUIET_HOURS_START}:00-{settings.QUIET_HOURS_END}:00 {settings.BUSINESS_TZ}",
         "daily_summary_hour": settings.DIGEST_HOUR,
     }
+
+
+def close_orphaned_item_alerts() -> int:
+    """Closes open alerts about a monday board row that is no longer on any board the app has read (a row removed or moved away). A catch-all beside the per-check clean-ups: it does nothing until at least
+    one board has been read, so a board that was simply not loaded yet never closes anything. Each closed alert gets an audit line."""
+    from app.services.coordination import boards
+
+    with boards._lock:
+        present = {str(i["id"]) for b in boards._mirror.values() for i in b.get("items", [])}
+        have_boards = any(b.get("items") for b in boards._mirror.values())
+    if not have_boards:
+        return 0
+    return _close_old(lambda db: [r for r in db.query(NotificationDB).filter(NotificationDB.acknowledged_at.is_(None), NotificationDB.project_item_id.isnot(None)).limit(2000).all()
+                                  if str(r.project_item_id) not in present][:500], "The board row this alert was about is no longer on the board")

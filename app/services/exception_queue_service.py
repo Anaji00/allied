@@ -35,6 +35,16 @@ class ExceptionItem(BaseModel):
     status: str = "OPEN"  # OPEN, RESOLVED, DISMISSED
     resolution_notes: Optional[str] = None
     available_actions: List[Dict[str, str]] = Field(default_factory=list)
+    type_word: str = ""         # the type in plain words ("An invoice costs more than the order")
+    severity_word: str = ""
+    status_word: str = ""
+
+    def model_post_init(self, __context: Any) -> None:
+        from app.core import status_words
+
+        self.type_word = self.type_word or status_words.word("exception_type", self.exception_type)
+        self.severity_word = self.severity_word or status_words.word("severity", self.severity)
+        self.status_word = self.status_word or status_words.word("exception", self.status)
 
 
 class ResolveExceptionRequest(BaseModel):
@@ -130,7 +140,7 @@ class ExceptionQueueService:
             key=lambda x: (
                 x.status.upper() != "OPEN",
                 _SEVERITY_ORDER.get(x.severity.upper(), 99),
-                x.created_at,
+                x.created_at if x.created_at.tzinfo else x.created_at.replace(tzinfo=timezone.utc),          # a stored time without a zone and a fresh one with a zone sort together
             ),
         )
 

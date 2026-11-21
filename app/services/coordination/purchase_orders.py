@@ -66,6 +66,14 @@ def revision_view(r: PurchaseOrderDB) -> List[Dict[str, Any]]:
     return out
 
 
+def _job_ref_of(job_id: Any) -> Optional[str]:
+    from app.models.db_models import JobDB
+
+    with SessionLocal() as db:
+        row = db.get(JobDB, job_id) if job_id else None
+        return row.ref if row else None
+
+
 def _as_dict(r: PurchaseOrderDB) -> Dict[str, Any]:
     revs = revision_view(r)
     return {"revisions": revs, "revision_mismatch": [x["line"] for x in revs if x["mismatch"]],
@@ -78,7 +86,7 @@ def _as_dict(r: PurchaseOrderDB) -> Dict[str, Any]:
             "total": lines_total(r.lines), "approval_limit": float(getattr(settings, "PO_APPROVAL_LIMIT", 0.0) or 0.0) or None,
             "needs_admin": bool(float(getattr(settings, "PO_APPROVAL_LIMIT", 0.0) or 0.0) > 0 and lines_total(r.lines) > float(getattr(settings, "PO_APPROVAL_LIMIT", 0.0))
                                 and r.status == "DRAFT"),"approved_by_creator": _same_person(r.approved_by, r.created_by),
-            "pdf_url": f"/api/v1/purchase-orders/{r.id}/pdf",
+            "pdf_url": f"/api/v1/purchase-orders/{r.id}/pdf", "job_ref": _job_ref_of(r.job_id),
             "missing_revision": [i + 1 for i, ln in enumerate(r.lines or []) if isinstance(ln, dict) and not ln.get("revision")]}      # lines with no drawing revision named: a warning, never a block
 
 

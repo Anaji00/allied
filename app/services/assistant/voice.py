@@ -85,7 +85,7 @@ def spoken(reply: str, actions: List[Dict[str, Any]]) -> str:
     return text
 
 
-_MONEY_TOOLS = {"approve_po", "send_vendor_po", "send_vendor_price_request", "create_sales_order", "approve_design"}
+_MONEY_TOOLS = {"approve_po", "send_vendor_po", "send_vendor_price_request", "create_sales_order", "approve_design", "add_anything", "edit_record", "put_on_monday"}
 
 
 def _need_phrase(tool: str, transcript: str) -> Optional[str]:

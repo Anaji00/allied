@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, 
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app.api.v1.view_models import Scorecard, ShipmentList, ShipmentRow
 from app.config import settings
 from app.core.database import SessionLocal
 from app.core.security import require_admin, require_manager, require_operator, require_viewer
@@ -124,7 +125,7 @@ def download(submission_id: int, index: int, _user: dict = Depends(require_viewe
 # ---------------------------------------------------------------------------
 
 
-@shipments_router.get("", summary="Shipments, with plain-language flags")
+@shipments_router.get("", summary="Shipments, with plain-language flags", response_model=ShipmentList, response_model_exclude_unset=True)
 def list_shipments(include_finished: bool = True, _user: dict = Depends(require_viewer)):
     return {"statuses": shipments.STATUSES, "shipments": shipments.list_shipments(include_finished)}
 
@@ -146,7 +147,7 @@ class ShipmentIn(BaseModel):
     project_item_id: Optional[str] = None
 
 
-@shipments_router.post("", summary="Add a shipment")
+@shipments_router.post("", summary="Add a shipment", response_model=ShipmentRow, response_model_exclude_unset=True)
 def add_shipment(body: ShipmentIn, user: dict = Depends(require_operator)):
     try:
         return shipments.create(body.model_dump(), user)
@@ -164,7 +165,7 @@ class ShipmentUpdate(BaseModel):
     forwarder: Optional[str] = None
 
 
-@shipments_router.patch("/{shipment_id}", summary="Record a status or date change")
+@shipments_router.patch("/{shipment_id}", summary="Record a status or date change", response_model=ShipmentRow, response_model_exclude_unset=True)
 def update_shipment(shipment_id: int, body: ShipmentUpdate, user: dict = Depends(require_operator)):
     try:
         return shipments.update(shipment_id, body.model_dump(exclude_none=True), user.get("email", "unknown"))
@@ -389,6 +390,7 @@ class RfqUpdate(BaseModel):
     complexity: Optional[Literal["SIMPLE", "STANDARD", "COMPLEX"]] = None
     quote_number: Optional[str] = None
     quote_amount: Optional[str] = None
+    quote_currency: Optional[str] = None
     note: Optional[str] = None
 
 
@@ -540,9 +542,10 @@ def check_now(_user: dict = Depends(require_operator)):
 
 @boards_router.get("", summary="The monday boards the app reads, and when each was last read")
 def board_list(_user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    from app.services import jobs_board
     from app.services.coordination import boards
 
-    return boards.boards()
+    return [jobs_board.listing_entry()] + boards.boards()
 
 
 @boards_router.post("/{board_id}/items/{item_id}/owner", summary="Stage 'this person owns this item' for the next push to monday (nothing is sent)")
@@ -660,8 +663,21 @@ def board_view(board_id: str, hide_done: bool = Query(False, description="Leave 
                _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
     from app.services.coordination import boards
 
+    from app.services import board_edit, jobs_board, organize
+
+    if jobs_board.is_jobs(board_id):
+        out = jobs_board.board_items()
+        organize.annotate_board_rows(_user, board_id, out.get("items", []))
+        return out
     try:
-        return boards.view(board_id, hide_done)
+        view = boards.view(board_id, hide_done)
+        working = board_edit.items_view(board_id)             # the pending new rows sit inside their group, like any row
+        if any(r["pending"] for r in working):
+            real = {str(i["id"]): i for i in view["items"]}
+            view["items"] = [r if r["pending"] else real[str(r["id"])] for r in working if r["pending"] or str(r["id"]) in real]
+            view["pending_rows"] = sum(1 for r in view["items"] if r.get("pending"))
+        organize.annotate_board_rows(_user, board_id, view["items"])
+        return view
     except LookupError as exc:
         _fail(exc)
 
@@ -826,6 +842,13 @@ def recipe_preview(body: RecipeIn, _user: dict = Depends(require_viewer)) -> Dic
     return {"description": recipes.describe(clean), "today": recipes.preview(clean)}
 
 
+@autopilot_router.get("/gallery", summary="The automations gallery in one call: each ready-made automation with its title, what it would act on today, mode, last run, drafts waiting and failed")
+def automations_gallery(_user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    from app.services.coordination import recipes
+
+    return recipes.gallery()
+
+
 @autopilot_router.get("/recipes/starters", summary="Allied's ready-made recipes, from what the boards show, each with why")
 def recipe_starters(preview: bool = False, _user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
     """preview=true adds `today`: the items each would act on now (nothing is saved or sent)."""
@@ -882,7 +905,7 @@ def recipe_run_dates(dry_run: bool = True, _user: dict = Depends(require_manager
     return {"dry_run": dry_run, "did": recipes.run_dates(dry_run=dry_run)}
 
 
-@autopilot_router.get("/scorecard", summary="How often people send or cancel each automation's drafts, with advice")
+@autopilot_router.get("/scorecard", summary="How often people send or cancel each automation's drafts, with advice", response_model=Scorecard, response_model_exclude_unset=True)
 def autopilot_scorecard(days: int = Query(90, ge=7, le=365), _user: dict = Depends(require_manager)) -> Dict[str, Any]:
     from app.services.coordination import autopilot
 

@@ -1038,6 +1038,8 @@ class MondayInboxWorker:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self.last_sweep_at: Optional[str] = None
+        self.last_error: Optional[str] = None
+        self.last_error_at: Optional[str] = None
         self.last_read_at: Optional[str] = None
         self.last_read: Optional[Dict[str, Any]] = None
         self._next_read = 0.0
@@ -1065,6 +1067,7 @@ class MondayInboxWorker:
                 sweep()
                 self.last_sweep_at = _utcnow().isoformat()
             except Exception as exc:  # noqa: BLE001 - the loop outlives any single failure
+                self.last_error, self.last_error_at = f"{type(exc).__name__}: {exc}", _utcnow().isoformat()
                 logger.error(f"monday inbox sweep failed: {exc}")
             if settings.MONDAY_POLL_SECONDS > 0 and time.monotonic() >= self._next_read:
                 self._next_read = time.monotonic() + max(60, settings.MONDAY_POLL_SECONDS)

@@ -13,7 +13,7 @@ here is stored in the database and nothing is ever written to monday.
 
 import json
 import threading
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
@@ -173,10 +173,22 @@ def remember(board_id: str, items: List[Dict[str, Any]], client, role: str) -> N
         activity.safe_refresh(board_id, client)  # who changed what since the last read
 
 
+def last_read(read_at: Any) -> Dict[str, Any]:
+    """{at, minutes_ago, text} for a "Last updated 5 min ago" strip; all null when the board has not been read yet."""
+    try:
+        at = datetime.fromisoformat(str(read_at))
+        at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        mins = max(0, int((datetime.now(timezone.utc) - at).total_seconds() // 60))
+    except (TypeError, ValueError):
+        return {"at": None, "minutes_ago": None, "text": "Not read yet"}
+    text = "Just now" if mins < 1 else f"{mins} min ago" if mins < 60 else f"{mins // 60} h ago" if mins < 2880 else f"{mins // 1440} days ago"
+    return {"at": str(read_at), "minutes_ago": mins, "text": text}
+
+
 def boards() -> List[Dict[str, Any]]:
     with _lock:
         return [{"board_id": b["board_id"], "name": b["name"], "role": b["role"], "label": ROLES.get(b["role"], b["role"]),
-                 "read_at": b["read_at"], "items": len(b["items"])} for b in _mirror.values()]
+                 "read_at": b["read_at"], "last_read": last_read(b["read_at"]), "items": len(b["items"])} for b in _mirror.values()]
 
 
 def _done_labels(role: str) -> set:

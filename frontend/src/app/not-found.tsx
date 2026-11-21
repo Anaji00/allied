@@ -9,7 +9,7 @@ export default function NotFound() {
         <Link href="/inbox" className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground">
           Go to Today
         </Link>
-        <Link href="/" className="rounded-md border px-3 py-2 text-sm">
+        <Link href="/boards" className="rounded-md border px-3 py-2 text-sm">
           Boards
         </Link>
       </div>

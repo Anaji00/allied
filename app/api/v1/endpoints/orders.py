@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.services.database_service import DatabaseService
 from sqlalchemy.orm import Session
 from app.core.logging import logger
-from app.core.security import require_operator, require_viewer
+from app.core.security import require_manager, require_operator, require_viewer
 from app.models.orders import DualSidedResult, InboundOrderRequest
 from app.core.container import get_orchestrator
 
@@ -38,6 +38,34 @@ def _already_in_sage(customer_po: str) -> list:
         return sage_import.already_open_in_sage(customer_po)
     except Exception:  # noqa: BLE001
         return []
+
+
+def _already_on_monday(customer_po: str) -> dict:
+    """{state, label, board_id, item_id, group, item_name} for a row on a saved board (or a staged row) carrying this customer PO number: a duplicate check before an order is made."""
+    try:
+        from app.services import monday_state
+
+        look = monday_state.safe_lookup()
+        return look.order(None, customer_po) if look else monday_state._state("none")
+    except Exception:  # noqa: BLE001 - a problem here never breaks the check
+        return {"state": "none", "label": "Not on monday", "board_id": None, "item_id": None, "group": None, "item_name": None}
+
+
+def _attach_job(items: list) -> None:
+    """Adds job_id and job_ref (null when there is none) to each order, so a screen opens the job without searching by number."""
+    try:
+        from app.services import job_links
+
+        job_links.attach_orders(items)
+        from app.services import monday_state
+
+        look = monday_state.safe_lookup()
+        for it in items:
+            it["monday"] = None if look is None else look.order(it.get("sales_order_number"), it.get("customer_po_number"), it.get("job_ref"))
+    except Exception:  # noqa: BLE001 - a problem here never breaks the list
+        for it in items:
+            it.setdefault("job_id", None)
+            it.setdefault("job_ref", None)
 
 
 def _attach_sage(items: list) -> None:
@@ -75,6 +103,7 @@ def list_orders(
         min_margin_pct=floor, limit=limit, offset=offset,
     )
     _attach_sage(page["items"])
+    _attach_job(page["items"])
     return OrderPage(total=page["total"], limit=limit, offset=offset, min_margin_pct=floor, items=page["items"])
 
 
@@ -150,6 +179,7 @@ def dry_run_order(
         return {
             "existing_pos": _jobs.existing_pos(cust_record["customer_name"], names),
             "already_in_sage": _already_in_sage(request.customer_po_number),
+            "already_on_monday": _already_on_monday(request.customer_po_number),
             "suggested_job": suggested["ref"] if suggested else None,
             "mode": "DRY_RUN",
             "customer_resolved": cust_record["customer_name"],
@@ -192,6 +222,13 @@ def orders_attention(_user: dict = Depends(require_viewer)) -> Dict[str, int]:
     return order_attention.counts()
 
 
+@router.get("/suspected", summary="Read-only: orders that look like tests or duplicates, with the reason, for a person to decide (nothing is changed)")
+def suspected_orders(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    from app.services import order_audit
+
+    return order_audit.suspected()
+
+
 @router.get("/{so_number}", summary="One order by sales order number")
 def get_order(
     so_number: str,
@@ -204,6 +241,7 @@ def get_order(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order {so_number} not found.")
     slip = order.pop("packing_slip_path", None)
     order["has_packing_slip"] = bool(slip) and Path(slip).is_file()
+    _attach_job([order])
     order["min_margin_pct"] = float(settings.MIN_GROSS_MARGIN_PCT)
     return order
 

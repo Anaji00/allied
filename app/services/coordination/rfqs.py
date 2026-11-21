@@ -65,6 +65,11 @@ def _as_dict(r: RfqDB) -> Dict[str, Any]:
     d["quote_amount"] = str(d["quote_amount"]) if d.get("quote_amount") is not None else None
     d["paused_hours"] = float(d.get("paused_hours") or 0)
     d["status_word"] = status_words.word("rfq", d.get("status"))
+    from app.models.db_models import JobDB
+
+    with SessionLocal() as _db:
+        _job = _db.query(JobDB.id, JobDB.ref).filter(JobDB.rfq_id == d.get("id")).first()
+    d["job_id"], d["job_ref"] = (_job[0], _job[1]) if _job else (None, None)
     return d
 
 
@@ -182,7 +187,9 @@ def metrics(days: int = 90) -> Dict[str, Any]:
     since = workdays.now() - timedelta(days=days)
     with SessionLocal() as db:
         rows = [_as_dict(r) for r in db.query(RfqDB).filter(RfqDB.received_at >= since)]
-    turnaround, on_time, won, lost, won_value, quoted_value = [], 0, 0, 0, Decimal(0), Decimal(0)
+    turnaround, on_time, won, lost = [], 0, 0, 0
+    won_by: Dict[str, Decimal] = {}                 # sums are kept per currency: CAD, CNY and USD are never added as dollars; a quote with no currency stored is "unknown"
+    quoted_by: Dict[str, Decimal] = {}
     by_speed: Dict[str, List[int]] = {"within 2 days": [0, 0], "slower": [0, 0]}
     for r in rows:
         if r.get("quoted_at"):
@@ -194,11 +201,12 @@ def metrics(days: int = 90) -> Dict[str, Any]:
                 by_speed[speed][1] += 1
                 by_speed[speed][0] += int(r["status"] == "WON")
         amount = Decimal(r["quote_amount"]) if r.get("quote_amount") else Decimal(0)
+        cur = (r.get("quote_currency") or "").upper() or "unknown"
         if r["status"] in ("WON", "LOST"):
-            quoted_value += amount
+            quoted_by[cur] = quoted_by.get(cur, Decimal(0)) + amount
         if r["status"] == "WON":
             won += 1
-            won_value += amount
+            won_by[cur] = won_by.get(cur, Decimal(0)) + amount
         elif r["status"] == "LOST":
             lost += 1
     open_rows = list_rfqs(open_only=True)
@@ -212,7 +220,11 @@ def metrics(days: int = 90) -> Dict[str, Any]:
         "turnaround_p90_days": round(sorted(turnaround)[int(0.9 * (len(turnaround) - 1))], 1) if turnaround else None,
         "on_time_pct": round(on_time / len(turnaround), 3) if turnaround else None,
         "win_rate": round(won / (won + lost), 3) if (won + lost) else None,
-        "win_rate_value": float(round(won_value / quoted_value, 3)) if quoted_value else None,
+        "win_rate_value": (float(round(won_by.get(next(iter(quoted_by)), Decimal(0)) / next(iter(quoted_by.values())), 3)) if len(quoted_by) == 1 and next(iter(quoted_by.values())) else None),     # one number only when every quote is in one currency
+        "win_rate_value_by_currency": {c: float(round(won_by.get(c, Decimal(0)) / v, 3)) for c, v in quoted_by.items() if v},
+        "quoted_value_by_currency": {c: float(v) for c, v in quoted_by.items()},
+        "won_value_by_currency": {c: float(v) for c, v in won_by.items()},
+        "value_note": "Values are per currency; a quote with no currency stored is under 'unknown'. Currencies are never added together." + (" Set the currency on the quotes marked unknown." if "unknown" in quoted_by else ""),
         "win_rate_by_speed": {k: (round(v[0] / v[1], 3) if v[1] else None) for k, v in by_speed.items()},
         "open_by_age": buckets,
     }
@@ -284,6 +296,13 @@ def update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str,
         return _update(rfq, changes, user)
 
 
+def _po_sent_on(db, rfq_id: int) -> bool:
+    from app.models.db_models import JobDB, PurchaseOrderDB
+
+    job = db.query(JobDB).filter(JobDB.rfq_id == rfq_id).first()
+    return bool(job) and db.query(PurchaseOrderDB).filter(PurchaseOrderDB.job_id == job.id, PurchaseOrderDB.status.in_(("SENDING", "SENT", "ACKNOWLEDGED"))).count() > 0
+
+
 def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     who = user.get("email", "system")
     now = workdays.now()
@@ -292,6 +311,8 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
         row = _find(db, rfq)
         notes = []
         for field in ("owner_email", "vendor", "customer", "contact_email", "notes"):
+            if field == "customer" and changes.get(field) is not None and str(changes[field]).strip() != (getattr(row, field) or "") and _po_sent_on(db, row.id):
+                raise ValueError("The customer can't be changed once a purchase order has gone to a vendor.")
             if changes.get(field) is not None and str(changes[field]).strip() != (getattr(row, field) or ""):
                 setattr(row, field, str(changes[field]).strip() or None if field != "customer" else str(changes[field]).strip())
                 notes.append(f"{field.replace('_', ' ')}: {getattr(row, field) or 'cleared'}")
@@ -303,6 +324,27 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
                 row.complexity = c
                 row.due_at = workdays.add_days(row.received_at, _quote_days(c))
                 notes.append(f"complexity {c}; quote due date moved")
+        if "items" in changes:                       # what is asked for can be corrected while the RFQ is open: a short list of {description, quantity, unit}
+            if row.status in CLOSED:
+                raise ValueError(f"{row.number} is closed, so what it asks for can't change.")
+            new_items = changes["items"]
+            if not isinstance(new_items, list) or len(new_items) > 100 or not all(isinstance(i, dict) for i in new_items):
+                raise ValueError("The items must be a short list of {description, quantity, unit} (at most 100).")
+            clean = []
+            for i in new_items:
+                desc = " ".join(str(i.get("description") or "").split())[:500]
+                if not desc:
+                    raise ValueError("Every item needs a description.")
+                qty = i.get("quantity", 1)
+                try:
+                    q = float(str(qty).replace(",", "")) if qty not in (None, "") else 1.0
+                except ValueError:
+                    raise ValueError(f"'{str(qty)[:20]}' is not a quantity.") from None
+                if not (0 < q < 1e9):
+                    raise ValueError("A quantity must be more than zero.")
+                clean.append({"description": desc, "quantity": q, "unit": " ".join(str(i.get("unit") or "").split())[:20] or None})
+            row.items = clean
+            notes.append(f"items changed ({len(clean)})")
         if changes.get("monday_item_id") and str(changes["monday_item_id"]).strip()[:32] != (row.monday_item_id or ""):
             row.monday_item_id = str(changes["monday_item_id"]).strip()[:32]
             notes.append(f"added to the Open RFQs board (item {row.monday_item_id})")
@@ -316,6 +358,11 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
             if amount < 0:
                 raise ValueError("Quote amount cannot be negative.")
             row.quote_amount = amount.quantize(Decimal("0.01"))
+        if changes.get("quote_currency") not in (None, ""):
+            cur = str(changes["quote_currency"]).strip().upper()
+            if cur not in ("USD", "CAD", "CNY") and cur not in {str(k).upper() for k in (settings.FX_RATES or {})}:
+                raise ValueError(f"Quote currency '{cur[:6]}' is not one the app knows (USD, CAD, CNY).")
+            row.quote_currency = cur
         status = (changes.get("status") or "").upper()
         if status and status != row.status:
             if status not in STATUSES:
@@ -347,7 +394,7 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
             row.status = status
         if changes.get("note"):
             notes.append(str(changes["note"])[:500])
-        if not notes and not changes.get("quote_number") and changes.get("quote_amount") in (None, ""):
+        if not notes and not changes.get("quote_number") and changes.get("quote_amount") in (None, "") and changes.get("quote_currency") in (None, ""):
             return {**_as_dict(row), **assess(_as_dict(row))}
         _log(row, who, "; ".join(notes) or "quote details updated")
         db.commit()
@@ -359,6 +406,7 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
         alerts.resolve([f"rfq-ack:{rid}:", f"rfq-new:{rid}:"])
     if out["status"] not in OPEN:
         alerts.resolve([f"{k}{rid}:" for k in ALERT_KEYS])
+        cancel_pending_drafts(out["number"], f"{out['number']} became {out['status']}")
     if out["status"] != "WAITING_VENDOR":
         alerts.resolve([f"rfq-vendor:{rid}:"])
     audit_log(action="UPDATE", resource_type="RFQ", resource_id=out["number"], actor_email=who,
@@ -369,6 +417,34 @@ def _update(rfq: Any, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[str
         events.emit("rfq.status_changed", {"rfq": out, "from": moved[0], "to": moved[1]},
                     f"{out['number']} {moved[0]} -> {moved[1]}")
     return out
+
+
+_RFQ_NUMBER = re.compile(r"RFQ-\d{4}-\d{4}")
+
+
+def cancel_pending_drafts(number: str, reason: str) -> int:
+    """When an RFQ is closed (won, lost, not bid), the follow-up drafts the app made for it that are still waiting are cancelled, each with an audit line saying why; none is made for it again.
+    The number must stand alone: RFQ-2026-0001 does not match RFQ-2026-00012, RFQ-2026-0001-B or XRFQ-2026-0001. Every waiting draft is looked at, oldest first, not just the first few hundred."""
+    from app.models.db_models import AssistantActionDB
+
+    pattern = re.compile(r"(?<![\w-])" + re.escape(number) + r"(?![\w-])")
+    n = 0
+    with SessionLocal() as db:
+        for r in (db.query(AssistantActionDB).filter(AssistantActionDB.status == "PENDING", AssistantActionDB.user_role == "AUTOPILOT")
+                  .order_by(AssistantActionDB.created_at).yield_per(500)):                 # every waiting draft, oldest first, in batches
+            text = f"{r.summary or ''} {(r.args or {}).get('body') or ''} {' '.join((r.args or {}).get('_why') or [])}"
+            if pattern.search(text):
+                r.status, r.decided_at = "CANCELLED", workdays.now()
+                n += 1
+                audit_log(action="DRAFT_CANCELLED", resource_type="assistant_action", resource_id=str(r.id), actor_email="system", actor_role="SYSTEM", detail=f"{reason}: {str(r.summary)[:120]}")
+        db.commit()
+    return n
+
+
+def is_closed(number: str) -> bool:
+    with SessionLocal() as db:
+        row = db.query(RfqDB).filter(RfqDB.number == number).first()
+        return bool(row and row.status in CLOSED)
 
 
 def from_email(email_id: str, sender: str, sender_name: str, subject: str, body: str, ai: Any = None,

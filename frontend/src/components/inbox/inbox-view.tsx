@@ -6,6 +6,7 @@ import { parseAsBoolean, parseAsStringLiteral, useQueryState } from 'nuqs';
 import Link from 'next/link';
 import { SavedViews } from '@/components/data/saved-views';
 import { RowDraft } from './row-draft';
+import { NeedsYou } from '@/components/orders/needs-you';
 import { AlertGroups } from './alert-groups';
 import { AssignAlert } from './assign-alert';
 import { TodayHeader } from './today-header';
@@ -266,6 +267,7 @@ export function InboxView() {
       </div>
 
       <AlertGroups everyone={everyone && canSeeAll} />
+      <NeedsYou />
       {briefCount > 0 && (
         <button
           type="button"

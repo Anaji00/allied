@@ -20,6 +20,15 @@ from app.api.v1.endpoints import (
     files,
     search,
     monday_push,
+    board_edit,
+    actions,
+    create,
+    records,
+    book,
+    contacts,
+    my_day,
+    calls,
+    conversations,
     drawings,
     exports,
     updates,
@@ -33,6 +42,10 @@ from app.api.v1.endpoints import (
     packets,
     purchase_orders,
     leads,
+    database_check,
+    follow,
+    organize,
+    secretary,
     mail,
     orders,
     packing_slips,
@@ -72,9 +85,30 @@ api_v1_router.include_router(carriers.router, prefix="/carriers", tags=["Carrier
 api_v1_router.include_router(files.router, prefix="/files", tags=["Files"])
 api_v1_router.include_router(search.router, prefix="/search", tags=["Search"])
 api_v1_router.include_router(monday_push.router, prefix="/monday-push", tags=["monday push"])
+api_v1_router.include_router(board_edit.router, prefix="/board-edit", tags=["board editing"])
+api_v1_router.include_router(actions.router, prefix="/actions", tags=["actions"])
+api_v1_router.include_router(create.router, prefix="/create", tags=["create"])
+api_v1_router.include_router(records.router, prefix="/records", tags=["records"])
+api_v1_router.include_router(book.router, prefix="/book", tags=["book"])
+api_v1_router.include_router(contacts.router, prefix="/contacts", tags=["contacts"])
+api_v1_router.include_router(my_day.router, prefix="/my-day", tags=["my day"])
+api_v1_router.include_router(my_day.brief_router, prefix="/brief", tags=["my day"])
+api_v1_router.include_router(my_day.prep_router, prefix="/prep", tags=["my day"])
+api_v1_router.include_router(my_day.since_router, prefix="/since", tags=["my day"])
+api_v1_router.include_router(my_day.chase_router, prefix="/chase", tags=["my day"])
+api_v1_router.include_router(calls.router, prefix="/calls", tags=["calls"])
+api_v1_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
 api_v1_router.include_router(drawings.router, prefix="/drawings", tags=["Drawings"])
 api_v1_router.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])
 api_v1_router.include_router(me.router, prefix="/me", tags=["Me"])
+api_v1_router.include_router(database_check.router, prefix="/database", tags=["Health"])
+api_v1_router.include_router(organize.aliases_router, prefix="/aliases", tags=["Organize"])
+api_v1_router.include_router(organize.tags_router, prefix="/tags", tags=["Organize"])
+api_v1_router.include_router(organize.vendor_contacts_router, prefix="/vendor-contacts", tags=["Organize"])
+api_v1_router.include_router(organize.owners_router, prefix="/owners", tags=["Organize"])
+api_v1_router.include_router(secretary.router, prefix="/secretary", tags=["Secretary"])
+api_v1_router.include_router(follow.router, prefix="", tags=["Follow"])
+api_v1_router.include_router(mail.settings_router, prefix="/me/mail-settings", tags=["Mail"])
 api_v1_router.include_router(packets.router, prefix="/packets", tags=["Job packets"])
 api_v1_router.include_router(jobs.catalog_router, prefix="/catalog", tags=["Catalog"])
 api_v1_router.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["Purchase orders"])

@@ -22,11 +22,17 @@ import { useAuth } from '@/context/AuthContext';
 import { useListNav } from '@/hooks/use-list-nav';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { openDocument } from '@/lib/assistant-api';
-import { date, money, pct, kindWord } from '@/lib/format';
+import { date, money, moneyNamed, pct, kindWord, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { authFetch } from '@/lib/api';
-import { NeedsYou } from './needs-you';
+import { BookGrid } from '@/components/data/book-grid';
+import { openCompare } from '@/components/tools/compare-dialog';
+import { SageOverview } from '@/components/admin/sage-overview';
+import { SageImports } from '@/components/admin/sage-imports';
+import { RfqsView } from '@/components/rfqs/rfqs-view';
+import { LeadsView } from '@/components/sales/leads-view';
+import { WearView } from '@/components/sales/wear-view';
 import { NewOrderDialog } from './new-order-dialog';
 import { OrderDetail } from './order-detail';
 import { PackingSlips, usePackingQueue } from './packing-slips';
@@ -43,17 +49,30 @@ import {
   type OrderView,
 } from './use-orders';
 
-const TABS = ['orders', 'slips', 'emails', 'bills', 'suppliers'] as const;
-const TAB_LABEL = { orders: 'All orders', slips: 'Packing slips', emails: 'Order emails', bills: 'Supplier bills', suppliers: 'Suppliers' };
+const TABS = ['orders', 'rfqs', 'sage', 'slips', 'book', 'emails', 'bills', 'suppliers', 'leads', 'wear'] as const;
+const SHOWN = ['orders', 'rfqs', 'sage', 'slips'] as const;
+const TAB_LABEL = {
+  orders: 'Orders',
+  sage: 'Sage',
+  book: 'Edit like a spreadsheet',
+  rfqs: 'Quote requests',
+  slips: 'Packing slips',
+  emails: 'Order emails',
+  bills: 'Supplier bills',
+  suppliers: 'Suppliers',
+  leads: 'Leads',
+  wear: 'Wear & quotes',
+};
 const VIEWS = ['all', 'attention', 'not_in_sage', 'in_sage'] as const;
 const VIEW_LABEL: Record<OrderView, string> = {
   all: 'All',
   attention: 'Needs attention',
-  not_in_sage: 'Not in a Sage file yet',
-  in_sage: 'In a Sage file',
+  not_in_sage: 'Not sent to Sage yet',
+  in_sage: 'Sent to Sage',
 };
 
 export function OrdersView() {
+  const { hasRole } = useAuth();
   const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS).withDefault('orders'));
   const failed = usePackingQueue().data?.counts?.FAILED ?? 0;
   // One call says what in each section needs a person, so nothing waits out of sight.
@@ -77,21 +96,70 @@ export function OrdersView() {
           ? `Supplier bills (${bills})`
           : TAB_LABEL[t];
   const hidden = emails + bills;
+  const [mode, setMode] = useQueryState('mode', parseAsStringLiteral(['table', 'edit'] as const).withDefault('table'));
   return (
     <div className="grid gap-4">
-      <NeedsYou />
       <TabsWithMore
         label="Orders sections"
-        show={2}
+        show={4}
         moreHint={hidden > 0 ? `${hidden} need you` : undefined}
         value={tab}
         onChange={(t) => void setTab(t === 'orders' ? null : t)}
-        tabs={TABS.map((t) => [t, label(t)] as const)}
+        tabs={SHOWN.map((t) => [t, label(t)] as const)}
       />
-      {tab === 'orders' && <OrderList />}
+      {hidden > 0 && tab !== 'emails' && tab !== 'bills' && (
+        <button
+          type="button"
+          className="justify-self-start rounded-full border px-3 py-1 text-xs hover:bg-muted"
+          onClick={() => void setTab('emails')}
+        >
+          Needs a person: {emails > 0 ? `${emails} order email${emails === 1 ? '' : 's'}` : ''}
+          {emails > 0 && bills > 0 ? ', ' : ''}
+          {bills > 0 ? `${bills} supplier bill${bills === 1 ? '' : 's'}` : ''}
+        </button>
+      )}
+      {tab === 'orders' && (
+        <div className="flex gap-1.5" role="group" aria-label="How to show orders">
+          {(
+            [
+              ['table', 'Table'],
+              ['edit', 'Edit like a spreadsheet'],
+            ] as const
+          ).map(([v, l]) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={mode === v}
+              onClick={() => void setMode(v === 'table' ? null : v)}
+              className={cn(
+                'rounded-full border px-2.5 py-1 text-xs',
+                mode === v ? 'border-foreground bg-foreground text-background' : 'text-muted-foreground',
+              )}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab === 'orders' && mode === 'table' && <OrderList />}
+      {tab === 'orders' && mode === 'edit' && <BookGrid area="orders" />}
+      {tab === 'book' && <BookGrid area="orders" />}
+      {tab === 'rfqs' && <RfqsView />}
+      {tab === 'sage' && (
+        <div className="grid gap-4">
+          {hasRole('MANAGER') && <SageOverview />}
+          <SageImports param="sagetab" />
+        </div>
+      )}
+      {tab === 'leads' && hasRole('OPERATOR') && <LeadsView />}
+      {tab === 'wear' && hasRole('OPERATOR') && <WearView />}
       {tab === 'slips' && <PackingSlips />}
-      {tab === 'emails' && <OrderEmails />}
-      {tab === 'bills' && <SupplierBills />}
+      {(tab === 'emails' || tab === 'bills') && (
+        <div className="grid gap-6">
+          <OrderEmails />
+          <SupplierBills />
+        </div>
+      )}
       {tab === 'suppliers' && <Suppliers />}
     </div>
   );
@@ -198,14 +266,20 @@ function OrderList() {
     col.accessor('total_revenue', {
       header: 'Total',
       meta: { align: 'right', footer: totalsByCurrency },
-      cell: (c) => money(c.getValue(), c.row.original.currency),
+      cell: (c) => moneyNamed(c.getValue(), c.row.original.currency),
     }),
     col.accessor('gross_margin_pct', {
       header: 'Margin',
       meta: { align: 'right', footer: (rows) => `avg ${averageMargin(rows)}` },
       cell: (c) => {
         const thin = Number(c.row.original.total_revenue) > 0 && Number(c.getValue()) < floor;
-        return <span className={cn(thin && 'font-semibold text-bad')}>{pct(c.getValue())}</span>;
+        const loss = Number(c.row.original.total_revenue) > 0 && Number(c.getValue()) < 0;
+        return (
+          <span className={cn(thin && 'font-semibold text-bad')}>
+            {pct(c.getValue())}
+            {loss && <span className="ml-1.5 rounded-full bg-bad-soft px-1.5 py-0.5 text-[11px] font-medium text-bad">Loss</span>}
+          </span>
+        );
       },
     }),
     col.accessor('status', {
@@ -238,7 +312,7 @@ function OrderList() {
       },
     }),
     col.accessor('sage_exported_at', {
-      header: 'Sage file',
+      header: 'Sent to Sage',
       meta: { hideBelow: '2xl' },
       cell: (c) => (c.getValue() ? date(c.getValue()) : '–'),
     }),
@@ -272,6 +346,11 @@ function OrderList() {
               type="button"
               aria-pressed={view === v}
               className={chipClass(view === v)}
+              title={
+                v === 'not_in_sage' || v === 'in_sage'
+                  ? 'A Sage file is the import file you download here and load into Sage yourself.'
+                  : undefined
+              }
               onClick={() => {
                 void setView(v === 'all' ? null : v);
                 void setPage(null);
@@ -302,6 +381,9 @@ function OrderList() {
         <div className="ml-auto flex items-center gap-1">
           <SavedViews screen="orders" />
           {hasRole('OPERATOR') && <DownloadMenu list="orders" />}
+          <Button size="sm" variant="outline" className="ml-1" onClick={openCompare}>
+            Compare two drawings
+          </Button>
           {hasRole('OPERATOR') && (
             <Button size="sm" className="ml-1" onClick={() => setCreating(true)}>
               <Plus /> New order <Kbd className="bg-transparent text-current opacity-60">N</Kbd>
@@ -321,7 +403,7 @@ function OrderList() {
               {/* On a phone each order is a small card instead of a table that scrolls sideways. */}
               <ul className="grid gap-2 pb-20 md:hidden md:pb-0" aria-label="Orders">
                 {rows.map((o) => {
-                  const st = STATUS[o.status] ?? { label: o.status, tone: 'neutral' as const };
+                  const st = STATUS[o.status] ?? { label: words(o.status), tone: 'neutral' as const };
                   return (
                     <li key={o.sales_order_number}>
                       <button
@@ -332,7 +414,7 @@ function OrderList() {
                         <span className="flex items-center gap-2">
                           <span className="font-medium">{o.sales_order_number}</span>
                           <ToneBadge tone={st.tone}>{st.label}</ToneBadge>
-                          <span className="ml-auto tabular-nums">{money(o.total_revenue, o.currency)}</span>
+                          <span className="ml-auto tabular-nums">{moneyNamed(o.total_revenue, o.currency)}</span>
                         </span>
                         <span className="truncate text-muted-foreground">{o.customer_name}</span>
                       </button>

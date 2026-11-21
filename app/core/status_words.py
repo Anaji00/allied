@@ -25,6 +25,7 @@ _WORDS: Dict[str, Dict[str, str]] = {
     },
     "slip": {"QUEUED": "Waiting to be made", "MAKING": "Being made", "READY": "Ready to print", "FAILED": "Needs a person: could not be made", "PRINTED": "Printed"},
     "exception": {"OPEN": "Needs a person", "RESOLVED": "Settled", "DISMISSED": "Set aside"},
+    "severity": {"LOW": "Minor", "MEDIUM": "Worth a look", "HIGH": "Important", "CRITICAL": "Urgent"},
     "bill": {
         "RECONCILED_APPROVED": "Matches the order, approved", "HELD": "Held for a person", "REJECTED": "Does not match, held", "PENDING": "Waiting to be checked",
         "DISCREPANCY_FLAGGED": "Does not match the order, held", "DUPLICATE_INVOICE": "Already entered once", "VENDOR_MISMATCH": "Not the vendor on the order, held",
@@ -63,3 +64,21 @@ def with_word(kind: str, row: Dict[str, Any], field: str = "status") -> Dict[str
     """The same dict with status_word added next to the raw code (the code is kept)."""
     row["status_word"] = word(kind, row.get(field))
     return row
+
+
+# What a person should do about each kind of exception, written once: no AI needed, the same words every time.
+EXPLAIN_TEXT = {
+    "UNMATCHED_SKU": ("A part on the order is not in our catalogue, so it cannot be priced or sent to a vendor yet.", "Find the right catalogue item (or add the part), then re-run the order."),
+    "INVOICE_COST_VARIANCE": ("The vendor's bill is higher than the purchase order it belongs to.", "Check the bill against the PO; ask the vendor to correct it or approve the difference."),
+    "STALE_VENDOR_PRICE": ("The price we have on file for this vendor is old, so the order's cost may be wrong.", "Ask the vendor for a current quote and update the price."),
+    "VENDOR_NOACK": ("The vendor has not confirmed the purchase order.", "Follow up with the vendor and ask them to confirm the price and date."),
+    "ORDER_EXCEPTION": ("This order stopped because it needs a person to look at it.", "Open the order, read what it flagged, fix it or approve it."),
+    "COMPLIANCE_MTR_FAILURE": ("The mill certificate for this material failed a check.", "Do not accept the material: return it to the supplier or approve a concession."),
+    "MONDAY_EVENT_FAILED": ("A change from monday could not be applied in the app.", "Open the monday change, check what it asked for, and apply it by hand if it is right."),
+    "EXPEDITED_FREIGHT": ("Someone asked for rush freight, which costs more.", "Confirm the extra cost is worth it before booking the shipment."),
+}
+
+
+def explain_text(exception_type: Any):
+    """(what went wrong, what to do) for a known exception type, or None."""
+    return EXPLAIN_TEXT.get(str(exception_type or "").strip().upper())

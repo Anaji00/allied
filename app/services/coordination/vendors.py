@@ -154,7 +154,7 @@ def _projects() -> Dict[str, Dict[str, Any]]:
         return out
 
 
-def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]], on: date) -> Dict[str, Any]:
+def _assess_core(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]], on: date) -> Dict[str, Any]:
     """state: shipped / late / will_miss / at_risk / no_ack / checkin / on_track / no_dates."""
     need = _day(j.get("need_by"))
     need_source = "set by hand" if need else None
@@ -224,6 +224,35 @@ def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[
         state = "no_dates"
         reasons.append("no PO date, promise or quoted lead time yet")
     out["state"] = state
+    return out
+
+
+_NEXT_STEP = {"late": "Ask the vendor for a new ship date.", "will_miss": "Ask the vendor whether the date can be pulled in, or tell the customer it will be late.",
+              "at_risk": "Ask the vendor to reconfirm the ship date.", "no_ack": "Ask the vendor to confirm the PO and give a date.", "checkin": "Ask the vendor to reconfirm the ship date.",
+              "no_dates": "Ask the vendor for a promise date.", "shipped": "Check the shipment arrived and ask for photos; make sure the bill is paid when due.", "on_track": "Nothing to do now."}
+
+
+def assess(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]], on: date) -> Dict[str, Any]:
+    """The assessment (see _assess_core) plus plain words for the screen: `text` says it in one sentence (promised, must ship by, how late or how many days to spare) and
+    `next_step_suggested` names a sensible next step from the state. A negative slack is never shown as a bare number: it reads "N days too late"."""
+    out = _assess_core(j, project, card, on)
+    state = out.get("state")
+    bits = []
+    promised, need, slack = _day(j.get("promised_on")), _day(out.get("need_by")), out.get("slack_days")
+    if promised:
+        bits.append(f"Promised {_nice(promised)}")
+    elif out.get("expected"):
+        bits.append(f"Expected {_nice(_day(out['expected']))} ({out.get('expected_basis')})")
+    if need:
+        bits.append(f"must ship by {_nice(need)}")
+    if state == "shipped":
+        bits.append(f"shipped {_nice(_day(j.get('shipped_on')))}")
+    elif out.get("days_late"):
+        bits.append(f"{out['days_late']} day{'s' if out['days_late'] != 1 else ''} late")
+    if state not in ("shipped", "late") and slack is not None:                              # a late order is said to be late; "days to spare" would contradict it
+        bits.append(f"{slack} day{'s' if slack != 1 else ''} to spare" if slack >= 0 else f"{-slack} day{'s' if slack != -1 else ''} too late for the ship-by date")
+    out["text"] = ("; ".join(bits) + ".") if bits else "No dates yet."
+    out["next_step_suggested"] = _NEXT_STEP.get(state or "", "")
     return out
 
 

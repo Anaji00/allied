@@ -294,7 +294,7 @@ def draft_now(board_id: str, item_id: str, key: str) -> Dict[str, Any]:
     if key.startswith("recipe-"):
         for name, it, item in _rule_intents(role, str(board_id)):
             if it.key == key and item == str(item_id):
-                did = autopilot.carry_out(name, "suggest", [it])
+                did = autopilot.carry_out(name, "suggest", [it], explicit=True)
                 autopilot.tell_reviewers(did)
                 return {"play": name, "action_id": _action_id(key), "did": did}
         raise LookupError("There is nothing to draft for this item any more.")
@@ -313,7 +313,7 @@ def draft_now(board_id: str, item_id: str, key: str) -> Dict[str, Any]:
         it = autopilot.vendor_chase(record, today, manual=True)
         if it is None:
             raise LookupError(f"There is no email on file for {record['vendor']}.")
-        did = autopilot.carry_out("vendor_chaser", "suggest", [it])
+        did = autopilot.carry_out("vendor_chaser", "suggest", [it], explicit=True)
         autopilot.tell_reviewers(did)
         return {"play": "vendor_chaser", "action_id": _action_id(key), "did": did}
     for name, it in _intents(role, {str(item_id): record}):

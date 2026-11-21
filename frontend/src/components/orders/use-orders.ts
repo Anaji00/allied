@@ -37,6 +37,7 @@ export type Order = {
   created_at?: string | null;
   created_by?: string | null;
   monday_item_id?: string | null;
+  job_ref?: string | null;
   sage_exported_at?: string | null;
   sage_po_exported_at?: string | null;
   internal_notes?: string | null;
@@ -53,7 +54,7 @@ export const STATUS: Record<string, { label: string; tone: Tone }> = {
   RECEIVED: { label: 'Received', tone: 'neutral' },
   VALIDATED: { label: 'Checked', tone: 'info' },
   PROCESSING: { label: 'Writing to Sage', tone: 'info' },
-  SYNCED_TO_SAGE: { label: 'Made; not in a Sage file yet', tone: 'ok' },
+  SYNCED_TO_SAGE: { label: 'Not sent to Sage yet', tone: 'ok' },
   VALIDATION_ERROR: { label: 'Failed checks', tone: 'bad' },
   SAGE_ERROR: { label: 'Sage write failed', tone: 'bad' },
 };
@@ -94,8 +95,7 @@ export function useOrders({ q, view, vendor, page }: { q: string; view: OrderVie
 export const orderQuery = (so: string) =>
   queryOptions({
     queryKey: ['orders', 'one', so],
-    queryFn: async () =>
-      (await ok(api.GET('/api/v1/orders/{so_number}', { params: { path: { so_number: so } } }))) as unknown as Order,
+    queryFn: async () => (await ok(api.GET('/api/v1/orders/{so_number}', { params: { path: { so_number: so } } }))) as unknown as Order,
   });
 
 export function useOrder(so: string | null) {

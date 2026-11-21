@@ -156,7 +156,7 @@ def test_item_suggestion_ignores_invented_items_and_remembers_approved_ones(clie
 
     # A new nickname for the same plate: its candidates include `real`, so the
     # pick is allowed. (A random phrase only sometimes shared those candidates.)
-    raw = f"AR400 plate shop slang {uuid.uuid4().hex[:6]}"
+    raw = f"{real} shop slang {uuid.uuid4().hex[:6]}"            # names the real part, so it is always among the candidates whatever else the catalogue holds
     assert real in {c["item_id"] for c in features.candidate_items(raw)}
     chosen = client.post("/api/v1/ai/items/suggest", json={"raw_text": raw}).json()
     assert chosen["result"]["item_id"] == real

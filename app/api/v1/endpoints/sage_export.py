@@ -5,6 +5,7 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 
+from app.api.v1.view_models import SageOverview
 from app.core.security import require_manager
 
 from app.services.sage_export_service import (
@@ -31,9 +32,16 @@ def _csv(content: str, filename: str, marked: List[str]) -> Response:
     response_model=SageExportSummary,
     summary="Get Sage 50 Export Batch Summary Metrics",
 )
-def get_sage_export_summary(_user: dict = Depends(require_manager)) -> SageExportSummary:
-    """Returns total volume, sales order counts, and purchase order counts ready for export."""
-    return sage_export_service.get_batch_summary()
+def get_sage_export_summary(only_new: bool = True, _user: dict = Depends(require_manager)) -> SageExportSummary:
+    """Returns total volume, sales order counts, and purchase order counts ready for export: by default only the orders not yet marked as sent (the same ones the Orders list shows as not sent to Sage)."""
+    return sage_export_service.get_batch_summary(only_new=only_new)
+
+
+@router.get("/overview", summary="The export page in one call, in plain words: what is ready, the last file, the history, and what can be put back", response_model=SageOverview, response_model_exclude_unset=True)
+def get_sage_export_overview(limit: int = 10, _user: dict = Depends(require_manager)):
+    from app.services.sage_export_service import overview
+
+    return overview(limit)
 
 
 @router.get(

@@ -45,6 +45,8 @@ services:
       ALIAS_DICT_PATH: /app/data/catalog/alias_dictionary.json
       OUTPUT_DIR: /app/output
       DB_DIR: /app/data
+      # The real database file may be opened and migrated only by this service: nothing else sets this.
+      ALLIED_ALLOW_REAL_DB: "1"
     ports:
       # BACKEND_PORT if 8000 is taken on this machine (the frontend reaches the backend inside Docker either way).
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"

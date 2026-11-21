@@ -1,17 +1,17 @@
+import { SecretaryTabs } from '@/components/shell/secretary-tabs';
 import { Suspense } from 'react';
-import { TodayTabs } from '@/components/shell/today-tabs';
 import { RowsSkeleton } from '@/components/data/states';
-import { InboxView } from '@/components/inbox/inbox-view';
+import { TodayView } from '@/components/today/today-view';
 
-export const metadata = { title: 'Inbox' };
+export const metadata = { title: 'Today' };
 
-// Everything waiting on the signed-in person that isn't a row on a board.
+// Everything waiting on the signed-in person, in one list with one next step per line.
 export default function InboxPage() {
   return (
     <>
-      <TodayTabs />
+      <SecretaryTabs />
       <Suspense fallback={<RowsSkeleton />}>
-        <InboxView />
+        <TodayView />
       </Suspense>
     </>
   );

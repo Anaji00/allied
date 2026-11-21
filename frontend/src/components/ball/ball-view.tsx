@@ -185,7 +185,7 @@ export function BallView() {
                   {canWrite && (
                     <span className="ml-auto flex gap-1.5">
                       <Button size="xs" variant="outline" onClick={() => setHanding(b)}>
-                        Pass to someone
+                        Hand off
                       </Button>
                       {!b.derived && (
                         <Button size="xs" variant="ghost" disabled={done.isPending} onClick={() => done.mutate(b)}>

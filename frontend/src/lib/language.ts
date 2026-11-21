@@ -34,7 +34,7 @@ const NAV_LABELS: Record<Exclude<LangCode, 'en'>, Record<string, string>> = {
     '/projects': 'Dự án',
     '/ball': 'Đang chờ ai',
     '/jobs': 'Công việc',
-    '/': 'Bảng việc',
+    '/boards': 'Bảng việc',
     '/leads': 'Khách tiềm năng',
     '/assistant': 'Trợ lý',
   },
@@ -56,15 +56,15 @@ const NAV_LABELS: Record<Exclude<LangCode, 'en'>, Record<string, string>> = {
     '/projects': '项目',
     '/ball': '待办责任人',
     '/jobs': '工单',
-    '/': '看板',
+    '/boards': '看板',
     '/leads': '潜在客户',
     '/assistant': '助手',
   },
 };
 
 const SECTION_LABELS: Record<Exclude<LangCode, 'en'>, Record<string, string>> = {
-  vi: { 'Daily work': 'Công việc hằng ngày', 'Sales & quality': 'Bán hàng & chất lượng', Admin: 'Quản trị' },
-  zh: { 'Daily work': '日常工作', 'Sales & quality': '销售与质量', Admin: '管理' },
+  vi: { Work: 'Công việc', More: 'Thêm', 'Daily work': 'Công việc hằng ngày', 'Sales & quality': 'Bán hàng & chất lượng', Admin: 'Quản trị' },
+  zh: { Work: '工作', More: '更多', 'Daily work': '日常工作', 'Sales & quality': '销售与质量', Admin: '管理' },
 };
 const TODAY_TABS: Record<Exclude<LangCode, 'en'>, Record<string, string>> = {
   vi: { '/inbox': 'Hộp thư', '/mine': 'Việc của tôi', '/ball': 'Đang chờ ai' },

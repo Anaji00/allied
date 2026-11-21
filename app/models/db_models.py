@@ -20,6 +20,7 @@ from sqlalchemy import (
     Numeric,
     DateTime,
     Integer,
+    Float,
     String,
     Text,
     Boolean,
@@ -304,6 +305,7 @@ class RfqDB(Base):
     closed_at = Column(DateTime(timezone=True), nullable=True)
     quote_number = Column(String(64), nullable=True)
     quote_amount = Column(MONEY, nullable=True)
+    quote_currency = Column(String(3), nullable=True)                 # empty for older quotes; the currency the quote_amount is in
     close_reason = Column(String(256), nullable=True)
     notes = Column(Text, nullable=True)
     history = Column(JSON, nullable=False, default=list)
@@ -714,6 +716,7 @@ class JobDB(Base):
     the vendor POs, the sales order and the shipments. Its stage is worked out from what exists, not typed in."""
 
     __tablename__ = "jobs"
+    __table_args__ = (Index("ux_jobs_monday_item", "monday_board_id", "monday_item_id", unique=True),)      # one monday item belongs to at most one job
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     ref = Column(String(24), unique=True, nullable=False, index=True)        # JOB-2026-0001
@@ -726,6 +729,8 @@ class JobDB(Base):
     closed_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(String(256), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
+    monday_board_id = Column(String(32), nullable=True)                      # the monday item this job is linked to (set only by a person, or by making the job from / pushing it to that item)
+    monday_item_id = Column(String(32), nullable=True)
 
 
 class PurchaseOrderDB(Base):
@@ -896,3 +901,284 @@ class SageBillDB(Base):
     po_number = Column(String(64), nullable=True)
     import_id = Column(Integer, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Follow / last seen, a person's mail-AI settings and use log, notification preferences
+# ---------------------------------------------------------------------------
+
+class ItemFollowDB(Base):
+    """A person follows one item (a job, an order, an RFQ or a board row). One person's follows never affect another's."""
+
+    __tablename__ = "item_follows"
+    __table_args__ = (Index("ux_item_follows", "user_email", "item_kind", "item_ref", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_email = Column(String(320), nullable=False)
+    item_kind = Column(String(24), nullable=False)
+    item_ref = Column(String(120), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class ItemSeenDB(Base):
+    """When a person last looked at an item: what changed after that is "changed since you looked"."""
+
+    __tablename__ = "item_seen"
+    __table_args__ = (Index("ux_item_seen", "user_email", "item_kind", "item_ref", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_email = Column(String(320), nullable=False)
+    item_kind = Column(String(24), nullable=False)
+    item_ref = Column(String(120), nullable=False)
+    seen_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class MailAiSettingsDB(Base):
+    """One person's choices about AI on their mail: everything off until they turn it on."""
+
+    __tablename__ = "mail_ai_settings"
+
+    user_email = Column(String(320), primary_key=True)
+    ai_opt_in = Column(Boolean, nullable=False, default=False)
+    auto_draft = Column(Boolean, nullable=False, default=False)
+    style_note = Column(String(500), nullable=False, default="")
+    exclude_senders = Column(JSON, nullable=False, default=list)
+    exclude_words = Column(JSON, nullable=False, default=list)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class MailAiUseDB(Base):
+    """Who used the AI on which mail, when, with which model and what came of it. Never the message text and never the prompt."""
+
+    __tablename__ = "mail_ai_use"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_email = Column(String(320), nullable=False, index=True)
+    at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    mail_id = Column(Integer, nullable=True)
+    model = Column(String(80), nullable=True)
+    outcome = Column(String(40), nullable=False)
+
+
+class NotificationPrefsDB(Base):
+    """One person's notification choices (channel per alert group, quiet hours, instant or digest) kept as one small document."""
+
+    __tablename__ = "notification_prefs"
+
+    user_email = Column(String(320), primary_key=True)
+    prefs = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Lead engine and reply templates
+# ---------------------------------------------------------------------------
+
+class LeadAccountDB(Base):
+    __tablename__ = "lead_accounts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company = Column(String(256), nullable=False, index=True)
+    site = Column(String(256), nullable=True)
+    industry = Column(String(120), nullable=True)
+    location = Column(String(200), nullable=True)
+    domain = Column(String(200), nullable=True, index=True)
+    bottlenecks = Column(JSON, nullable=False, default=list)
+    estimated_annual_spend = Column(Float, nullable=True)
+    source = Column(String(24), nullable=False, default="manual")
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class LeadContactDB(Base):
+    __tablename__ = "lead_contacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, nullable=True, index=True)
+    name = Column(String(256), nullable=False)
+    title = Column(String(200), nullable=True)
+    email = Column(String(320), nullable=True, index=True)
+    phone = Column(String(60), nullable=True)
+    source = Column(String(24), nullable=False, default="manual")
+    consent_note = Column(String(300), nullable=True)
+    bad_address = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class LeadDB(Base):
+    __tablename__ = "leads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, nullable=True, index=True)
+    contact_id = Column(Integer, nullable=True, index=True)
+    status = Column(String(24), nullable=False, default="Found", index=True)
+    source = Column(String(24), nullable=False, default="manual")
+    source_detail = Column(String(300), nullable=True)
+    reason = Column(Text, nullable=True)
+    score = Column(Integer, nullable=True)
+    score_parts = Column(JSON, nullable=True)
+    owner = Column(String(320), nullable=True)
+    notes = Column(Text, nullable=True)
+    next_touch_at = Column(DateTime(timezone=True), nullable=True)
+    last_touch_at = Column(DateTime(timezone=True), nullable=True)
+    sequence_name = Column(String(60), nullable=True)
+    sequence_step = Column(Integer, nullable=False, default=0)
+    sequence_paused = Column(Boolean, nullable=False, default=False)
+    monday_board_id = Column(String(32), nullable=True)
+    monday_item_id = Column(String(32), nullable=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class LeadOutreachDB(Base):
+    """What was drafted for or heard from a lead (never the message text of a reply)."""
+
+    __tablename__ = "lead_outreach"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    lead_id = Column(Integer, nullable=False, index=True)
+    kind = Column(String(24), nullable=False)
+    template = Column(String(40), nullable=True)
+    step = Column(Integer, nullable=True)
+    action_id = Column(String(64), nullable=True)
+    mail_id = Column(Integer, nullable=True)
+    note = Column(String(500), nullable=True)
+    by = Column(String(320), nullable=True)
+    at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class LeadDoNotContactDB(Base):
+    __tablename__ = "lead_do_not_contact"
+    __table_args__ = (Index("ux_lead_dnc", "kind", "value", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(8), nullable=False)
+    value = Column(String(320), nullable=False)
+    reason = Column(String(300), nullable=True)
+    source = Column(String(24), nullable=False, default="manual")
+    added_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class LeadSettingsDB(Base):
+    __tablename__ = "lead_settings"
+
+    id = Column(Integer, primary_key=True)
+    settings = Column(JSON, nullable=False, default=dict)
+    updated_by = Column(String(320), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class CustomerAliasDB(Base):
+    __tablename__ = "customer_aliases"
+    __table_args__ = (Index("ux_customer_alias", "alias", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    alias = Column(String(256), nullable=False)
+    canonical = Column(String(256), nullable=False)
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class MailTemplateDB(Base):
+    __tablename__ = "mail_templates"
+
+    key = Column(String(60), primary_key=True)
+    title = Column(String(200), nullable=False)
+    subject = Column(String(300), nullable=False)
+    body = Column(Text, nullable=False)
+    situation = Column(String(40), nullable=True)
+    updated_by = Column(String(320), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Organizing data beside the records: families, spellings, tags, vendor contacts, owners, pinned views
+# ---------------------------------------------------------------------------
+
+class CustomerFamilyDB(Base):
+    __tablename__ = "customer_families"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company = Column(String(256), nullable=False, index=True)
+    plant = Column(String(256), nullable=True)
+    family = Column(String(256), nullable=False, index=True)
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class AliasTargetDB(Base):
+    __tablename__ = "alias_targets"
+    __table_args__ = (Index("ux_alias_targets_norm", "alias_norm", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    alias_norm = Column(String(256), nullable=False)
+    alias_text = Column(String(256), nullable=False)
+    family_id = Column(Integer, nullable=False, index=True)
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RecordTagDB(Base):
+    __tablename__ = "record_tags"
+    __table_args__ = (Index("ux_record_tags", "item_kind", "item_ref", "tag", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_kind = Column(String(24), nullable=False)
+    item_ref = Column(String(120), nullable=False)
+    tag = Column(String(40), nullable=False, index=True)
+    added_by = Column(String(320), nullable=True)
+    added_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class VendorContactDB(Base):
+    __tablename__ = "vendor_contacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(256), nullable=False)
+    company = Column(String(256), nullable=True, index=True)
+    country = Column(String(80), nullable=True)
+    email = Column(String(320), nullable=True)
+    phone = Column(String(60), nullable=True)
+    notes = Column(String(500), nullable=True)
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RecordOwnerDB(Base):
+    __tablename__ = "record_owners"
+    __table_args__ = (Index("ux_record_owners", "item_kind", "item_ref", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_kind = Column(String(24), nullable=False)
+    item_ref = Column(String(120), nullable=False)
+    owner = Column(String(320), nullable=True)
+    ball_with = Column(String(80), nullable=True)
+    note = Column(String(300), nullable=True)
+    updated_by = Column(String(320), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class ViewPinDB(Base):
+    __tablename__ = "view_pins"
+    __table_args__ = (Index("ux_view_pins", "view_id", "user_email", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    view_id = Column(String(40), nullable=False)
+    user_email = Column(String(320), nullable=False)
+    pinned_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RefreshStateDB(Base):
+    """The latest refresh token of each person (by its id, never the token), the one before it for a short grace window, and the moment before which every session of theirs is dead."""
+
+    __tablename__ = "refresh_state"
+
+    user_email = Column(String(320), primary_key=True)
+    latest_jti = Column(String(40), nullable=True)
+    latest_exp = Column(Float, nullable=True)
+    prev_jti = Column(String(40), nullable=True)
+    prev_superseded_at = Column(Float, nullable=True)
+    revoked_before = Column(Float, nullable=False, default=0.0)
+    updated_at = Column(Float, nullable=True)

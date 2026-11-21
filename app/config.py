@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     # disables AI and every feature reports that plainly instead of guessing.
     AI_PROVIDER: str = "groq"
     GROQ_API_KEY: str = ""
+    LEAD_WEB_SEARCH: bool = False             # the optional people search (DuckDuckGo on linkedin.com) is OFF: it scrapes personal profiles and may not fit LinkedIn's terms; the owner decides
+    ALLIED_GROQ_ZDR_CONFIRMED: bool = False   # the owner sets this to true only after turning on Zero Data Retention in the Groq console (Data Controls); the app cannot check it
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     # Production models on Groq as of Oct 2026 (the Llama 3.x models were shut
     # down in Aug 2026). gpt-oss-120b supports strict JSON-schema answers.
@@ -310,7 +312,9 @@ class Settings(BaseSettings):
     # Notifications. The in-app inbox always gets every alert; email, text
     # and push are deliveries of it.
     LEADERSHIP_EMAILS: str = ""
+    SHIPMENT_QUIET_DAYS: int = 7             # a shipment with no forwarder update for this many days gets a "Quiet N days: ask the forwarder" sentence
     NOTIFY_COOLDOWN_HOURS: int = 24
+    NOTICE_AUTOCLOSE_DAYS: int = 14           # an open information-only alert older than this closes itself (0 = never); housekeeping inside the app only
     DIGEST_HOUR: int = 7
     # Texts and pushes wait until morning in these hours unless critical.
     QUIET_HOURS_START: int = 21
@@ -327,6 +331,7 @@ class Settings(BaseSettings):
     NTFY_URL: str = ""
     NTFY_TOPIC: str = ""
     NTFY_TOKEN: str = ""
+    QUICK_LINK_KEY: str = ""        # signs the phone approval links; blank uses JWT_SECRET_KEY. Set it to a separate random value (links already sent keep working until they lapse)
 
     # Inbox processing. Events are persisted before they are acknowledged and
     # retried with exponential backoff; after the last attempt they are parked
@@ -400,6 +405,7 @@ class Settings(BaseSettings):
     # What happens when an order is released for production ("Send PO" on the board): "suggest" (default) queues the purchase order
     # email to the vendor as a draft for a person to approve; "auto" sends it at once, as before.
     VENDOR_PO_MODE: str = "suggest"
+    BACKUP_RETRY_MINUTES: int = 15            # after a failed backup (or a checked one that could not be copied yet) the next try is this many minutes later
     BACKUP_ENABLED: bool = True          # a consistent copy of the database every BACKUP_EVERY_HOURS, checked by opening it
     BACKUP_EVERY_HOURS: int = 24
     BACKUP_KEEP_DAYS: int = 14

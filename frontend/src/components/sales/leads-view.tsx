@@ -348,7 +348,7 @@ type Roi = {
   executive_summary: string;
 };
 
-function SavingsCalculator() {
+export function SavingsCalculator() {
   const [form, setForm] = useState(ROI_DEFAULTS);
   const [debounced, setDebounced] = useState(ROI_DEFAULTS);
   useEffect(() => {
@@ -440,7 +440,7 @@ function Big({ label, value, good }: { label: string; value: string; good?: bool
   );
 }
 
-function UpgradeProposal() {
+export function UpgradeProposal() {
   const { hasRole } = useAuth();
   const [part, setPart] = useState('');
   const [material, setMaterial] = useState('A36 Carbon Steel');

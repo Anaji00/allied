@@ -9,7 +9,8 @@ does three things rather than one:
   2. opens the copy and runs an integrity check plus a row count,
   3. deletes copies older than the retention window.
 
-    python scripts/backup.py                      # back up to data/backups
+    docker compose exec backend python scripts/backup.py      # run it INSIDE the container: never from Windows against the bind-mounted file while the app is up
+    python scripts/backup.py                      # back up to data/backups (inside the container, or with the app stopped)
     python scripts/backup.py --dest D:\AlliedBackups
     python scripts/backup.py --keep 30
     python scripts/backup.py --verify-only <file>

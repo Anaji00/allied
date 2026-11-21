@@ -118,8 +118,8 @@ export function AssistantChat({ initialPrompt = '', fill = false }: { initialPro
 
   const mark = (ids: string[], s: CardState) => setCards((c) => ({ ...c, ...Object.fromEntries(ids.map((id) => [id, s])) }));
   const refresh = () => {
-    void client.invalidateQueries({ queryKey: ['inbox'] });
-    void client.invalidateQueries({ queryKey: ['vendors'] });
+    // Whatever the assistant just changed (a job, RFQ, order, PO, shipment, board cell, alert, the ball...), every open screen reloads its data now.
+    void client.invalidateQueries();
   };
 
   async function run(card: Card, b: CardButton) {

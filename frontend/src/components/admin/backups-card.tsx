@@ -64,6 +64,18 @@ export function BackupsCard() {
           Back up now
         </Button>
       </div>
+      {(() => {
+        const plain = (b as { text?: string; summary?: string }).text ?? (b as { summary?: string }).summary;
+        if (plain) return <p className="text-sm font-medium">{plain}</p>;
+        if (failed)
+          return (
+            <p className="text-sm font-medium">
+              The last backup did not finish. The earlier copies are still kept, and the app tries again in {b.every_hours} hours. You can
+              also press Back up now.
+            </p>
+          );
+        return null;
+      })()}
       <p className="text-[13px] text-muted-foreground">
         {b.newest?.made ? `Newest ${dateTime(b.newest.made)} (${since(b.newest.made)}).` : 'No backup yet.'} {b.count} kept
         {b.enabled ? `, one every ${b.every_hours} hours for ${b.keep_days} days` : ''}.

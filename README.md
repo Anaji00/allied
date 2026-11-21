@@ -238,6 +238,15 @@ The same app installs on a phone's home screen and opens full screen like a norm
 
 ---
 
+## The database file: only the app opens it
+
+**Never open `data/allied_enterprise.db` from Windows (a script, a smoke check, DB Browser, a test, `alembic`, `python -c "import app.main"`) while the app is running.** The file lives on a Docker bind mount. SQLite's write-ahead log keeps its shared memory in a side file that does not work across the Windows/container boundary, so two processes (one on the host, one in the container) can each believe they are the only writer. Pages are then lost and the file is damaged (a fresh opener fails with "malformed database schema" or "invalid rootpage"; the running app keeps working from its warm connections until it restarts).
+
+- The **backend container is the only process allowed to open the real file.** `docker-compose.yml` sets `ALLIED_ALLOW_REAL_DB=1` for the backend service only. Without it the app, `alembic` and every helper refuse to open or migrate `data/allied_enterprise.db`, and they always refuse under pytest. Do not set that variable anywhere else.
+- To make a backup, use the app's own (System > Backups, or `POST /api/v1/health/backups/run`), or run the script **inside** the container: `docker compose exec backend python scripts/backup.py`. Do not run it from Windows against the bind-mounted file while the app is up.
+- For a smoke check or a script, point `DATABASE_URL` at a temporary file (`sqlite:///C:/temp/x.db`).
+- At start-up, in `/api/v1/health` (as `database.file_check`, status `damaged`) and before each backup the app reads the schema, runs SQLite's quick check and reads one row of every table. A damaged file is reported loudly (a critical alert and a log line) and is never repaired automatically. If you see it: do not restart the app and do not rebuild the container; copy the newest good backup to a temporary folder, check it, and swap it in with the app stopped.
+
 ## Background workers
 
 All three start with the API and stop with it. Each loop survives any single failure and records it.
@@ -275,6 +284,47 @@ Tests and scenarios each use their own temporary database, data files and upload
 ### What is not in git
 
 `.env` (secrets), `data/` (the live database, uploads, design-document submissions, backups), `output/` (packing slips), `.claude/` and Python caches are ignored. Copy `.env.example` to start a new install; back up `data/` with `scripts/backup.py`.
+
+---
+
+## Gmail: what IT does and what you do
+
+Allied uses Google Workspace (Gmail). Two things can connect to it. The first works today. The second is designed and not built yet.
+
+### 1. The shared mailbox (works today)
+
+One Gmail account (for example an orders or office address) is read by the app and used to send approved drafts. Nothing is sent without a person approving it.
+
+**IT does:**
+1. Turn on 2-Step Verification for that Gmail account.
+2. Create an **App password** for it (Google Account, Security, 2-Step Verification, App passwords). Give you the 16-character password once.
+3. Check that IMAP is allowed for the account (Google Workspace Admin, Gmail, End user access, POP and IMAP).
+
+**You do (in the `.env` file next to `docker-compose.yml`, never in chat or email):**
+1. `IMAP_USERNAME` and `SMTP_USERNAME` = the full Gmail address. `IMAP_PASSWORD` and `SMTP_PASSWORD` = the app password.
+2. `IMAP_POLL_ENABLED=True` to start reading mail. Leave it `False` until you are ready.
+3. `MAIL_OUR_DOMAINS=alliedweldingsystems.com`, and `APP_BASE_URL` = the address staff use (phones need it for approval links).
+4. Restart the backend (`docker compose up -d backend`). Mail older than `IMAP_ACT_ON_HOURS` is logged only, so old threads cannot create orders.
+
+Until then mail stays in draft-only mode and nothing leaves the building.
+
+### 2. Each person's own Gmail (planned, not built yet)
+
+Each person connects their own mailbox so their drafts and "needs a reply" list come from their own mail. It reads only (`gmail.readonly`), never sends, and disconnecting deletes the saved token and the cached mail. Each person sees only their own mail.
+
+**IT does (once):**
+1. In Google Cloud Console, create a project for Allied, for example "Allied Operations".
+2. Turn on the **Gmail API** for that project.
+3. Set up the **OAuth consent screen** with User type **Internal** (only people in your Workspace domain can connect). Add the scope `gmail.readonly` only.
+4. Create an **OAuth client ID** of type **Web application**. Add the redirect address: your app address followed by `/api/v1/me/mail/callback`, for example `https://allied.example.com/api/v1/me/mail/callback`. It must be a secure (https) address the staff's browsers can reach.
+5. Hand you the **client ID** and **client secret** privately. If your IT prefers company-wide approval instead of each person clicking Allow, they can do that in Admin console, Security, API controls, App access control.
+
+**You do (in `.env`, planned setting names, final names will be listed here when the feature ships):**
+1. `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` = the three values from IT.
+2. A long random `MAIL_TOKEN_KEY` (the key that encrypts each person's saved sign-in). The app never makes or prints this key for you. Without it the feature stays off.
+3. Restart the backend. Each person then presses **Connect my Gmail** and clicks Allow once.
+
+**The AI part:** AI reply drafts send the text of a message to Groq (a US service). In the Groq console, under Data Controls, turn on **Zero Data Retention** if you want nothing stored there, then set `ALLIED_GROQ_ZDR_CONFIRMED=true`. Each person opts in under their own mail settings (off by default), and a sender, folder or word on a person's exclude list is never sent to the AI.
 
 ---
 
@@ -377,6 +427,11 @@ scripts/               backup, Sage connection check
 ---
 
 ## Known limits
+
+Two accepted behaviours, kept as expected failures in the adversary tests (`tests/test_adversary_round16.py`, `round17.py`) so they stay visible:
+- **Known-good sign-in addresses:** only a *correct* password adds an address to the table that lets a real user in during a lockout, and the table is capped, so a stranger cannot fill it; a very large flood from many real accounts could still evict an old entry. Accepted: it needs working passwords.
+- **Snoozing an urgent alert:** one recipient snoozing a critical alert hides it from the other recipients and the managers' roll-up until the snooze ends. Mitigated: an urgent alert can be snoozed for 24 hours at most. A per-person snooze would need its own table; not built.
+
 
 - **monday projects board:** not yet tested against Allied's real board; the board ID and column IDs need setting. If monday returns no items for a board the system already holds, the sync stops and removes nothing.
 - **Sage writes:** import files only; nobody has yet done a test import into a Sage sample company.

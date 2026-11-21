@@ -1,5 +1,6 @@
 'use client';
 
+import { useMondayStatus } from '@/components/admin/monday-changes';
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -26,7 +27,7 @@ import { isActive, navFor } from '@/lib/nav';
 import { useAutomationStatus } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { Count } from '@/components/data/motion';
-import { useInbox } from '@/components/inbox/use-inbox';
+import { useNeedAction } from '@/components/today/use-need-action';
 import { BrandMark } from './brand-mark';
 
 export function AppSidebar() {
@@ -36,7 +37,7 @@ export function AppSidebar() {
   const { setOpenMobile } = useSidebar();
   const groups = navFor(hasRole);
   // Admin pages are used rarely, so that group starts folded; it opens by itself on one of its pages.
-  const [folded, setFolded] = useState<Set<string>>(() => new Set(['Admin']));
+  const [folded, setFolded] = useState<Set<string>>(() => new Set<string>());
   const toggle = (name: string) =>
     setFolded((f) => {
       const next = new Set(f);
@@ -45,8 +46,7 @@ export function AppSidebar() {
       return next;
     });
   // Same queries as the Inbox page, so the count costs no extra requests.
-  const waiting = useInbox().items;
-  const critical = waiting.some((i) => i.severity === 'critical');
+  const { count: waitingCount, critical } = useNeedAction();
   const attention = useQuery({
     queryKey: ['orders', 'attention'],
     queryFn: async (): Promise<{ total?: number; slips_failed?: number } | null> => {
@@ -81,23 +81,7 @@ export function AppSidebar() {
           const shut = folded.has(group.section) && !hasCurrent;
           return (
             <SidebarGroup key={group.section}>
-              {group.section === 'Admin' ? (
-                <SidebarGroupLabel
-                  render={
-                    <button
-                      type="button"
-                      aria-expanded={!shut}
-                      onClick={() => toggle(group.section)}
-                      className="w-full cursor-pointer justify-between hover:text-sidebar-foreground"
-                    />
-                  }
-                >
-                  {sectionLabel(group.section, language)}
-                  <ChevronRight className={cn('size-3.5 transition-transform', !shut && 'rotate-90')} aria-hidden />
-                </SidebarGroupLabel>
-              ) : (
-                <SidebarGroupLabel>{sectionLabel(group.section, language)}</SidebarGroupLabel>
-              )}
+              {group.items.length > 1 && <SidebarGroupLabel>{sectionLabel(group.section, language)}</SidebarGroupLabel>}
               <SidebarMenu className={cn(shut && 'hidden')}>
                 {group.items.map((item) => {
                   const active = isActive(item.href, pathname);
@@ -112,9 +96,9 @@ export function AppSidebar() {
                         <item.icon />
                         <span>{label}</span>
                       </SidebarMenuButton>
-                      {item.href === '/inbox' && waiting.length > 0 && (
+                      {item.href === '/inbox' && waitingCount > 0 && (
                         <SidebarMenuBadge className={cn('tabular-nums', critical && 'font-semibold text-bad')}>
-                          <Count value={waiting.length} />
+                          <Count value={waitingCount} />
                         </SidebarMenuBadge>
                       )}
                       {item.href === '/orders' && orderAttention > 0 && (
@@ -142,10 +126,11 @@ export function AppSidebar() {
 /** Reported, not asserted: nothing is claimed until the server has answered. */
 function ConnectionStatus({ onNavigate }: { onNavigate: () => void }) {
   const { data, isError } = useAutomationStatus();
+  const mondayReadOnly = useMondayStatus().data?.read_only ?? true;
   const link = (key: string) => data?.links?.find((l) => l.key === key);
   const rows = [
-    { label: 'monday.com', link: link('monday'), on: 'Live', off: 'Not connected' },
-    { label: 'Sage 50', link: link('sage_write'), on: 'Writing', off: 'Import files' },
+    { label: 'monday', link: link('monday'), on: mondayReadOnly ? 'Reading only' : 'Live', off: 'Not connected' },
+    { label: 'Sage 50', link: link('sage_write'), on: 'Writing', off: 'Files only' },
   ];
 
   return (

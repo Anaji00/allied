@@ -392,3 +392,15 @@ def test_the_migration_adds_only_new_tables_goes_down_and_up_and_runs_twice(tmp_
         c.execute("insert into sage_imports (kind, file_name, file_hash) values ('invoices', 'a', 'h1')")
         with pytest.raises(sqlite3.IntegrityError):
             c.execute("insert into sage_imports (kind, file_name, file_hash) values ('invoices', 'b', 'h1')")
+
+
+def test_the_preview_has_a_one_block_summary_with_the_first_five_differences():
+    rows = [f"SUM-{TAG}-{i},C1,2026-11-20,{100 + i}.00" for i in range(7)]
+    first = si.preview(_csv("Invoice/CM #,Customer ID,Date,Invoice Total", *rows), "s1.csv", "invoices", USER)
+    sm = first["summary"]
+    assert sm["will_add"] == 7 and sm["will_change"] == 0 and sm["will_skip"] == 0 and len(sm["differences"]) == 5 and sm["text"].startswith("Will add 7, change 0, skip 0")
+    si.commit(first["token"], USER)
+    again = si.preview(_csv("Invoice/CM #,Customer ID,Date,Invoice Total", *rows[:5], f"SUM-{TAG}-5,C1,2026-11-20,999.00", f"SUM-{TAG}-6,C1,not a date,5.00"), "s2.csv", "invoices", USER)
+    sm = again["summary"]
+    assert sm["will_change"] == 1 and sm["unchanged"] == 5 and sm["problems"] == 1 and sm["will_skip"] == 6
+    assert sm["differences"][0]["kind"] == "changed" and "total" in sm["differences"][0]["what"] and "999.00" in sm["differences"][0]["what"]

@@ -370,9 +370,13 @@ def decide(action_id: str, confirm: bool, user: Dict[str, Any]) -> Dict[str, Any
         db.commit()
         if won != 1:
             raise ValueError("This proposal was just decided by someone else.")
-        args = {k: v for k, v in row_args.items() if not k.startswith("_")}
+        args = {k: v for k, v in row_args.items() if not k.startswith("_") or (tool_name == "send_email" and k in ("_attach", "_audience", "_origin", "_lead_id"))}      # a draft made from a job, PO or row carries its attachments, set when it was drafted and never editable
     if not confirm:
         _audit(user, tool_name, args, "cancelled")
+        if row_args.get("_origin"):
+            from app.services import actions
+
+            actions.note_cancelled(row_args["_origin"], user)
         return {"id": action_id, "status": "CANCELLED"}
     tool = all_tools().get(tool_name)
     status, result = "DONE", None

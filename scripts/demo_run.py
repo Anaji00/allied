@@ -71,6 +71,13 @@ def main(argv=None) -> int:
         print(f"email sending enabled: {settings.EMAIL_SEND_ENABLED} | SMTP host: {blank(settings.SMTP_HOST)} | monday read-only: {settings.MONDAY_READ_ONLY}"
               f" | monday simulation: {settings.MONDAY_SIMULATION_MODE} | AI key: {blank(settings.GROQ_API_KEY)} | mailbox polling: {settings.IMAP_POLL_ENABLED}")
         return 0
+    from datetime import datetime, timezone
+
+    from app.services.coordination import boards
+    from scripts import demo_boards
+
+    sample = demo_boards.install(boards, datetime.now(timezone.utc).isoformat())          # sample boards in the app's own board copy: no monday involved
+    print(f"{sample} sample boards loaded into the board copy (monday stays off and read-only).")
     import uvicorn
 
     print(f"Demo running on http://127.0.0.1:{args.port} with {path}. Point the frontend at it (NEXT_PUBLIC_API_URL=http://localhost:{args.port}).")

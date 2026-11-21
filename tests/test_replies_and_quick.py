@@ -140,6 +140,7 @@ def test_new_drafts_are_pushed_with_send_and_review_buttons(monkeypatch):
     monkeypatch.setattr(settings, "NTFY_URL", "https://ntfy.example.test")
     monkeypatch.setattr(settings, "NTFY_TOPIC", "allied-test")
     monkeypatch.setattr(settings, "APP_BASE_URL", "https://ops.allied.test")
+    monkeypatch.setattr(settings, "NTFY_TOKEN", "test-token")
     monkeypatch.setattr(notify, "_quiet", lambda at=None: False)
     monkeypatch.setattr(quick.httpx, "post", lambda url, json, headers, timeout: sent.append(json) or type("R", (), {"status_code": 200})())
     assert quick.push_draft("abc", "Ask KWS when PO 9277 ships", REVIEWER) == "sent"
@@ -166,3 +167,33 @@ def test_waiting_drafts_say_what_kind_they_are(monkeypatch):
     aid = _pending_email()
     mine = {p["id"]: p for p in agent.pending({"email": REVIEWER, "role": "MANAGER"})}
     assert mine[aid]["kind"] == "vendor_follow_up"
+
+
+def test_the_send_button_is_only_put_on_a_phone_when_the_push_channel_has_a_token(monkeypatch):
+    from app.services.assistant import quick
+    from app.services.coordination import notify
+
+    sent = []
+    monkeypatch.setattr(settings, "NTFY_URL", "https://ntfy.example.test")
+    monkeypatch.setattr(settings, "NTFY_TOPIC", "allied-test")
+    monkeypatch.setattr(settings, "APP_BASE_URL", "https://ops.allied.test")
+    monkeypatch.setattr(settings, "NTFY_TOKEN", "")
+    monkeypatch.setattr(notify, "_quiet", lambda at=None: False)
+    monkeypatch.setattr(quick.httpx, "post", lambda url, json, headers, timeout: sent.append(json) or type("R", (), {"status_code": 200})())
+    quick.push_draft("abc", "Ask KWS", REVIEWER)
+    assert [a["label"] for a in sent[0]["actions"]] == ["Review"] and "decision=send" not in str(sent[0])
+
+
+def test_approval_links_can_use_their_own_key_and_old_links_keep_working_until_they_lapse(monkeypatch):
+    from app.services.assistant import quick
+
+    monkeypatch.setattr(settings, "QUICK_LINK_KEY", "")
+    old = quick.token("act1", REVIEWER)
+    assert quick.check("act1", old["e"], old["x"], old["s"]) == REVIEWER
+    monkeypatch.setattr(settings, "QUICK_LINK_KEY", "a-separate-random-key")
+    assert quick.check("act1", old["e"], old["x"], old["s"]) == REVIEWER                  # sent before the key was set: still good
+    new = quick.token("act1", REVIEWER)
+    assert new["s"] != old["s"] and quick.check("act1", new["e"], new["x"], new["s"]) == REVIEWER
+    monkeypatch.setattr(settings, "JWT_SECRET_KEY", "a-different-signing-key-now")
+    assert quick.check("act1", new["e"], new["x"], new["s"]) == REVIEWER                  # a changed sign-in key doesn't touch links signed with their own key
+    assert quick.check("act1", new["e"], new["x"], "0" * 40) is None and quick.check("act2", new["e"], new["x"], new["s"]) is None

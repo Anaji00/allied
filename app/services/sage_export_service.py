@@ -32,6 +32,10 @@ class SageExportSummary(BaseModel):
     facility: str = "ALL"
     generated_at: str
     export_files: List[str] = Field(default_factory=list)
+    purchase_by_currency: Dict[str, Decimal] = Field(default_factory=dict)   # what the supplier lines add up to in each order's own currency
+    sales_label: str = ""                                                   # the sales total in words, per currency, with the converted figure marked "about"
+    purchase_label: str = ""
+    by_currency: Dict[str, Decimal] = Field(default_factory=dict)      # the sales total in each order's own currency: never one "$" sum of mixed currencies
 
 
 def split_shipping_address(address: Optional[str]) -> Tuple[str, str, str, str]:
@@ -445,7 +449,7 @@ class SageExportService:
                 detail=(
                     f"Generated Sage 50 SO Import CSV ({len(order_rows)} orders, facility={facility or 'ALL'}"
                     + (", marked exported" if mark_exported else "")
-                    + (f"; {len(self.last_skipped)} skipped" if self.last_skipped else "")
+                    + (f"; {len(self.last_skipped)} left out of the file: " + " | ".join(str(w)[:140] for w in self.last_skipped[:3]) + (" | ..." if len(self.last_skipped) > 3 else "") if self.last_skipped else "")
                     + ")"
                 ),
             )
@@ -642,14 +646,17 @@ class SageExportService:
         # FX_RATES holds units-per-USD, so dividing converts back to USD.
         return (amount / Decimal(str(rate))).quantize(Decimal("0.01"))
 
-    def get_batch_summary(self, facility: Optional[str] = None) -> SageExportSummary:
+    def get_batch_summary(self, facility: Optional[str] = None, only_new: bool = False) -> SageExportSummary:
         """Computes summary stats for the current export batch.
 
         Totals are normalised to USD. Adding raw CAD and CNY figures to USD ones
         (as this previously did) produced a single meaningless number, and the
         reported currency was hardcoded to USD regardless of the orders.
         """
-        orders = self._get_orders(facility=facility)
+        orders = self._get_orders(facility=facility, only_new=only_new, kind="so")             # only_new: the orders not yet marked as sent in a sales order file
+        po_orders = self._get_orders(facility=facility, only_new=only_new, kind="po")          # the supplier lines not yet marked as sent in a purchase order file (a separate mark)
+        by_currency: Dict[str, Decimal] = {}
+        purchase_by_currency: Dict[str, Decimal] = {}
         total_sales = Decimal("0.00")
         total_purchases = Decimal("0.00")
         po_count = 0
@@ -659,15 +666,17 @@ class SageExportService:
         for o in orders:
             order_currency = str(o.get("currency") or settings.DEFAULT_CURRENCY).upper()
             currencies.add(order_currency)
-
             revenue = _dec(o.get("total_revenue") or o.get("total_amount") or 0)
+            if revenue is not None:
+                by_currency[order_currency] = by_currency.get(order_currency, Decimal("0.00")) + revenue
             try:
                 if revenue is not None:
                     total_sales += self.to_usd(revenue, order_currency)
             except ValueError:
                 unconverted += 1                          # no exchange rate: left out of the totals, and said so below
-                continue
-
+        for o in po_orders:
+            order_currency = str(o.get("currency") or settings.DEFAULT_CURRENCY).upper()
+            currencies.add(order_currency)
             for line in o.get("line_items", []):
                 vend_id = str(line.get("preferred_vendor") or "").upper()
                 if not vend_id or vend_id == "STOCK":
@@ -675,8 +684,19 @@ class SageExportService:
                 cost, qty = _dec(line.get("unit_cost")), _dec(line.get("quantity") if line.get("quantity") is not None else 1)
                 if cost is None or qty is None:
                     continue
-                total_purchases += self.to_usd(qty * cost, order_currency)
+                purchase_by_currency[order_currency] = purchase_by_currency.get(order_currency, Decimal("0.00")) + qty * cost
+                try:
+                    total_purchases += self.to_usd(qty * cost, order_currency)
+                except ValueError:
+                    unconverted += 1
+                    continue
                 po_count += 1
+
+        def words(by: Dict[str, Decimal], usd: Decimal) -> str:
+            if not by:
+                return "Nothing ready."
+            per = "; ".join(f"{c} {v:,.2f}" for c, v in sorted(by.items()))
+            return per if len(by) == 1 else f"{per} (about USD {usd:,.2f} if converted at today's rates)"
 
         # Report the batch currency honestly: USD once normalised, and say so
         # explicitly when the batch spans more than one source currency.
@@ -696,8 +716,45 @@ class SageExportService:
             facility=facility or "ALL",
             generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             export_files=["SO_IMPORT.CSV", "PO_IMPORT.CSV"],
+            by_currency=by_currency,
+            purchase_by_currency=purchase_by_currency,
+            sales_label=words(by_currency, total_sales),
+            purchase_label=words(purchase_by_currency, total_purchases),
         )
 
 
 # Global instance
 sage_export_service = SageExportService()
+
+
+
+def overview(limit: int = 10) -> dict:
+    """The Sage export page in one call, in plain words: how many sales orders and vendor POs are ready for the next file, when the last file was made and by whom, the recent history, and the
+    orders already marked as sent that can be put back (if a file never arrived). Reading only; nothing is exported or unmarked here."""
+    from app.core.database import SessionLocal
+    from app.models.db_models import AuditLogDB, OrderDB
+
+    with SessionLocal() as db:
+        ready_rows = db.query(OrderDB).filter(OrderDB.sage_exported_at.is_(None), OrderDB.status.notin_(("VALIDATION_ERROR", "SAGE_ERROR", "CANCELLED"))).all()
+        so_ready = len(ready_rows)
+        ready_totals: dict = {}
+        for o in ready_rows:                                                         # per currency, never one "$" sum
+            cur = str(o.currency or settings.DEFAULT_CURRENCY).upper()
+            ready_totals[cur] = round(ready_totals.get(cur, 0.0) + float(o.total_revenue or 0), 2)
+        po_ready = sum(1 for o in db.query(OrderDB).filter(OrderDB.sage_po_exported_at.is_(None), OrderDB.status.notin_(("VALIDATION_ERROR", "SAGE_ERROR", "CANCELLED"))) if o.purchase_orders)
+        po_rows = [o for o in db.query(OrderDB).filter(OrderDB.sage_po_exported_at.is_(None), OrderDB.status.notin_(("VALIDATION_ERROR", "SAGE_ERROR", "CANCELLED"))) if o.purchase_orders]
+        po_lines = sum(len([ln for ln in (o.line_items or []) if str(ln.get("preferred_vendor") or "").upper() not in ("", "STOCK")]) for o in po_rows)
+        rows = db.query(AuditLogDB).filter(AuditLogDB.action.in_(("SAGE_50_EXPORT", "SAGE_50_EXPORT_UNDONE"))).order_by(AuditLogDB.id.desc()).limit(max(1, min(int(limit), 50))).all()
+        history = [{"at": a.timestamp.isoformat() if a.timestamp else None, "by": a.actor_email,
+                    "what": ("A Sage file for sales orders was made" if a.resource_type == "SAGE_SO_CSV" else "A Sage file for vendor purchase orders was made") if a.action == "SAGE_50_EXPORT"
+                    else "Orders were put back for the next file", "detail": a.detail or "", "marked_sent": "marked exported" in (a.detail or "")} for a in rows]
+        sent_so = [o for o in db.query(OrderDB).filter(OrderDB.sage_exported_at.isnot(None)).order_by(OrderDB.sage_exported_at.desc()).limit(20)]
+        sent_po = [o for o in db.query(OrderDB).filter(OrderDB.sage_po_exported_at.isnot(None)).order_by(OrderDB.sage_po_exported_at.desc()).limit(20)]
+        unmark = ([{"kind": "sales-orders", "sales_order_number": o.sales_order_number, "customer": o.customer_name, "sent_at": o.sage_exported_at.isoformat()} for o in sent_so]
+                  + [{"kind": "purchase-orders", "sales_order_number": o.sales_order_number, "customer": o.customer_name, "sent_at": o.sage_po_exported_at.isoformat()} for o in sent_po])
+    last = next((h for h in history if h["marked_sent"]), None)
+    text = (f"{so_ready} sales order{'s' if so_ready != 1 else ''} ({', '.join(f'{c} {v:,.2f}' for c, v in sorted(ready_totals.items())) or 'no total'}) and {po_ready} order{'s' if po_ready != 1 else ''} with vendor purchase orders ({po_lines} supplier line{'s' if po_lines != 1 else ''}) are ready for the next Sage file. "
+            + (f"The last file was made {str(last['at'])[:16].replace('T', ' ')} by {last['by']}." if last else "No file has been made yet."))
+    return {"ready_to_send": {"sales_orders": so_ready, "purchase_orders": po_ready, "purchase_lines": po_lines, "sales_totals": ready_totals}, "last_export": last, "history": history, "unmark": unmark, "text": text,
+            "how": {"download_sales_orders": "/api/v1/sage/export/sales-orders?only_new=true&mark_exported=true", "download_purchase_orders": "/api/v1/sage/export/purchase-orders?only_new=true&mark_exported=true",
+                    "unmark": {"method": "POST", "path": "/api/v1/sage/export/unmark", "body": {"kind": "sales-orders|purchase-orders", "sales_order_numbers": ["..."]}}}}

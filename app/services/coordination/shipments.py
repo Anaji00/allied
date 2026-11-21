@@ -39,11 +39,48 @@ def _norm(value: Optional[str]) -> str:
     return re.sub(r"[^A-Z0-9]", "", (value or "").upper())
 
 
+_names_cache: Dict[str, Any] = {"at": 0.0, "map": {}}
+
+
+def owner_name(email: Optional[str]) -> Optional[str]:
+    """A person's name for a login: the staff contact or account full name; failing that the part of the address before the @, with dots and underscores as spaces and capitals ("jane.doe@x" -> "Jane Doe")."""
+    import time
+
+    e = (email or "").strip().lower()
+    if not e:
+        return None
+    if time.monotonic() - _names_cache["at"] > 30:
+        try:
+            from app.services.coordination import updates
+
+            _names_cache.update(at=time.monotonic(), map={p["email"]: p["name"] for p in updates.people()})
+        except Exception:  # noqa: BLE001 - a name is a nicety; the fallback below still gives one
+            _names_cache.update(at=time.monotonic(), map={})
+    name = _names_cache["map"].get(e)
+    if name and "@" not in name:
+        return name
+    local = re.sub(r"[._\-]+", " ", e.split("@", 1)[0]).strip()
+    return local.title() or e
+
+
+def quiet(last_update: Optional[str], status: str, forwarder: Optional[str], on: date) -> Dict[str, Any]:
+    """{quiet_days, quiet_flag}: whole days since the last forwarder update (business-clock days), and, once it has been quiet for SHIPMENT_QUIET_DAYS or more and the shipment is not finished, a plain sentence
+    like "Quiet 14 days: ask the forwarder"."""
+    since = _local_day(last_update)
+    if since is None or status in FINISHED:
+        return {"quiet_days": None, "quiet_flag": ""}
+    days = max(0, (on - since).days)
+    flag = f"Quiet {days} days: ask {forwarder or 'the forwarder'}" if days >= settings.SHIPMENT_QUIET_DAYS else ""
+    return {"quiet_days": days, "quiet_flag": flag}
+
+
 def _as_dict(s: ShipmentDB, events: Optional[List[ShipmentEventDB]] = None) -> Dict[str, Any]:
     d = {k: v for k, v in s.__dict__.items() if not k.startswith("_")}
     for k in ("last_update_at", "created_at"):
         d[k] = d[k].isoformat() if d.get(k) else None
     d["status_word"] = status_words.word("shipment", d.get("status"))
+    d["owner_name"] = owner_name(d.get("owner_email"))
+    d.update(quiet(d.get("last_update_at"), d.get("status") or "", d.get("forwarder"), alerts.today()))          # last_update_at moves whenever a status or date update is recorded (by a person or from the forwarder's email)
     if events is not None:
         d["events"] = [
             {"at": e.at.isoformat() if e.at else None, "status": e.status, "status_word": status_words.word("shipment", e.status), "eta": e.eta,

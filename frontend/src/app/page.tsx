@@ -1,12 +1,6 @@
-import { Suspense } from 'react';
-import { BoardsView } from '@/components/boards/boards-view';
-import { RowsSkeleton } from '@/components/data/states';
+import { redirect } from 'next/navigation';
 
-// Home is the boards: monday's boards as monday shows them, with the app's automations on each row.
-export default function BoardsPage() {
-  return (
-    <Suspense fallback={<RowsSkeleton rows={8} />}>
-      <BoardsView />
-    </Suspense>
-  );
+// Home is Today: what is waiting on you. The boards are one click away at /boards.
+export default function Home() {
+  redirect('/inbox');
 }

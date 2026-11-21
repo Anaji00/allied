@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { practice } from '@/lib/format';
 import { api, ok } from '@/lib/api/client';
 import { optimistic } from '@/lib/optimistic';
 import { decideAssistantAction } from '@/lib/opsApi';
@@ -244,7 +245,7 @@ export function useReadNow(boardId: string, role: Role) {
       return play?.skipped ?? play?.error ?? null;
     },
     onSuccess: (skipped) => {
-      if (skipped) toast(`Not read: ${skipped}.`);
+      if (skipped) toast(`Not read: ${practice(skipped)}`);
       else toast.success('Read from monday.');
     },
     onError: (e) => toast.error(e.message),

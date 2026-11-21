@@ -1,12 +1,12 @@
 """FastAPI router for Master Catalog and Batch Order CSV Imports."""
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.core.security import require_manager, require_viewer
-from app.services.csv_import_service import CSVImportResult, csv_import_service
+from app.services.csv_import_service import CSVImportResult, check_preview_token, csv_import_service
 
 router = APIRouter()
 
@@ -20,6 +20,7 @@ class CSVImportPayload(BaseModel):
     """Payload for importing CSV text directly via JSON."""
     csv_text: str = Field(..., max_length=MAX_UPLOAD_BYTES)
     import_type: str  # ITEMS, CUSTOMERS, VENDORS, ORDERS_BATCH
+    token: Optional[str] = Field(None, description="The token from POST /csv/preview: the import is refused when the sheet is not the one that was previewed")
 
 
 @router.post(
@@ -45,6 +46,10 @@ def import_csv_data(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"CSV exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)}MB import limit.",
         )
+    if payload.token:
+        why = check_preview_token(payload.token, payload.csv_text, payload.import_type)
+        if why:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=why)
     result = csv_import_service.import_csv(
         payload.csv_text,
         payload.import_type,
@@ -57,6 +62,41 @@ def import_csv_data(
             detail=result.message + " " + "; ".join(result.errors),
         )
     return result
+
+
+class CSVPreviewChange(BaseModel):
+    field: str
+    was: str = ""
+    now: str = ""
+
+
+class CSVPreviewRow(BaseModel):
+    model_config = {"extra": "allow"}
+    row: int
+    action: str  # new, changed, skipped
+    key: str = ""
+    changes: List[CSVPreviewChange] = []
+    reason: Optional[str] = None
+
+
+class CSVPreview(BaseModel):
+    import_type: str
+    new: int
+    changed: int
+    skipped: int
+    rows: List[CSVPreviewRow]
+    errors: List[str] = []
+    message: str = ""
+    token: str
+
+
+@router.post("/preview", response_model=CSVPreview, summary="Dry run of an import: what each row would do, and nothing is written (same body as /import)")
+def preview_csv_data(payload: CSVImportPayload, current_user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    if len(payload.csv_text.encode("utf-8")) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"CSV exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)}MB import limit.")
+    if payload.import_type.strip().upper() not in ("ITEMS", "CUSTOMERS", "VENDORS", "ORDERS_BATCH"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose ITEMS, CUSTOMERS, VENDORS, or ORDERS_BATCH.")
+    return csv_import_service.preview_csv(payload.csv_text, payload.import_type, actor_email=current_user.get("email", "system"))
 
 
 @router.post(

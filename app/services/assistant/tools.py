@@ -318,10 +318,26 @@ def send_email(args: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     to = [a.strip() for a in str(args.get("to") or "").replace(";", ",").split(",") if a.strip()]
     if not to or not all("@" in a for a in to):
         raise ValueError("Give at least one email address.")
+    if args.get("_lead_id"):                                   # a lead draft is checked again when it is approved: the list may have changed since it was drafted
+        from app.services import leads
+
+        for a in to:
+            reason = leads.blocked(a)
+            if reason:
+                raise ValueError(reason + " The draft was not sent.")
     who = "" if user.get("role") == "ADMIN" and user.get("email", "").startswith("autopilot@") else f"Sent by {user.get('email')} from "
     body = f"{args.get('body') or ''}\n\n-- \n{who}Allied Operations"
+    files = None
+    if args.get("_attach"):                                    # a draft made from a job, PO, shipment, order or row: the files are built now, for its audience only
+        from app.services import actions
+
+        files = actions.resolve_attachments(args["_attach"], str(args.get("_audience") or "internal"), user)
     entry = outbound_email_service.send(to, args.get("subject") or "(no subject)", body, category="ASSISTANT",
-                                        reference=user.get("email"))
+                                        reference=user.get("email"), attachments=files)
+    if args.get("_origin"):
+        from app.services import actions
+
+        actions.note_sent(args["_origin"], ", ".join(to), str(args.get("subject") or ""), str(entry.get("status") or ""), user)
     return {"done": f"Email {entry.get('status', 'recorded').lower()} to {', '.join(to)}.", "status": entry.get("status")}
 
 
@@ -536,7 +552,8 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("send_email", "Send an email from Allied (the user sees the exact text and confirms first).",
          {"to": _s("Addresses, comma-separated"), "subject": _s("Subject"), "body": _s("Plain-text body")},
          send_email, write=True, min_role="OPERATOR", connector="email", required=["to", "subject", "body"],
-         summarize=lambda a: f"Send email to {a.get('to')}\nSubject: {a.get('subject')}\n\n{a.get('body')}"),
+         summarize=lambda a: f"Send email to {a.get('to')}\nSubject: {a.get('subject')}\n\n{a.get('body')}"
+                    + (("\n\nAttached: " + ", ".join(x.get("name", "") for x in a["_attachments"])) if a.get("_attachments") else "")),
     Tool("run_autopilot", "Run the autopilot now: every play, or one (rfq_board, orders_watch, vendor_chaser, "
          "rfq_vendor_chaser, quote_followup). Messages it makes still wait for a person unless the play is on auto.",
          {"play": _s("One play's name; blank for all")}, run_autopilot, write=True, min_role="ADMIN",
@@ -580,6 +597,14 @@ TOOLS.update({t.name: t for t in platform_tools.TOOLS})
 from app.services.assistant import board_tools  # noqa: E402
 
 TOOLS.update({t.name: t for t in board_tools.TOOLS})
+
+from app.services.assistant import record_tools  # noqa: E402
+
+TOOLS.update({t.name: t for t in record_tools.TOOLS})
+
+from app.services.assistant import more_edit_tools  # noqa: E402
+
+TOOLS.update({t.name: t for t in more_edit_tools.TOOLS})
 
 
 def all_tools() -> Dict[str, Tool]:

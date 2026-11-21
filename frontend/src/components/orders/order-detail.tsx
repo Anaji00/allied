@@ -9,20 +9,19 @@ import { Facts } from '@/components/data/detail-panel';
 import { ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { authFetch, dispatchOrder, downloadPackingSlip } from '@/lib/api';
 import { api, ok } from '@/lib/api/client';
-import { date, dateTime, money, pct } from '@/lib/format';
+import { date, dateTime, money, pct, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { ActionBar } from '@/components/data/action-bar';
+import { GoTo } from '@/components/data/go-to';
+import { OwnerField } from '@/components/organize/owner-field';
+import { Tags } from '@/components/organize/tags';
+import { CompareForOrder } from '@/components/jobs/compare-for-order';
+import { Fold } from '@/components/data/fold';
 import { ARCHETYPE, STATUS, useCompliance, useOrder, type Order } from './use-orders';
 
 const TABS = [
@@ -36,21 +35,45 @@ type Tab = (typeof TABS)[number][0];
 export function OrderDetail({ so }: { so: string }) {
   const { data: order, isPending, error, refetch } = useOrder(so);
   const [tab, setTab] = useState<Tab>('lines');
+  const [comparing, setComparing] = useState(false);
 
   if (isPending) return <RowsSkeleton rows={5} />;
   if (error || !order) return <ErrorState error={error} onRetry={() => void refetch()} />;
 
   const floor = order.min_margin_pct ?? 15;
   const thin = Number(order.total_revenue) > 0 && Number(order.gross_margin_pct) < floor;
-  const status = STATUS[order.status] ?? { label: order.status, tone: 'neutral' as const };
+  const status = STATUS[order.status] ?? { label: words(order.status), tone: 'neutral' as const };
 
   return (
     <div className="grid gap-4">
+      <ActionBar
+        server={{ kind: 'order', ref: order.sales_order_number }}
+        subject={`Order ${order.sales_order_number} for ${order.customer_name}`}
+        text={[
+          `Order ${order.sales_order_number}: ${order.customer_name}`,
+          `Customer PO: ${order.customer_po_number}`,
+          `Status: ${status.label}`,
+          `${typeof window === 'undefined' ? '' : window.location.origin}/orders?order=${order.sales_order_number}`,
+        ].join('\n')}
+        thread={{ itemType: 'order', itemRef: order.sales_order_number }}
+        more={[{ label: 'Compare drawings', onClick: () => setComparing(true) }]}
+      />
+      <OwnerField kind="order" refId={order.sales_order_number} />
+      <Tags kind="order" refId={order.sales_order_number} />
+      <GoTo
+        links={[
+          { label: 'The job', href: order.job_ref ? `/jobs/${encodeURIComponent(order.job_ref)}` : null },
+          { label: 'Packing slips', href: order.has_packing_slip ? '/orders?tab=slips' : null },
+          { label: 'Customer', href: `/contacts?q=${encodeURIComponent(order.customer_name)}` },
+          { label: 'Sage', href: '/orders?tab=sage' },
+        ]}
+      />
+      {comparing && <CompareForOrder orderRef={order.sales_order_number} jobRef={order.job_ref} onClose={() => setComparing(false)} />}
       <div className="flex flex-wrap items-center gap-2">
         <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
         {thin && <ToneBadge tone="bad">Margin under {floor}%</ToneBadge>}
         <ToneBadge tone={order.sage_exported_at ? 'ok' : 'neutral'}>
-          {order.sage_exported_at ? `In Sage file ${date(order.sage_exported_at)}` : 'Not in a Sage file yet'}
+          {order.sage_exported_at ? `Sent to Sage ${date(order.sage_exported_at)}` : 'Not sent to Sage yet'}
         </ToneBadge>
       </div>
 
@@ -63,38 +86,35 @@ export function OrderDetail({ so }: { so: string }) {
       <Facts
         items={[
           ['Customer', order.customer_name],
-          ['Customer PO', <span key="po" className="font-mono text-xs">{order.customer_po_number}</span>],
+          [
+            'Customer PO',
+            <span key="po" className="font-mono text-xs">
+              {order.customer_po_number}
+            </span>,
+          ],
           ['Type', ARCHETYPE[order.archetype ?? ''] ?? order.archetype ?? '–'],
           ['Facility', order.facility],
           ['Terms', order.payment_terms ?? '–'],
           ['Received', dateTime(order.created_at)],
           ...(order.created_by ? ([['By', order.created_by]] as [string, string][]) : []),
-          ...(order.monday_item_id ? ([['monday item', order.monday_item_id]] as [string, string][]) : []),
+          ...(order.monday_item_id ? ([['On monday', 'Yes']] as [string, string][]) : []),
         ]}
       />
 
-      <div role="tablist" aria-label="Order sections" className="flex gap-1 overflow-x-auto border-b">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            role="tab"
-            type="button"
-            aria-selected={tab === key}
-            onClick={() => setTab(key)}
-            className={cn(
-              '-mb-px shrink-0 border-b-2 px-3 py-1.5 text-[13px] whitespace-nowrap',
-              tab === key ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {label}
-          </button>
-        ))}
+      <Fold id="order-lines" title="Lines" summary={`${order.line_items?.length ?? 0} lines`}>
+        <Lines order={order} />
+      </Fold>
+      <Fold id="order-quality" title="Mill certs" defaultOpen={false}>
+        <Quality order={order} />
+      </Fold>
+      <Fold id="order-documents" title="Documents" defaultOpen={false}>
+        <Documents order={order} />
+      </Fold>
+      <div id="item-thread">
+        <Fold id="order-comments" title="Comments and who is it waiting on">
+          <UpdatesPanel itemType="order" itemRef={order.sales_order_number} />
+        </Fold>
       </div>
-
-      {tab === 'lines' && <Lines order={order} />}
-      {tab === 'quality' && <Quality order={order} />}
-      {tab === 'documents' && <Documents order={order} />}
-      {tab === 'comments' && <UpdatesPanel itemType="order" itemRef={order.sales_order_number} />}
     </div>
   );
 }
@@ -124,7 +144,8 @@ function Lines({ order }: { order: Order }) {
               </div>
               <span className="text-pretty">{line.description || line.raw_item_text}</span>
               <span className="text-xs text-muted-foreground tabular-nums">
-                {qty} {line.uom || 'EA'} × {money(line.unit_price, order.currency)} = {money(qty * Number(line.unit_price ?? 0), order.currency)}
+                {qty} {line.uom || 'EA'} × {money(line.unit_price, order.currency)} ={' '}
+                {money(qty * Number(line.unit_price ?? 0), order.currency)}
                 {line.unit_cost ? ` · cost ${money(line.unit_cost, order.currency)}` : ''}
               </span>
             </li>
@@ -134,7 +155,14 @@ function Lines({ order }: { order: Order }) {
       <div className="grid gap-1.5">
         <h3 className="text-xs font-medium text-muted-foreground">Supplier POs</h3>
         {pos.length ? (
-          <Facts items={pos.map(([vendor, po]) => [vendor, <span key={vendor} className="font-mono text-xs">{po}</span>])} />
+          <Facts
+            items={pos.map(([vendor, po]) => [
+              vendor,
+              <span key={vendor} className="font-mono text-xs">
+                {po}
+              </span>,
+            ])}
+          />
         ) : (
           <p className="text-sm text-muted-foreground">From stock, no supplier PO.</p>
         )}
@@ -185,7 +213,16 @@ function Quality({ order }: { order: Order }) {
     <div className="grid gap-3">
       <Facts
         items={[
-          ['Heats', heats.length ? <span key="h" className="font-mono text-xs">{heats.join(', ')}</span> : 'None recorded'],
+          [
+            'Heats',
+            heats.length ? (
+              <span key="h" className="font-mono text-xs">
+                {heats.join(', ')}
+              </span>
+            ) : (
+              'None recorded'
+            ),
+          ],
           ['Blind ship', bundle.blind_shipping_enforced ? 'Yes, no supplier marks' : 'No'],
           ...(bundle.drawing_reference && bundle.drawing_reference !== 'N/A'
             ? ([['Drawing', bundle.drawing_reference]] as [string, string][])
@@ -210,7 +247,15 @@ function Quality({ order }: { order: Order }) {
   );
 }
 
-type Rate = { carrier: string; service: string; live?: boolean; transit_days?: number | null; usd?: number | null; cad?: number | null; cny?: number | null };
+type Rate = {
+  carrier: string;
+  service: string;
+  live?: boolean;
+  transit_days?: number | null;
+  usd?: number | null;
+  cad?: number | null;
+  cny?: number | null;
+};
 
 /** Prices from every carrier that is set up, then the saved rate card. Looks up prices only; nothing is booked. */
 function ShippingPrices({ address, currency }: { address?: string | null; currency?: string }) {
@@ -241,7 +286,13 @@ function ShippingPrices({ address, currency }: { address?: string | null; curren
       >
         <label className="grid gap-1 text-xs">
           <span className="font-medium">Shipping prices</span>
-          <Input className="w-32" inputMode="decimal" placeholder="Weight (lbs)" value={weight} onChange={(e) => setWeight(e.target.value.replace(/[^\d.]/g, ''))} />
+          <Input
+            className="w-32"
+            inputMode="decimal"
+            placeholder="Weight (lbs)"
+            value={weight}
+            onChange={(e) => setWeight(e.target.value.replace(/[^\d.]/g, ''))}
+          />
         </label>
         <Button type="submit" variant="outline" size="sm" disabled={!address || !(Number(weight) > 0) || quote.isPending}>
           {quote.isPending && <Loader2 className="animate-spin" />}
@@ -299,12 +350,7 @@ function Documents({ order }: { order: Order }) {
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => download.mutate()}
-          disabled={!order.has_packing_slip || download.isPending}
-        >
+        <Button variant="outline" size="sm" onClick={() => download.mutate()} disabled={!order.has_packing_slip || download.isPending}>
           {download.isPending ? <Loader2 className="animate-spin" /> : <Download />}
           Packing slip (PDF)
         </Button>
@@ -324,8 +370,8 @@ function Documents({ order }: { order: Order }) {
           <DialogHeader>
             <DialogTitle>Dispatch {order.sales_order_number}?</DialogTitle>
             <DialogDescription>
-              This makes the packing list (and customs papers if cross-border), books the carrier and writes the
-              customer’s shipping notice. It cannot be undone from here.
+              This makes the packing list (and customs papers if cross-border), books the carrier and writes the customer’s shipping notice.
+              It cannot be undone from here.
             </DialogDescription>
           </DialogHeader>
           <form

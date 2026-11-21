@@ -592,8 +592,10 @@ export function AiStatusLine() {
     <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       <ToneBadge tone={engine.ready ? 'ok' : 'warn'}>{engine.ready ? 'AI ready' : 'AI not ready'}</ToneBadge>
       <span>
-        {engine.detail || `${engine.provider} ${engine.model}.`} The AI reads, translates and drafts; a person approves anything that
-        commits money, a date or a specification.
+        {/groq/i.test(engine.provider ?? '')
+          ? 'The AI service is on the free tier. Text you give it is sent to a US service.'
+          : engine.detail || 'The AI service is connected.'}{' '}
+        The AI reads, translates and drafts; a person approves anything that commits money, a date or a specification.
       </span>
     </p>
   );

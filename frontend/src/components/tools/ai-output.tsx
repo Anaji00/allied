@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button';
 import { words } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
-
 export const FEATURE_LABEL: Record<string, string> = {
   email_triage: 'Email read',
   email_draft: 'Email draft',
@@ -151,7 +150,9 @@ export function DraftView({ result }: { result: any }) {
         {result.subject}
       </p>
       <pre className="rounded-md border bg-muted/40 p-3 font-sans whitespace-pre-wrap">{result.body}</pre>
-      {result.states_commitment && <p className="text-xs text-warn">This draft mentions a price, date or promise. Check it before sending.</p>}
+      {result.states_commitment && (
+        <p className="text-xs text-warn">This draft mentions a price, date or promise. Check it before sending.</p>
+      )}
       <CopyButton text={`${result.subject}\n\n${result.body}`} />
     </div>
   );

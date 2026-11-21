@@ -43,16 +43,30 @@ def system_health(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
     - In-memory catalog record counts
     - Runtime configuration flags
     """
+    from app.services import worker_health
+
     odbc_status = odbc_reader.test_connection()
+    from app.core.database import connection_health
+
+    workers = worker_health.snapshot()
+    database = connection_health()
+    from app.core.database import check_live_database
+
+    file_check = check_live_database()
+    from app.core.database import schema_state
 
     return {
         "service": settings.APP_NAME,
-        "status": "healthy",
+        "status": "database_newer_than_app" if schema_state.get("mode") == "newer" else "damaged" if not file_check["ok"] else "degraded" if (workers["red"] or database["failed_opens_last_hour"]) else "healthy",
+        "workers": workers,
+        "database": {**database, "file_check": file_check},
+        "schema": {**schema_state},
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": settings.APP_ENV,
+        "environment_label": "Live" if settings.is_production else "Test",
         "simulation_mode": not settings.sage_live,
         "components": {
-            "sage_odbc_reader": odbc_status,
+            "sage_odbc_reader": {**odbc_status, "source_label": "Sage 50"},          # the screen shows this, not the raw DSN name ("Peachtree")
             "sage_com_sdk_writer": {
                 "status": "ready",
                 "mode": "live_com" if settings.sage_live else "simulation",

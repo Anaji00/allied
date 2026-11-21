@@ -30,7 +30,8 @@ from app.core.database import SessionLocal
 from app.core.logging import logger
 from app.models.db_models import MondayChangeDB
 
-KINDS = ("create_item", "update_columns", "post_update")
+KINDS = ("create_item", "update_columns", "post_update", "archive_item", "move_item", "duplicate_item",
+         "create_column", "rename_column", "delete_column", "create_group", "rename_group")
 _PUSHING: contextvars.ContextVar[bool] = contextvars.ContextVar("monday_pushing", default=False)
 
 
@@ -93,7 +94,7 @@ def stage(kind: str, board_id: Any, item_id: Any, payload: Dict[str, Any], summa
         if kind == "update_columns":
             payload = {**payload, "columns": {_col_id(board_id, k): v for k, v in payload.get("columns", {}).items()}}      # always by column id, never by title
             payload["base"] = {**_auto_base(board_id, item_id, payload["columns"]), **(payload.get("base") or {})}
-            row = waiting.first()
+            row = waiting.filter(MondayChangeDB.staged_by == by[:256]).first()          # each person's edits to a row are their own staged change, so each can be undone on its own
             if row:
                 old = row.payload or {}
                 row.payload = {"columns": {**old.get("columns", {}), **payload.get("columns", {})},
@@ -206,8 +207,10 @@ def preview(ids: Optional[List[int]] = None, board_id: Optional[str] = None) -> 
                 notes.append("This item isn't in the app's copy of the board (it may be new, archived or the board needs reading again).")
         elif c["kind"] == "post_update":
             entry["comment"] = c["payload"].get("text")
+        elif c["kind"] == "create_item":
+            entry["new_row"] = {"name": c["payload"].get("item_name"), "fields": c["payload"].get("fields", {}), "group_id": c["payload"].get("group_id")}
         else:
-            entry["new_row"] = {"name": c["payload"].get("item_name"), "fields": c["payload"].get("fields", {})}
+            entry["action"] = {k: v for k, v in c["payload"].items() if k != "base"}
         if info["board_read_at"]:
             notes.append(f"Compared with the board as the app last read it ({str(info['board_read_at'])[:16].replace('T', ' ')}).")
         made = datetime.fromisoformat(c["created_at"]) if c["created_at"] else _now()
@@ -360,6 +363,8 @@ def push(ids: Optional[List[int]] = None, who: str = "", dry_run: bool = False, 
                 checked = {}
                 for k, v in payload.get(key_name, {}).items():
                     col = by_col.get(_col_id(board, k))
+                    if col is None and by_col:                                              # the column was deleted on monday (or renamed away) since the cell was staged: this row is not sent
+                        raise ValueError(f"The column '{str(k)[:40]}' is no longer on the board.")
                     checked[k] = check_cell(board, col["id"], v, new_row=(kind == "create_item"))[1] if col else v      # the full check, whoever staged it and however it got here (retry, rebase, old rows, force)
                 payload[key_name] = checked
                 columns = checked if kind == "update_columns" else columns
@@ -393,10 +398,48 @@ def push(ids: Optional[List[int]] = None, who: str = "", dry_run: bool = False, 
                     ok = client.update_column_values(int(board), int(item), _shape(board, payload.get("columns", {})), f"push-{cid}-{key}")
                     result = {"ok": bool(ok)}
                     error = None if ok else "monday did not accept the column changes."
+                elif kind == "archive_item":
+                    ok = client.archive_item(int(item), f"push-{cid}-{key}")
+                    result = {"ok": bool(ok)}
+                    error = None if ok else "monday did not accept the archive."
+                elif kind == "move_item":
+                    ok = client.move_item_to_group(int(item), payload.get("group_id", ""), f"push-{cid}-{key}")
+                    result = {"ok": bool(ok)}
+                    error = None if ok else "monday did not accept the move."
+                elif kind == "duplicate_item":
+                    new_id = client.duplicate_item(board, int(item), bool(payload.get("with_updates")), f"push-{cid}-{key}")
+                    result = {"ok": bool(new_id), "monday_item_id": new_id if new_id is not True else None}
+                    error = None if new_id else "monday did not accept the copy."
+                elif kind == "create_column":
+                    new_id = client.create_column(board, payload.get("title", ""), payload.get("column_type", "text"), payload.get("defaults") or None, f"push-{cid}-{key}")
+                    result = {"ok": bool(new_id), "monday_column_id": new_id if new_id is not True else None}
+                    error = None if new_id else "monday did not accept the new column."
+                elif kind == "rename_column":
+                    ok = client.rename_column(board, payload.get("column_id", ""), payload.get("title", ""), f"push-{cid}-{key}")
+                    result = {"ok": bool(ok)}
+                    error = None if ok else "monday did not accept the new column name."
+                elif kind == "delete_column":
+                    ok = client.delete_column(board, payload.get("column_id", ""), f"push-{cid}-{key}")
+                    result = {"ok": bool(ok)}
+                    error = None if ok else "monday did not accept the column delete."
+                elif kind == "create_group":
+                    new_id = client.create_group(board, payload.get("title", ""), f"push-{cid}-{key}")
+                    result = {"ok": bool(new_id), "monday_group_id": new_id if new_id is not True else None}
+                    error = None if new_id else "monday did not accept the new group."
+                elif kind == "rename_group":
+                    ok = client.rename_group(board, payload.get("group_id", ""), payload.get("title", ""), f"push-{cid}-{key}")
+                    result = {"ok": bool(ok)}
+                    error = None if ok else "monday did not accept the new group name."
                 else:
-                    new_id = client.create_item(board, payload.get("item_name", ""), _shape(board, payload.get("fields", {})), f"push-{cid}-{key}")
-                    result = {"ok": bool(new_id), "monday_item_id": new_id}
+                    new_id = client.create_item(board, payload.get("item_name", ""), _shape(board, payload.get("fields", {})), f"push-{cid}-{key}", **({"group_id": payload["group_id"]} if payload.get("group_id") else {}))
+                    result = {"ok": bool(new_id), "monday_item_id": new_id, "staged_item_id": f"new:{cid}"}          # the screen swaps "new:<staged id>" for the real id
                     error = None if new_id else "monday did not accept the new row."
+                    if new_id and payload.get("link_job"):                                      # a job put on this board: the new item is now its link
+                        from app.services import jobs_board
+
+                        jobs_board.store_link_after_push(str(payload["link_job"]), str(board), str(new_id), who or "monday-push")
+                    for text in (payload.get("comments") or []) if new_id else []:           # comments made on the row while it was waiting go on the real row now
+                        client.post_pulse_update(int(new_id), str(text), idempotency_key=f"push-{cid}-c-{abs(hash(text)) % 10**8}")
         except Exception as exc:  # noqa: BLE001 - one failing change must not stop the others
             error = f"{type(exc).__name__}: {exc}"[:300]
         if not error and kind == "update_columns":      # the app's copy of the board now shows what it just wrote, so the next edit is made against it
@@ -408,6 +451,55 @@ def push(ids: Optional[List[int]] = None, who: str = "", dry_run: bool = False, 
                     for k, v in columns.items():
                         if it is not None:
                             it.setdefault("values", {})[_col_id(board, k)] = _show(v) if isinstance(v, dict) else v
+            except Exception:  # noqa: BLE001 - a convenience; the push itself is done
+                pass
+        if not error and kind in ("create_column", "rename_column", "delete_column", "create_group", "rename_group"):      # the app's copy of the layout follows
+            try:
+                from app.services.coordination import boards as _boards
+
+                with _boards._lock:
+                    b = _mirror(board)
+                    if kind == "rename_column":
+                        for c in b.get("columns", []):
+                            if c["id"] == payload.get("column_id"):
+                                c["title"] = payload.get("title", c["title"])
+                    elif kind == "delete_column":
+                        b["columns"] = [c for c in b.get("columns", []) if c["id"] != payload.get("column_id")]
+                    elif kind == "rename_group":
+                        for g in b.get("groups", []):
+                            if g["id"] == payload.get("group_id"):
+                                g["title"] = payload.get("title", g["title"])
+                    elif kind == "create_group" and result.get("monday_group_id"):
+                        b.setdefault("groups", []).append({"id": result["monday_group_id"], "title": payload.get("title", ""), "color": None})
+                    elif kind == "create_column" and result.get("monday_column_id"):
+                        b.setdefault("columns", []).append({"id": result["monday_column_id"], "title": payload.get("title", ""), "type": payload.get("column_type", "text")})
+            except Exception:  # noqa: BLE001 - a convenience; the push itself is done
+                pass
+        if not error and kind == "create_item" and result.get("monday_item_id"):          # the real row takes the pending one's place in the app's copy of the board
+            try:
+                from app.services.coordination import boards as _boards
+
+                with _boards._lock:
+                    b = _mirror(board)
+                    g = next((x for x in b.get("groups", []) if x["id"] == payload.get("group_id")), None)
+                    if b and not any(str(i.get("id")) == str(result["monday_item_id"]) for i in b.get("items", [])):
+                        b.setdefault("items", []).append({"id": str(result["monday_item_id"]), "name": payload.get("item_name", ""), "created_at": None, "group": g["id"] if g else None,
+                                                          "group_title": g["title"] if g else None, "values": {_col_id(board, k): _show(v) if isinstance(v, dict) else v for k, v in (payload.get("fields") or {}).items()}})
+            except Exception:  # noqa: BLE001 - a convenience; the push itself is done
+                pass
+        if not error and kind in ("move_item", "archive_item"):      # the app's copy follows what was just done
+            try:
+                from app.services.coordination import boards as _boards
+
+                with _boards._lock:
+                    b = _mirror(board)
+                    if kind == "archive_item":
+                        b["items"] = [i for i in b.get("items", []) if str(i.get("id")) != str(item)]
+                    else:
+                        it = next((i for i in b.get("items", []) if str(i.get("id")) == str(item)), None)
+                        g = next((x for x in b.get("groups", []) if x["id"] == payload.get("group_id")), None)
+                        if it is not None and g is not None:
+                            it["group"], it["group_title"] = g["id"], g["title"]
             except Exception:  # noqa: BLE001 - a convenience; the push itself is done
                 pass
         if not error and kind == "create_item" and payload.get("rfq_id") and result.get("monday_item_id"):
@@ -424,7 +516,7 @@ def push(ids: Optional[List[int]] = None, who: str = "", dry_run: bool = False, 
             row.pushed_at = None if error else _now()
             db.commit()
         pushed, failed = pushed + (not error), failed + bool(error)
-        results.append({"id": cid, "ok": not error, "error": error, **({"monday_item_id": result.get("monday_item_id")} if result.get("monday_item_id") else {})})
+        results.append({"id": cid, "ok": not error, "error": error, **({"monday_item_id": result.get("monday_item_id"), "staged_item_id": result.get("staged_item_id")} if result.get("monday_item_id") else {})})
     audit_log("MONDAY_PUSH", "monday_changes", ",".join(str(r["id"]) for r in results)[:60], actor_email=who or "system",
               detail=f"pushed {pushed}, failed {failed}" + (" (forced past conflict checks)" if force else ""))
     return {"ok": failed == 0, "pushed": pushed, "failed": failed, "conflicts": sum(1 for r in results if r.get("conflict")), "results": results,
@@ -772,20 +864,22 @@ def stage_edit(board_id: str, item_id: str, edits: Dict[str, Any], user: Dict[st
                  f"Edit {item['name']}: " + ", ".join(f"{k} = {_show(v)}" for k, v in columns.items())[:300], source="edit", by=user.get("email", "app"))
 
 
-def stage_new_item(board_id: str, name: str, fields: Dict[str, Any], user: Dict[str, Any]) -> int:
+def stage_new_item(board_id: str, name: str, fields: Dict[str, Any], user: Dict[str, Any], group_id: Optional[str] = None, key: Optional[str] = None) -> int:
     b = _board(board_id)
+    if group_id and not any(g["id"] == group_id for g in b.get("groups", [])):
+        raise ValueError(f"There is no group '{str(group_id)[:40]}' on {b.get('name') or board_id}.")
     name = _strip_odd(str(name or ""))[:255]
     if not name:
         raise ValueError("Give the new row a name.")
     clean = {}
-    for key, value in (fields or {}).items():
-        col, val = check_cell(board_id, key, value, new_row=True)
+    for field_key, value in (fields or {}).items():
+        col, val = check_cell(board_id, field_key, value, new_row=True)
         clean[col["id"]] = val
     from app.services.coordination import jobs
 
     # one staged row per board and name: a double click is one row, not two
-    return stage("create_item", board_id, "", {"item_name": name, "fields": clean}, f"New row on {b.get('name') or board_id}: {name}",
-                 key=f"new-{board_id}-{' '.join(name.split()).casefold()}", source="edit", by=user.get("email", "app"))
+    return stage("create_item", board_id, "", {"item_name": name, "fields": clean, **({"group_id": group_id} if group_id else {})}, f"New row on {b.get('name') or board_id}: {name}",
+                 key=key or f"new-{board_id}-{' '.join(name.split()).casefold()}", source="edit", by=user.get("email", "app"))
 
 
 def stage_comment(board_id: str, item_id: str, text: str, user: Dict[str, Any]) -> int:

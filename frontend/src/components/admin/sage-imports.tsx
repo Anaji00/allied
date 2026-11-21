@@ -16,19 +16,18 @@ import {
   fetchCSVTemplates,
   fetchSageExportSummary,
   generateSageBatchBundle,
-  importCSVData,
   unmarkSageExport,
-  uploadCSVFile,
 } from '@/lib/api';
 import { money } from '@/lib/format';
 import { BringInFromSage } from './sage-bring-in';
+import { ListImport } from './list-import';
 import { useHealth } from '@/lib/queries';
 
 const TABS = ['sage', 'lists', 'bring'] as const;
 
-export function SageImports() {
+export function SageImports({ param = 'tab' }: { param?: string }) {
   const { hasRole } = useAuth();
-  const [tab, setTab] = useQueryState('tab', parseAsStringLiteral(TABS).withDefault('sage'));
+  const [tab, setTab] = useQueryState(param, parseAsStringLiteral(TABS).withDefault('sage'));
   if (!hasRole('MANAGER'))
     return <EmptyState title="Managers only">Sage import files and list imports are open to managers and admins.</EmptyState>;
   return (
@@ -43,12 +42,20 @@ export function SageImports() {
           ['bring', 'Bring in from Sage'],
         ]}
       />
-      {tab === 'sage' ? <SageFiles /> : tab === 'lists' ? <ListImports /> : <BringInFromSage />}
+      {tab === 'sage' ? <SageFiles /> : tab === 'lists' ? <ListImport /> : <BringInFromSage />}
     </div>
   );
 }
 
-type Summary = { sales_orders_count?: number; total_sales_volume?: number; purchase_orders_count?: number; total_purchase_volume?: number };
+type Summary = {
+  sales_orders_count?: number;
+  total_sales_volume?: number;
+  purchase_orders_count?: number;
+  total_purchase_volume?: number;
+  /** The totals worded by the server, one amount per currency. */
+  sales_label?: string;
+  purchase_label?: string;
+};
 type Kind = 'sales-orders' | 'purchase-orders';
 const FILE: Record<Kind, string> = { 'sales-orders': 'SO_IMPORT.CSV', 'purchase-orders': 'PO_IMPORT.CSV' };
 
@@ -123,9 +130,9 @@ function SageFiles() {
           title="Sales orders"
           facts={[
             ['Ready', String(s.sales_orders_count ?? 0)],
-            ['Total', money(s.total_sales_volume ?? 0)],
+            ['Total', s.sales_label ?? `about ${money(s.total_sales_volume ?? 0)}`],
           ]}
-          label={`Download ${FILE['sales-orders']}`}
+          label="Download and mark as sent to Sage: sales orders"
           busy={download.isPending && download.variables === 'sales-orders'}
           disabled={download.isPending}
           onDownload={() => download.mutate('sales-orders')}
@@ -134,9 +141,9 @@ function SageFiles() {
           title="Supplier POs"
           facts={[
             ['Lines ready', String(s.purchase_orders_count ?? 0)],
-            ['Payable', money(s.total_purchase_volume ?? 0)],
+            ['Payable', s.purchase_label ?? `about ${money(s.total_purchase_volume ?? 0)}`],
           ]}
-          label={`Download ${FILE['purchase-orders']}`}
+          label="Download and mark as sent to Sage: supplier POs"
           busy={download.isPending && download.variables === 'purchase-orders'}
           disabled={download.isPending}
           onDownload={() => download.mutate('purchase-orders')}
@@ -161,10 +168,12 @@ function SageFiles() {
           <PanelHeading>Preview the files</PanelHeading>
           <Button size="sm" variant="outline" className="ml-auto" disabled={preview.isPending} onClick={() => preview.mutate()}>
             {preview.isPending && <Loader2 className="animate-spin" />}
-            Show what Sage will import
+            Preview what Sage will bring in
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">Sales post to 40000-00-FAB and steel materials to 50000-00-STEEL.</p>
+        <p className="text-xs text-muted-foreground">
+          Sales go to the fabrication sales account in Sage, and steel materials to the steel materials account.
+        </p>
         {preview.data && (
           <div className="grid gap-3 lg:grid-cols-2">
             {Object.entries(FILE).map(([, name]) => (
@@ -204,137 +213,5 @@ function FileCard({
         {label}
       </Button>
     </section>
-  );
-}
-
-const LIST_TYPES = [
-  ['ITEMS', 'Products'],
-  ['CUSTOMERS', 'Customer accounts'],
-  ['VENDORS', 'Suppliers'],
-  ['ORDERS_BATCH', 'A batch of customer orders'],
-] as const;
-
-type ImportResult = {
-  status: string;
-  message?: string;
-  rows_processed?: number;
-  records_created?: number;
-  records_updated?: number;
-  errors?: string[];
-};
-
-function ListImports() {
-  const client = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [type, setType] = useState<string>('ITEMS');
-  const [text, setText] = useState('');
-  const templates = useQuery({
-    queryKey: ['csv', 'templates'],
-    queryFn: async () => ((await fetchCSVTemplates()) as { templates?: Record<string, string> }).templates ?? {},
-    staleTime: Infinity,
-  });
-  const done = (res: ImportResult) => {
-    void client.invalidateQueries({ queryKey: ['sage'] });
-    if (res.status === 'SUCCESS') toast.success('Import finished');
-    else toast.warning('Import finished with warnings');
-  };
-  const paste = useMutation({ mutationFn: async () => (await importCSVData(type, text)) as ImportResult, onSuccess: done });
-  const upload = useMutation({ mutationFn: async (f: File) => (await uploadCSVFile(f, type)) as ImportResult, onSuccess: done });
-  const result = upload.data ?? paste.data;
-  const error = upload.error ?? paste.error;
-  const busy = paste.isPending || upload.isPending;
-  const label = LIST_TYPES.find(([v]) => v === type)?.[1] ?? '';
-
-  // Switching type keeps pasted rows; the sample only replaces an empty box or the previous untouched sample.
-  function changeType(next: string) {
-    const untouched = !text.trim() || text === templates.data?.[type];
-    setType(next);
-    if (untouched) setText(templates.data?.[next] ?? '');
-  }
-
-  return (
-    <form
-      className="grid max-w-4xl gap-3 rounded-lg border bg-card p-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (text.trim()) paste.mutate();
-      }}
-    >
-      <div className="grid gap-0.5">
-        <h2 className="text-sm font-semibold">Update lists from a spreadsheet</h2>
-        <p className="text-xs text-muted-foreground">
-          Add or change products, customers or suppliers, or bring in a batch of orders, from a CSV file.
-        </p>
-      </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <Field label="What are you updating?" className="min-w-56">
-          <NativeSelect value={type} onChange={(e) => changeType(e.target.value)}>
-            {LIST_TYPES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </NativeSelect>
-        </Field>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8"
-          disabled={!templates.data?.[type]}
-          onClick={() => setText(templates.data?.[type] ?? '')}
-        >
-          Load sample rows
-        </Button>
-        <Button type="button" variant="outline" size="sm" className="h-8" disabled={busy} onClick={() => fileRef.current?.click()}>
-          <FileUp /> Upload a CSV file
-        </Button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".csv,text/csv"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) upload.mutate(f);
-            e.target.value = '';
-          }}
-        />
-      </div>
-      <Field label="Rows (the first line is the column headings)">
-        <Textarea
-          rows={10}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Paste rows from your spreadsheet here…"
-          spellCheck={false}
-          className="font-mono text-xs"
-        />
-      </Field>
-      <Button type="submit" className="justify-self-start" disabled={!text.trim() || busy}>
-        {busy && <Loader2 className="animate-spin" />}
-        Import {label.toLowerCase()}
-      </Button>
-      {error && (
-        <p role="alert" className="text-sm text-bad">
-          {error.message}
-        </p>
-      )}
-      {result && (
-        <div className="grid gap-1.5 rounded-md bg-muted/40 p-3 text-[13px]">
-          <p className={result.status === 'SUCCESS' ? 'font-medium text-ok' : 'font-medium text-warn'}>
-            {result.message} {result.rows_processed ?? 0} rows read, {result.records_created ?? 0} added, {result.records_updated ?? 0}{' '}
-            updated.
-          </p>
-          {(result.errors?.length ?? 0) > 0 && (
-            <ul className="grid list-disc gap-0.5 pl-5 text-bad">
-              {result.errors!.map((e, i) => (
-                <li key={i}>{e}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-    </form>
   );
 }

@@ -34,6 +34,21 @@ export type Item = {
   group_title?: string | null;
   values: Record<string, string>;
   app: AppView | null;
+  /** A new row that is saved for monday but not on it yet: it is edited like any other row. */
+  pending?: boolean;
+  staged_id?: string | number | null;
+  /** The Jobs board: a row is an app job, which may or may not be on a monday board. */
+  job?: boolean;
+  on_monday?: boolean;
+  not_a_job_yet?: boolean;
+  cells?: Record<string, { editable?: boolean; staged?: boolean; staged_value?: unknown; was?: unknown }>;
+  /** Added by the app from its own tables; null when the name is not listed. */
+  family?: string | null;
+  company?: string | null;
+  plant?: string | null;
+  tags?: string[];
+  link_state?: 'linked' | 'suggested' | 'none';
+  actions?: { label: string; method: string; path: string; body?: unknown }[];
 };
 
 export type Board = {
@@ -47,6 +62,8 @@ export type Board = {
   columns: Column[];
   groups: Group[];
   items: Item[];
+  /** Columns blank in every row, as the server sees it; the table leaves them out. */
+  empty_columns?: string[];
 };
 
 export function useBoards() {

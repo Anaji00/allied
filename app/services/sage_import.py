@@ -717,6 +717,19 @@ def already_imported(kind: str, file_hash: str) -> Optional[Dict[str, Any]]:
         return _history_row(row) if row else None
 
 
+def _summary(result: Dict[str, Any], counts: Dict[str, int], closing: List[str]) -> Dict[str, Any]:
+    """The preview in one plain block for a single-page screen: what will be added, changed and skipped, and the first five differences in words."""
+    def say(row: Dict[str, Any], what: str) -> str:
+        parts = [f"{c.get('field')}: {c.get('old') or 'blank'} -> {c.get('new') or 'blank'}" for c in (row.get("changes") or [])[:3]]
+        return f"{row['key']}: " + ("; ".join(parts) if parts else what)
+
+    diffs = [{"key": r["key"], "kind": "changed", "what": say(r, "changed")} for r in result["changed"][:5]]
+    diffs += [{"key": r["key"], "kind": "new", "what": say(r, "new")} for r in result["new"][: 5 - len(diffs)]]
+    skip = counts["unchanged"] + counts["problems"]
+    text = f"Will add {counts['new']}, change {counts['changed']}, skip {skip} ({counts['unchanged']} already the same, {counts['problems']} with a problem)" + (f", and close {len(closing)} order(s) no longer open" if closing else "") + "."
+    return {"will_add": counts["new"], "will_change": counts["changed"], "will_skip": skip, "unchanged": counts["unchanged"], "problems": counts["problems"], "will_close": len(closing), "differences": diffs, "text": text}
+
+
 def preview(data: bytes, filename: str, kind: str, user: Dict[str, Any], date_order: Optional[str] = None) -> Dict[str, Any]:
     """What importing this file would do. Saves nothing; hands back a token for commit (kept 30 minutes, in memory)."""
     parsed = parse(data, filename, kind, date_order)
@@ -735,6 +748,7 @@ def preview(data: bytes, filename: str, kind: str, user: Dict[str, Any], date_or
         "warnings": _warnings(data, filename, parsed),
         "columns": {"mapped": [{"header": h, "field": f} for h, f in parsed["mapped"].items()], "unmapped": unmapped, "date_order": parsed["date_order"]},
         "counts": counts,
+        "summary": _summary(result, counts, closing),
         "will_close": {"count": len(closing), "sample": closing[:PREVIEW_ROWS]},
         "rows": {"new": result["new"][:PREVIEW_ROWS], "changed": result["changed"][:PREVIEW_ROWS], "unchanged": counts["unchanged"], "problems": result["problems"][:PREVIEW_PROBLEMS]},
         "message": (("This exact file was already imported; importing it again changes nothing. " if prior else "") +

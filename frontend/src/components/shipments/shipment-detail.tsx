@@ -1,5 +1,7 @@
 'use client';
 
+import { ActionBar } from '@/components/data/action-bar';
+import { RecordFields } from '@/components/data/record-fields';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -16,15 +18,7 @@ import { useAuth } from '@/context/AuthContext';
 import { api, ok } from '@/lib/api/client';
 import { optimistic } from '@/lib/optimistic';
 import { day, dateTime, person } from '@/lib/format';
-import {
-  MODE_LABEL,
-  SOURCE_LABEL,
-  flagTone,
-  statusLabel,
-  statusOptions,
-  statusTone,
-  type Shipment,
-} from './use-shipments';
+import { MODE_LABEL, SOURCE_LABEL, flagTone, identifier, statusLabel, statusOptions, statusTone, type Shipment } from './use-shipments';
 
 export function ShipmentDetail({ shipment: s, statuses, canEdit }: { shipment: Shipment; statuses: string[]; canEdit: boolean }) {
   const { employeeEmail } = useAuth();
@@ -33,6 +27,13 @@ export function ShipmentDetail({ shipment: s, statuses, canEdit }: { shipment: S
 
   return (
     <div className="grid gap-4">
+      <ActionBar
+        server={{ kind: 'shipment', ref: String(s.id) }}
+        subject={`Shipment ${identifier(s)}`}
+        text={[`Shipment ${identifier(s)}`, `Status: ${statusLabel(s.status, s.mode)}`, `Arrives: ${day(s.eta_current)}`].join('\n')}
+        thread={{ itemType: 'shipment', itemRef: String(s.id) }}
+      />
+      <RecordFields kind="shipment" refId={String(s.id)} title="Details (click to change)" />
       <div className="flex flex-wrap items-center gap-1.5">
         <ToneBadge tone={statusTone(s.status)}>{statusLabel(s.status, s.mode)}</ToneBadge>
         {(s.flags ?? []).map((f) => (
@@ -44,24 +45,55 @@ export function ShipmentDetail({ shipment: s, statuses, canEdit }: { shipment: S
 
       {s.flags?.includes('port free time ending') && (
         <p role="alert" className="rounded-md bg-bad-soft p-3 text-sm text-bad">
-          Free time at the port ends {day(s.free_time_ends, { weekday: true })}. After that the port charges storage every day
-          until it is collected.
+          Free time at the port ends {day(s.free_time_ends, { weekday: true })}. After that the port charges storage every day until it is
+          collected.
         </p>
       )}
 
       <Facts
         items={[
-          ['Arrives', <span key="a">{day(s.eta_current, { weekday: true })}{moved && <span className="text-muted-foreground"> · first promised {day(s.eta_original)}</span>}</span>],
+          [
+            'Arrives',
+            <span key="a">
+              {day(s.eta_current, { weekday: true })}
+              {moved && <span className="text-muted-foreground"> · first promised {day(s.eta_original)}</span>}
+            </span>,
+          ],
           ['Leaves', day(s.etd, { weekday: true })],
           ['Port free time ends', day(s.free_time_ends)],
           ['By', MODE_LABEL[s.mode] ?? s.mode],
           ['Forwarder', s.forwarder || '–'],
           ['Carrier', s.carrier || '–'],
-          ['Booking ref', s.reference ? <span key="r" className="font-mono text-xs">{s.reference}</span> : '–'],
-          [s.mode === 'AIR' ? 'Air waybill' : 'Container', <span key="c" className="font-mono text-xs">{(s.mode === 'AIR' ? s.awb : s.container_no) || '–'}</span>],
-          ['Owner', person(s.owner_email, employeeEmail) || '–'],
+          [
+            'Booking ref',
+            s.reference ? (
+              <span key="r" className="font-mono text-xs">
+                {s.reference}
+              </span>
+            ) : (
+              '–'
+            ),
+          ],
+          [
+            s.mode === 'AIR' ? 'Air waybill' : 'Container',
+            <span key="c" className="font-mono text-xs">
+              {(s.mode === 'AIR' ? s.awb : s.container_no) || '–'}
+            </span>,
+          ],
+          ['Owner', s.owner_name || person(s.owner_email, employeeEmail) || '–'],
           ...(s.project_item_id
-            ? ([['Project', <Link key="p" className="underline underline-offset-2" href={`/projects?project=${encodeURIComponent(s.project_item_id)}`}>Open the project</Link>]] as [string, React.ReactNode][])
+            ? ([
+                [
+                  'Project',
+                  <Link
+                    key="p"
+                    className="underline underline-offset-2"
+                    href={`/projects?project=${encodeURIComponent(s.project_item_id)}`}
+                  >
+                    Open the project
+                  </Link>,
+                ],
+              ] as [string, React.ReactNode][])
             : []),
           ['Last update', dateTime(s.last_update_at)],
         ]}
@@ -126,7 +158,13 @@ function RecordChange({ shipment: s, statuses }: { shipment: Shipment; statuses:
             free_time_ends: changes.free_time_ends ?? x.free_time_ends,
             last_update_at: now(),
             events: [
-              { at: now(), status: changes.status ?? x.status, description: changes.note ?? null, source: 'manual', eta: changes.eta ?? null },
+              {
+                at: now(),
+                status: changes.status ?? x.status,
+                description: changes.note ?? null,
+                source: 'manual',
+                eta: changes.eta ?? null,
+              },
               ...(x.events ?? []),
             ],
           },

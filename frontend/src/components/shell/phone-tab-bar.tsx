@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Menu } from 'lucide-react';
 import { useSidebar } from '@/components/ui/sidebar';
-import { useInbox } from '@/components/inbox/use-inbox';
+import { useNeedAction } from '@/components/today/use-need-action';
 import { isActive, PHONE_TABS } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 
@@ -16,8 +16,7 @@ export function PhoneTabBar() {
   const pathname = usePathname();
   const { openMobile, setOpenMobile } = useSidebar();
   // Same queries as the sidebar badge, so the count costs no extra requests.
-  const waiting = useInbox().items;
-  const critical = waiting.some((i) => i.severity === 'critical');
+  const { count: waitingCount, critical } = useNeedAction();
   const onTab = PHONE_TABS.some((item) => isActive(item.href, pathname));
 
   return (
@@ -39,16 +38,16 @@ export function PhoneTabBar() {
                 <item.icon />
               </span>
               <span className="truncate">{item.label}</span>
-              {item.href === '/inbox' && waiting.length > 0 && (
+              {item.href === '/inbox' && waitingCount > 0 && (
                 <span
                   className={cn(
                     'absolute top-1.5 left-1/2 ml-2 min-w-5 rounded-full px-1 text-center text-xs leading-5 font-semibold tabular-nums',
                     critical ? 'bg-bad text-white' : 'bg-foreground text-background',
                   )}
                   role="img"
-                  aria-label={`${waiting.length} waiting`}
+                  aria-label={`${waitingCount} waiting`}
                 >
-                  {waiting.length > 99 ? '99+' : waiting.length}
+                  {waitingCount > 99 ? '99+' : waitingCount}
                 </span>
               )}
             </Link>

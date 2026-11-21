@@ -17,6 +17,15 @@ export function money(value: unknown, currency = 'USD') {
   return fmt.format(n);
 }
 
+/** An amount with its currency named when it is not US dollars: "CN¥54,242.28 (Chinese Yuan)". Nothing is converted. */
+export function moneyNamed(value: unknown, currency = 'USD') {
+  const text = money(value, currency);
+  if (text === '–' || currency === 'USD') return text;
+  // One code per amount ("CNY 5,659.16"), so mixed currencies are never mistaken for dollars.
+  const n = Number(value);
+  return `${currency} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export function pct(value: unknown, digits = 1) {
   const n = Number(value);
   return value === null || value === undefined || Number.isNaN(n) ? '–' : `${n.toFixed(digits)}%`;
@@ -132,7 +141,7 @@ const KNOWN_CODES: Record<string, string> = {
   DISCREPANCY_FLAGGED: 'Needs a check',
   DUPLICATE_INVOICE: 'Already entered',
   NEW: 'New',
-  SYNCED_TO_SAGE: 'Made; not in a Sage file yet',
+  SYNCED_TO_SAGE: 'Not sent to Sage yet',
   VALIDATION_ERROR: 'Needs a check',
   SAGE_ERROR: 'Sage problem',
   no_ack: 'PO not confirmed',

@@ -25,6 +25,8 @@ _lock = threading.Lock()
 _failures: Dict[str, List[float]] = {}
 _locked_until: Dict[str, float] = {}
 _good_addresses: Dict[str, Dict[str, float]] = {}      # account -> addresses that signed in with the right password
+_in_flight: Dict[str, List[float]] = {}                # attempts that passed the lock check and are still checking the password (hashing takes time)
+IN_FLIGHT_SECONDS = 30.0
 
 
 def _acct(email: str) -> str:
@@ -57,9 +59,37 @@ def seconds_locked(email: str, address: str = "") -> int:
         return int(left) + 1 if left > 0 else 0
 
 
+def reserve(email: str, address: str = "") -> int:
+    """Called when a sign-in attempt starts. Returns seconds to wait when it must be refused: locked, or so many attempts are already being checked at once that, if they all fail, the lock would be
+    reached (twenty at the same instant would otherwise all pass the lock check before the first wrong password is counted). Otherwise the attempt holds a place until it is counted."""
+    wait = seconds_locked(email, address)
+    if wait:
+        return wait
+    now = time.monotonic()
+    key = _pair(email, address)
+    with _lock:
+        open_ = [t for t in _in_flight.get(key, []) if now - t < IN_FLIGHT_SECONDS]
+        failed = len([t for t in _failures.get(key, []) if now - t < WINDOW_SECONDS])
+        if failed + len(open_) >= PAIR_MAX_FAILURES:
+            _in_flight[key] = open_
+            return 2
+        open_.append(now)
+        _in_flight[key] = open_
+    return 0
+
+
+def _release(key: str) -> None:
+    held = _in_flight.get(key)
+    if held:
+        held.pop(0)
+        if not held:
+            _in_flight.pop(key, None)
+
+
 def record_failure(email: str, address: str = "") -> None:
     now = time.monotonic()
     with _lock:
+        _release(_pair(email, address))
         for key, limit in ((_pair(email, address), PAIR_MAX_FAILURES), (_account_key(email), ACCOUNT_MAX_FAILURES)):
             recent = [t for t in _failures.get(key, []) if now - t < WINDOW_SECONDS]
             recent.append(now)
@@ -93,6 +123,7 @@ def _trim(now: float) -> None:
 def record_success(email: str, address: str = "") -> None:
     now = time.monotonic()
     with _lock:
+        _release(_pair(email, address))
         _failures.pop(_account_key(email), None)
         _failures.pop(_pair(email, address), None)
         good = _good_addresses.setdefault(_acct(email), {})
@@ -116,6 +147,7 @@ def reset() -> None:
         _failures.clear()
         _locked_until.clear()
         _good_addresses.clear()
+        _in_flight.clear()
 
 
 # ---------------------------------------------------------------- password rules

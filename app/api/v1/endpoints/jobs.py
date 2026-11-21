@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Response, UploadFile, status
 
+from app.api.v1.view_models import AutomationLog, JobPage
 from app.core.security import require_manager, require_operator, require_viewer
 from app.services.coordination import jobs, packets, purchase_orders
 
@@ -27,8 +28,32 @@ def _staff(user: dict) -> bool:
 def list_jobs(stage: str = Query("", max_length=24), owner: str = Query("", max_length=256), q: str = Query("", max_length=100),
               limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0, le=100000), _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
     try:
-        return jobs.list_jobs(stage, owner, q, limit, offset)
+        out = jobs.list_jobs(stage, owner, q, limit, offset)
+        from app.services import follow
+
+        follow.annotate(_user, "job", out.get("items", []), lambda r: r.get("ref"))              # changed_at, followed and changed_since_seen: this person's own marks only
+        return out
     except jobs.JobError as exc:
+        _fail(exc)
+
+
+@router.get("/{job}/automation", summary="What the app did on its own for this job (drafts made, alerts raised, plays run), in plain sentences with when", response_model=AutomationLog, response_model_exclude_unset=True)
+def job_automation(job: str, limit: int = Query(100, ge=1, le=300), _user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services import job_automation
+
+    try:
+        return job_automation.log(job, limit)
+    except (LookupError, jobs.JobError, ValueError) as exc:
+        _fail(exc)
+
+
+@router.get("/{job}/page", summary="The whole job page in one call: job, comments, what changed since yesterday, prep facts and the actions that apply (by role)", response_model=JobPage, response_model_exclude_unset=True)
+def job_page(job: str, since: str = Query("yesterday", max_length=30), user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.services import job_page as _page
+
+    try:
+        return _page.page(job, user, since)
+    except (LookupError, jobs.JobError, ValueError) as exc:
         _fail(exc)
 
 

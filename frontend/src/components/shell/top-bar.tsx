@@ -32,6 +32,7 @@ import { pageFor } from '@/lib/nav';
 import { useHealth } from '@/lib/queries';
 import { LanguageMenuGroup, LanguagePrompt } from './language-menu';
 import { cn } from '@/lib/utils';
+import { NewMenu } from '@/components/quick-create';
 import { BrandMark } from './brand-mark';
 
 export function TopBar({ onOpenPalette, shortcut }: { onOpenPalette: () => void; shortcut: string }) {
@@ -51,6 +52,7 @@ export function TopBar({ onOpenPalette, shortcut }: { onOpenPalette: () => void;
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <NewMenu />
         <Button
           variant="outline"
           size="sm"

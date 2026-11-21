@@ -19,7 +19,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.audit import audit_event
-from app.core import login_guard
+from app.core import login_guard, security
 from app.config import settings
 from app.models.auth import (
     CreateUserRequest,
@@ -74,7 +74,7 @@ def _client_address(http: Request) -> str:
 
 
 def _refuse_if_locked(email: str, address: str) -> None:
-    wait = login_guard.seconds_locked(email, address)
+    wait = login_guard.reserve(email, address)            # also holds a place while the password is checked, so a burst of simultaneous guesses cannot all pass the lock check
     if wait:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -142,6 +142,9 @@ def login(request: LoginRequest, http: Request, db: Session = Depends(get_db)):
 
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+    from app.core import refresh_state
+
+    refresh_state.register(user.email, refresh_token)                       # remembered as this person's latest, so an older one reused later is noticed
 
     DatabaseService.update_last_login(db, user)
 
@@ -173,7 +176,7 @@ def login(request: LoginRequest, http: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=dict, summary="Refresh an access token")
-def refresh_token(request: RefreshRequest, db: Session = Depends(get_db)):
+def refresh_token(request: RefreshRequest, http: Request, db: Session = Depends(get_db)):
     """Exchanges a valid refresh token for a new access token.
 
     The account is re-checked against the database on every refresh: a refresh
@@ -208,8 +211,28 @@ def refresh_token(request: RefreshRequest, db: Session = Depends(get_db)):
         "facility": user.facility,
         "pv": login_guard.password_stamp(user.hashed_password),
     }
+    from app.core import refresh_state
+
+    address = _client_address(http)
+    if float(payload.get("iat") or 0) < refresh_state.revoked_before(user.email):                 # a token from before this person's sessions were ended
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your sessions were ended for safety. Sign in again.")
+    decision = refresh_state.exchange(user.email, payload.get("jti"))
+    if decision["action"] == "theft":
+        audit_event(db=db, action="REFRESH_REUSE_DETECTED", resource_type="USER", resource_id=user.email, actor_email=user.email, actor_role=user.role, facility=user.facility or "HQ",
+                    detail="An old refresh token was used again after its grace window; every session of this person was ended", ip_address=address)
+        security.forget_account(user.email)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This sign-in was used twice, so all your sessions were ended for safety. Sign in again.")
     new_access = create_access_token(token_data)
-    return {"access_token": new_access, "token_type": "Bearer"}
+    # A fresh refresh token comes back too, so a person who keeps working is never asked to sign in again within the refresh window (it slides forward with use). Inside the grace window (parallel
+    # refreshes from one page load) the SAME current token is signed again, so nothing forks.
+    if decision["action"] == "same":
+        new_refresh = create_refresh_token(token_data, jti=decision["jti"], expires_at=decision.get("exp") or None)
+    else:
+        new_refresh = create_refresh_token(token_data, jti=decision["jti"])
+        refresh_state._set_latest_exp(user.email, new_refresh) if not decision.get("unrecorded") else None
+    audit_event(db=db, action="TOKEN_REFRESH", resource_type="USER", resource_id=user.email, actor_email=user.email, actor_role=user.role, facility=user.facility or "HQ",
+                detail="Access token renewed" + (" (parallel request inside the grace window)" if decision["action"] == "same" else ""), ip_address=address)
+    return {"access_token": new_access, "token_type": "Bearer", "refresh_token": new_refresh}
 
 
 @router.get("/profile", response_model=UserProfile, summary="Get current user profile")

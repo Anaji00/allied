@@ -6,10 +6,11 @@ everything that came in: orders, requests for quote, vendor replies, delivery qu
 complaints, supplier invoices, internal mail, and the rest, each with a one-line summary.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
@@ -79,18 +80,31 @@ def record(message_id: str, folder: str, sender: str, sender_name: str, recipien
             return False
 
 
+def _queue_state(r: "MailLogDB") -> Dict[str, Any]:
+    """The secretary's queue state for one email, by rule, with the reasons it matched: needs_reply (a person must answer), waiting_on_vendor (we wrote last and are waiting), done (handled), or "" (nothing to do)."""
+    tags = [t for t in (r.tags or "").split(",") if t]
+    why = [f"Sorted as {r.category}"] + ([f"Tagged {', '.join(tags)}"] if tags else []) + ([f"The system {r.outcome.lower().replace('_', ' ')}"] if r.outcome else [])
+    if r.handled_at:
+        return {"state": "done", "reasons": [f"Handled by {r.handled_by or 'someone'}"] + why}
+    if r.direction == "out":
+        return {"state": "waiting_on_vendor", "reasons": ["We wrote last; no reply has been logged yet"] + why}
+    if r.needs_action:
+        return {"state": "needs_reply", "reasons": ["It needs a person and has not been handled"] + why}
+    return {"state": "", "reasons": why}
+
+
 def _as_dict(r: MailLogDB) -> Dict[str, Any]:
     return {"id": r.id, "message_id": r.message_id, "folder": r.folder, "sender": r.sender, "sender_name": r.sender_name,
             "recipients": r.recipients, "subject": r.subject,
             "received_at": r.received_at.isoformat() if r.received_at else None, "direction": r.direction,
             "category": r.category, "tags": [t for t in (r.tags or "").split(",") if t], "thread_key": r.thread_key,
             "summary": r.summary, "outcome": r.outcome, "needs_action": r.needs_action,
-            "handled_by": r.handled_by, "handled_at": r.handled_at.isoformat() if r.handled_at else None}
+            "handled_by": r.handled_by, "handled_at": r.handled_at.isoformat() if r.handled_at else None, "queue": _queue_state(r)}
 
 
 def list_mail(category: Optional[str] = None, needs_action: Optional[bool] = None, q: Optional[str] = None,
               direction_: Optional[str] = None, days: int = 30, limit: int = 200, tag: Optional[str] = None,
-              include_quiet: bool = False) -> Dict[str, Any]:
+              include_quiet: bool = False, mine: str = "") -> Dict[str, Any]:
     """The feed. Noise (newsletters, auto-replies, bounces, invites, notifications) and the
     backlog logged on first start are left out unless include_quiet or asked for by category."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -110,7 +124,12 @@ def list_mail(category: Optional[str] = None, needs_action: Optional[bool] = Non
         if q:
             like = f"%{q.strip()[:100]}%"
             query = query.filter(or_(MailLogDB.subject.ilike(like), MailLogDB.sender.ilike(like), MailLogDB.summary.ilike(like)))
-        rows = query.order_by(MailLogDB.received_at.desc().nullslast(), MailLogDB.id.desc()).limit(limit).all()
+        me = (mine or "").strip().lower()
+        if me:                                                  # only mail this person is on: the sender, or an exact address in the recipients list (ann@x never matches joann@x)
+            query = query.filter(or_(func.lower(MailLogDB.sender) == me, func.lower(MailLogDB.sender).like(f"%{me}%"), func.lower(MailLogDB.recipients).like(f"%{me}%")))
+        rows = query.order_by(MailLogDB.received_at.desc().nullslast(), MailLogDB.id.desc()).limit(limit * (5 if me else 1)).all()
+        if me:
+            rows = [r for r in rows if _on_it(r, me)][:limit]
         counts: Dict[str, int] = {}
         tag_counts: Dict[str, int] = {}
         for cat, tags in db.query(MailLogDB.category, MailLogDB.tags).filter(MailLogDB.created_at >= since):
@@ -120,7 +139,17 @@ def list_mail(category: Optional[str] = None, needs_action: Optional[bool] = Non
                     tag_counts[t] = tag_counts.get(t, 0) + 1
         waiting = db.query(MailLogDB).filter(MailLogDB.needs_action.is_(True), MailLogDB.handled_at.is_(None)).count()
     return {"mail": [_as_dict(r) for r in rows], "counts": counts, "tags": tag_counts, "waiting": waiting, "days": days,
-            "quiet_hidden": not include_quiet and not category}
+            "quiet_hidden": not include_quiet and not category,
+            **({"mine": True, "match_note": "Matched on the whole address in the sender or the recipients list (To and Cc are not kept apart, so a Cc shows here too)."} if me else {})}
+
+
+_ADDR = re.compile(r"[\w.+'-]+@[\w.-]+\.[A-Za-z]{2,}")
+
+
+def _on_it(r: "MailLogDB", me: str) -> bool:
+    """True when `me` is exactly one of the addresses in the sender or the recipients text (whole address, any case)."""
+    found = {a.lower() for a in _ADDR.findall(f"{r.sender or ''} {r.recipients or ''}")}
+    return me in found
 
 
 def mark_handled(mail_id: int, user: Dict[str, Any]) -> Dict[str, Any]:

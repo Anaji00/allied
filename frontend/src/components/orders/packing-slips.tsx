@@ -188,7 +188,11 @@ export function PackingSlips() {
         data={queue.data.jobs}
         getRowId={(j) => j.sales_order_number}
         minWidth={640}
-        empty={<EmptyState title="Nothing here">No packing slips in this state.</EmptyState>}
+        empty={
+          <EmptyState title="No packing slips here">
+            A packing slip is made when an order ships. Once one is made it shows up here, ready to print.
+          </EmptyState>
+        }
       />
     </div>
   );

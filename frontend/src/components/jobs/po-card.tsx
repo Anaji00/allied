@@ -1,5 +1,7 @@
 'use client';
 
+import { CompareJobFiles } from './compare-job-files';
+import { ActionBar } from '@/components/data/action-bar';
 import { CustomsPapers } from './customs-papers';
 import { useState } from 'react';
 import Link from 'next/link';
@@ -14,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { authFetch } from '@/lib/api';
-import { dateTime, money } from '@/lib/format';
+import { dateTime, money, words } from '@/lib/format';
 import { downloadBlob, jobsCall, type Job } from './job-types';
 
 type Line = {
@@ -108,6 +110,7 @@ export function PurchaseOrders({ job }: { job: Job }) {
   const client = useQueryClient();
   const ref = job.ref;
   const [adding, setAdding] = useState('');
+  const [comparing, setComparing] = useState(false);
   const [editing, setEditing] = useState<PO | null>(null);
   const [cancelling, setCancelling] = useState<PO | null>(null);
   const [acking, setAcking] = useState<{ po: PO; line: number; sent: string } | null>(null);
@@ -161,7 +164,7 @@ export function PurchaseOrders({ job }: { job: Job }) {
         </p>
       )}
       {pos.map((p) => {
-        const st = STATUS[p.status] ?? { label: p.status, tone: 'neutral' as Tone };
+        const st = STATUS[p.status] ?? { label: words(p.status), tone: 'neutral' as Tone };
         return (
           <article key={p.id} className="grid gap-2 rounded-md border p-3 text-[13px]">
             <div className="flex flex-wrap items-center gap-2">
@@ -256,6 +259,19 @@ export function PurchaseOrders({ job }: { job: Job }) {
                   Open Approvals
                 </Link>
               </p>
+            )}
+            {full && (
+              <ActionBar
+                server={{ kind: 'po', ref: String(p.id) }}
+                subject={`PO ${p.po_number ?? p.id} to ${p.vendor}`}
+                text={[
+                  `PO ${p.po_number ?? p.id} to ${p.vendor}`,
+                  `Status: ${(STATUS[p.status] ?? { label: words(p.status) }).label}`,
+                ].join(String.fromCharCode(10))}
+                onDownload={() => pdf.mutate(p)}
+                downloadLabel="PDF"
+                more={[{ label: 'Compare drawings', onClick: () => setComparing(true) }]}
+              />
             )}
             {full && (
               <div className="flex flex-wrap gap-1.5">

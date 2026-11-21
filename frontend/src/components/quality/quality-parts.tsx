@@ -9,20 +9,13 @@ import { Field, NativeSelect, PanelHeading } from '@/components/data/filters';
 import { ErrorState, RowsSkeleton } from '@/components/data/states';
 import { ToneBadge } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { api, ok } from '@/lib/api/client';
 import { optimistic } from '@/lib/optimistic';
-import { dateTime } from '@/lib/format';
+import { dateTime, words } from '@/lib/format';
 import { CHEMISTRY, DECISIONS, KNOWN_PARTS, NCR_STATUS, psi, useNCR, type MTR, type NCR } from './use-quality';
 
 export function NcrDetail({ id, onLookUp }: { id: string; onLookUp: (heat: string) => void }) {
@@ -30,13 +23,15 @@ export function NcrDetail({ id, onLookUp }: { id: string; onLookUp: (heat: strin
   const { data: ncr, isPending, error, refetch } = useNCR(id);
   if (isPending) return <RowsSkeleton rows={4} />;
   if (error || !ncr) return <ErrorState error={error} onRetry={() => void refetch()} />;
-  const status = NCR_STATUS[ncr.status] ?? { label: ncr.status, tone: 'neutral' as const };
+  const status = NCR_STATUS[ncr.status] ?? { label: words(ncr.status), tone: 'neutral' as const };
 
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap gap-1.5">
         <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
-        <ToneBadge tone={ncr.severity === 'CRITICAL' ? 'bad' : 'warn'}>{ncr.severity.charAt(0) + ncr.severity.slice(1).toLowerCase()}</ToneBadge>
+        <ToneBadge tone={ncr.severity === 'CRITICAL' ? 'bad' : 'warn'}>
+          {ncr.severity.charAt(0) + ncr.severity.slice(1).toLowerCase()}
+        </ToneBadge>
       </div>
 
       <div className="grid gap-1.5">
@@ -54,8 +49,18 @@ export function NcrDetail({ id, onLookUp }: { id: string; onLookUp: (heat: strin
 
       <Facts
         items={[
-          ['Heat', <span key="h" className="font-mono text-xs">{ncr.heat_number}</span>],
-          ['Part', <span key="p" className="font-mono text-xs">{ncr.item_id}</span>],
+          [
+            'Heat',
+            <span key="h" className="font-mono text-xs">
+              {ncr.heat_number}
+            </span>,
+          ],
+          [
+            'Part',
+            <span key="p" className="font-mono text-xs">
+              {ncr.item_id}
+            </span>,
+          ],
           ['Supplier', ncr.supplier],
           ['Spec', ncr.material_spec],
           ['Held by', ncr.quarantined_by],
@@ -171,7 +176,12 @@ export function MtrCard({ mtr }: { mtr: MTR }) {
       </div>
       <Facts
         items={[
-          ['Part', <span key="p" className="font-mono text-xs">{mtr.item_id}</span>],
+          [
+            'Part',
+            <span key="p" className="font-mono text-xs">
+              {mtr.item_id}
+            </span>,
+          ],
           ['Mill', mtr.mill_supplier],
         ]}
       />
@@ -244,7 +254,10 @@ export function RegisterCertDialog({
     },
     onSuccess: (mtr) => {
       if (mtr.verified_compliant) toast.success(`Heat ${mtr.heat_number} is within limits`);
-      else toast.warning(`Heat ${mtr.heat_number} is out of limits`, { description: 'The lot is on hold and a non-conformance report was raised.' });
+      else
+        toast.warning(`Heat ${mtr.heat_number} is out of limits`, {
+          description: 'The lot is on hold and a non-conformance report was raised.',
+        });
       void client.invalidateQueries({ queryKey: ['mtr', mtr.heat_number] });
       void client.invalidateQueries({ queryKey: ['ncrs'] });
       setHeat('');
@@ -265,8 +278,8 @@ export function RegisterCertDialog({
         <DialogHeader>
           <DialogTitle>Register a mill certificate</DialogTitle>
           <DialogDescription>
-            Type in the figures from the supplier’s certificate. They’re checked against the part’s limits; anything out of
-            limits puts the lot on hold. This replaces any certificate already on file for the heat.
+            Type in the figures from the supplier’s certificate. They’re checked against the part’s limits; anything out of limits puts the
+            lot on hold. This replaces any certificate already on file for the heat.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -310,13 +323,27 @@ export function RegisterCertDialog({
               <Input value={hardness} onChange={(e) => setHardness(e.target.value)} placeholder="58-62 HRC" />
             </Field>
             <Field label="Yield (PSI)">
-              <Input type="number" min="0" inputMode="numeric" value={values.yield_strength_psi ?? ''} onChange={(e) => setValues((v) => ({ ...v, yield_strength_psi: e.target.value }))} />
+              <Input
+                type="number"
+                min="0"
+                inputMode="numeric"
+                value={values.yield_strength_psi ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, yield_strength_psi: e.target.value }))}
+              />
             </Field>
             <Field label="Tensile (PSI)">
-              <Input type="number" min="0" inputMode="numeric" value={values.tensile_strength_psi ?? ''} onChange={(e) => setValues((v) => ({ ...v, tensile_strength_psi: e.target.value }))} />
+              <Input
+                type="number"
+                min="0"
+                inputMode="numeric"
+                value={values.tensile_strength_psi ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, tensile_strength_psi: e.target.value }))}
+              />
             </Field>
           </div>
-          <p className="text-xs text-muted-foreground">Leave a figure blank if the certificate doesn’t give it. Missing figures are reported, never assumed.</p>
+          <p className="text-xs text-muted-foreground">
+            Leave a figure blank if the certificate doesn’t give it. Missing figures are reported, never assumed.
+          </p>
         </form>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

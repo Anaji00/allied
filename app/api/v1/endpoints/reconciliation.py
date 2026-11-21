@@ -1,6 +1,7 @@
 """FastAPI router for 3-way vendor invoice matching and reconciliation history."""
 
 from typing import Any, Dict, List
+from app.api.v1.view_models import BillHistoryRow
 from app.core.security import require_operator, require_viewer
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -38,7 +39,7 @@ def match_vendor_invoice(
 
 @router.get(
     "/history",
-    response_model=List[Dict[str, Any]],
+    response_model=List[BillHistoryRow],
     summary="Get 3-Way Reconciliation Audit Trail",
 )
 def get_reconciliation_history(

@@ -55,6 +55,20 @@ def topics(subject: str, body: str) -> List[str]:
     return [tag for tag, words in _rules().items() if any(re.search(w, text) for w in words)]
 
 
+def _says_something(msg: Message, subject: str) -> bool:
+    """True when a message that has a calendar part also has words of its own (a request, a question, a few sentences), so it is not just an invite."""
+    text = ""
+    for p in msg.walk():
+        if p.get_content_maintype() == "text" and p.get_content_type() != "text/calendar" and "attachment" not in str(p.get("Content-Disposition") or "").lower():
+            try:
+                raw = p.get_payload(decode=True)
+                text += " " + (raw.decode(p.get_content_charset() or "utf-8", errors="replace") if raw else "")
+            except (LookupError, ValueError, TypeError):
+                continue
+    text = re.sub(r"<[^>]+>", " ", text).strip()
+    return bool(topics(subject or "", text)) or len(text) >= 80
+
+
 def noise(msg: Message, sender: str, subject: str) -> Optional[str]:
     """Why this email is noise (a noise tag), or None if a person might need it."""
     sender = (sender or "").lower()
@@ -66,8 +80,8 @@ def noise(msg: Message, sender: str, subject: str) -> Optional[str]:
         return "auto-reply"
     if _BOUNCE_SUBJECT.search(subject or "") or sender.startswith(("mailer-daemon@", "postmaster@")):
         return "bounce"
-    if _CALENDAR_SUBJECT.search(subject or "") or any(p.get_content_type() == "text/calendar" for p in msg.walk()):
-        return "calendar"
+    if _CALENDAR_SUBJECT.search(subject or "") or (any(p.get_content_type() == "text/calendar" for p in msg.walk()) and not _says_something(msg, subject)):
+        return "calendar"        # an invite is noise only when it is all there is: a request with an invite attached is read
     if msg.get("List-Unsubscribe") or msg.get("List-Id") or (msg.get("Precedence") or "").lower() in ("bulk", "list", "junk"):
         return "newsletter"
     if _NOREPLY.search(sender):

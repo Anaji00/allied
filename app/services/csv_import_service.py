@@ -4,10 +4,15 @@ Handles parsing, schema validation, persistent CSV file updates, and in-memory
 catalog reloading for items, customers, vendors, and batch customer POs.
 """
 
+import contextvars
 import csv
+import hashlib
 import io
 import os
 import tempfile
+import threading
+import time
+import uuid
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -87,6 +92,32 @@ def _parse_decimal(text: str) -> Optional[Decimal]:
     except (InvalidOperation, ValueError):
         return None
     return value if value.is_finite() else None
+
+
+# A preview runs the same code as an import with these set: nothing is written, nothing is audited, and each row's outcome is recorded.
+_DRY: contextvars.ContextVar = contextvars.ContextVar("csv_dry_run", default=False)
+_TRACE: contextvars.ContextVar = contextvars.ContextVar("csv_trace", default=None)
+PREVIEW_TTL_SECONDS = 15 * 60
+_previews: Dict[str, Dict[str, Any]] = {}
+_previews_lock = threading.Lock()
+
+
+def _fingerprint(csv_text: str, import_type: str) -> str:
+    return hashlib.sha256(f"{(import_type or '').strip().upper()}\n{(csv_text or '').strip()}".encode("utf-8")).hexdigest()
+
+
+def check_preview_token(token: str, csv_text: str, import_type: str) -> Optional[str]:
+    """None when the token is a live preview of exactly this sheet; otherwise a plain sentence saying why not."""
+    now = time.time()
+    with _previews_lock:
+        for k in [k for k, v in _previews.items() if v["expires"] < now]:
+            _previews.pop(k, None)
+        found = _previews.get(token)
+    if not found:
+        return "That preview has expired or was never made. Preview the sheet again."
+    if found["fingerprint"] != _fingerprint(csv_text, import_type):
+        return "The sheet is not the one that was previewed. Preview it again."
+    return None
 
 
 class CSVImportService:
@@ -198,8 +229,90 @@ class CSVImportService:
                 message="Unsupported import type.",
             )
 
-        self._audit_import(result, actor_email, actor_role)
+        if not _DRY.get():
+            self._audit_import(result, actor_email, actor_role)
         return result
+
+    def preview_csv(self, csv_text: str, import_type: str, actor_email: str = "system") -> Dict[str, Any]:
+        """What an import of this sheet would do, without doing it: no catalog file is written, no order or PO is made, and the only record is a "previewed" note in the audit trail.
+        {import_type, new, changed, skipped, rows: [{row, action, key, changes, reason}], errors, token}. The token proves a later import is the sheet that was shown."""
+        clean_type = (import_type or "").strip().upper()
+        trace: List[Dict[str, Any]] = []
+        if clean_type == "ORDERS_BATCH":
+            result = self._validate_batch_only(csv_text)
+            rows = self._batch_preview_rows(csv_text)
+        else:
+            t_dry, t_trace = _DRY.set(True), _TRACE.set(trace)
+            try:
+                r = self.import_csv(csv_text, clean_type, actor_email)
+                result = {"errors": r.errors, "message": r.message}
+            finally:
+                _DRY.reset(t_dry)
+                _TRACE.reset(t_trace)
+            rows = trace
+        token = uuid.uuid4().hex[:12]
+        with _previews_lock:
+            _previews[token] = {"fingerprint": _fingerprint(csv_text, clean_type), "expires": time.time() + PREVIEW_TTL_SECONDS}
+        try:
+            audit_log(action="CSV_PREVIEWED", resource_type="CSV_IMPORT", resource_id=clean_type, actor_email=actor_email, actor_role="", detail=f"Previewed a {clean_type} sheet ({len(rows)} row(s)); nothing was changed.")
+        except Exception:  # noqa: BLE001 - the note is a nicety
+            pass
+        return {"import_type": clean_type, "new": sum(r["action"] == "new" for r in rows), "changed": sum(r["action"] == "changed" for r in rows),
+                "skipped": sum(r["action"] == "skipped" for r in rows), "rows": rows, "errors": list(result["errors"]), "message": result["message"], "token": token}
+
+    @staticmethod
+    def _validate_batch_only(csv_text: str) -> Dict[str, Any]:
+        """Errors an ORDERS_BATCH import would stop on, found without creating anything."""
+        text = (csv_text or "").strip()
+        if not text:
+            return {"errors": ["Empty CSV content provided."], "message": "No data to import."}
+        try:
+            rows = list(csv.DictReader(io.StringIO(text)))
+        except Exception as exc:  # noqa: BLE001
+            return {"errors": [f"CSV parsing error: {exc}"], "message": "Invalid CSV format."}
+        if not rows:
+            return {"errors": ["CSV contains no data rows."], "message": "Empty CSV rows."}
+        return {"errors": [], "message": f"{len(rows)} line(s) read; no orders were made."}
+
+    def _batch_preview_rows(self, csv_text: str) -> List[Dict[str, Any]]:
+        """For ORDERS_BATCH: one entry per customer PO that would be made (customer, PO number, lines, total, vendors) and which ones already exist."""
+        try:
+            rows = list(csv.DictReader(io.StringIO((csv_text or "").strip())))
+        except Exception:  # noqa: BLE001
+            return []
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        out: List[Dict[str, Any]] = []
+        for i, row in enumerate(rows, start=1):
+            cust, po = _field(row, "customer_name", ""), _field(row, "customer_po_number", "")
+            qty, price = _parse_decimal(_field(row, "quantity", "")), _parse_decimal(_field(row, "unit_price", ""))
+            item = _field(row, "item_id_or_text") or _field(row, "item_id", "")
+            problem = None
+            if not cust or not po:
+                problem = "No customer or customer PO number."
+            elif not item:
+                problem = "No item."
+            elif qty is None or qty <= 0:
+                problem = "The quantity is not a number."
+            elif price is None or price < 0:
+                problem = "The price is not a number."
+            if problem:
+                out.append({"row": i, "action": "skipped", "key": po or "", "changes": [], "reason": problem})
+                continue
+            g = groups.setdefault((cust, po), {"row": i, "total": Decimal("0"), "lines": 0, "vendors": set()})
+            g["total"] += qty * price
+            g["lines"] += 1
+            vendor = (self.matcher.items_cache.get(item) or {}).get("preferred_vendor")
+            if vendor:
+                g["vendors"].add(str(vendor))
+        for (cust, po), g in groups.items():
+            try:
+                exists = self.orchestrator._find_existing_order(po)
+            except Exception:  # noqa: BLE001
+                exists = None
+            out.append({"row": g["row"], "action": "skipped" if exists else "new", "key": po,
+                        "changes": [{"field": "order", "was": "", "now": f"{cust}, customer PO {po}, {g['lines']} line(s), total {g['total']:.2f}, vendor(s): {', '.join(sorted(g['vendors'])) or 'unknown'}"}],
+                        "reason": "Already there, no change." if exists else None, "customer": cust, "customer_po_number": po, "total": float(g["total"]), "vendors": sorted(g["vendors"])})
+        return sorted(out, key=lambda r: r["row"])
 
     @staticmethod
     def _audit_import(result: CSVImportResult, actor_email: str, actor_role: str) -> None:
@@ -259,6 +372,8 @@ class CSVImportService:
             key, key_error = key_of(row, existing)
             if key_error:
                 errors.append(f"Row {i}: {key_error}")
+                if _TRACE.get() is not None:
+                    _TRACE.get().append({"row": i, "action": "skipped", "key": key or "", "changes": [], "reason": key_error})
                 continue
 
             values: Dict[str, str] = {}
@@ -281,15 +396,23 @@ class CSVImportService:
 
             if row_errors:
                 errors.append(f"Row {i} ({key}): rejected; " + "; ".join(row_errors))
+                if _TRACE.get() is not None:
+                    _TRACE.get().append({"row": i, "action": "skipped", "key": key, "changes": [], "reason": "A number is not a number: " + "; ".join(row_errors)})
                 continue
 
+            trace = _TRACE.get()
             if key in existing:
                 record = {f: existing[key].get(f, "") for f in fieldnames}
                 record.update(values)
+                if trace is not None:
+                    diffs = [{"field": f, "was": str(existing[key].get(f, "")), "now": str(record.get(f, ""))} for f in fieldnames if str(existing[key].get(f, "")) != str(record.get(f, ""))]
+                    trace.append({"row": i, "action": "changed" if diffs else "skipped", "key": key, "changes": diffs, "reason": None if diffs else "Already there, no change."})
                 updated += 1
             else:
                 record = create_defaults(key, values)
                 record.update(values)
+                if trace is not None:
+                    trace.append({"row": i, "action": "new", "key": key, "changes": [{"field": f, "was": "", "now": str(record.get(f, ""))} for f in fieldnames if str(record.get(f, ""))], "reason": None})
                 created += 1
             existing[key] = record
             changed.append(key)
@@ -305,8 +428,8 @@ class CSVImportService:
         errors: List[str],
     ) -> bool:
         """Writes the merged catalog and reloads caches; False on a disk error."""
-        if not changed:
-            return True
+        if not changed or _DRY.get():
+            return True                                                            # a preview writes nothing
         try:
             _atomic_write_csv(target_path, fieldnames, list(records.values()))
             # Reload matcher memory & RAG knowledge base

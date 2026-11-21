@@ -1,5 +1,6 @@
 'use client';
 
+import { SinceStrip } from '@/components/data/since-strip';
 import { BoardChanges } from './board-changes';
 import { BoardHealth } from './board-health';
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
@@ -9,7 +10,9 @@ import { toast } from 'sonner';
 import { UpdatesPanel } from '@/components/data/updates-panel';
 import { DetailPanel } from '@/components/data/detail-panel';
 import Link from 'next/link';
-import { FilterChips, NativeSelect, SectionTabs } from '@/components/data/filters';
+import { LateUrgent } from './late-urgent';
+import { useMondayStatus } from '@/components/admin/monday-changes';
+import { NativeSelect, SectionTabs } from '@/components/data/filters';
 import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +24,8 @@ import { cn } from '@/lib/utils';
 import { ItemCard, NOTES_ON, TRACKED_ROLES, filterItems, peopleOnBoard, type Sort } from './board-parts';
 import { AutomateButton, AutomatePanel } from './board-automations';
 import { BoardTable } from './board-table';
+import { SavedViews } from '@/components/data/saved-views';
+import { BoardTimeline } from './board-timeline';
 import { BoardCalendar, BoardKanban } from './board-views';
 import { READ_NOW_ROLE, needsAction, useAutomations, useReadNow } from './use-automations';
 import { useBoard, useBoards, type Board, type Role } from './use-boards';
@@ -28,7 +33,7 @@ import { useBoardNotes } from './use-notes';
 
 // Tracked boards first, projects leading (the one people check most); reference boards and Docs after.
 const ORDER: Record<Role, number> = { projects: 0, vendors: 1, rfqs: 2, reference: 3, doc: 4 };
-const VIEWS = ['table', 'kanban', 'calendar'] as const;
+const VIEWS = ['table', 'kanban', 'calendar', 'timeline', 'late'] as const;
 const BOARD_STATE = {
   item: parseAsString,
   q: parseAsString,
@@ -51,7 +56,13 @@ function lastBoard() {
 
 export function BoardsView() {
   const boards = useBoards();
-  const list = useMemo(() => [...(boards.data ?? [])].sort((a, b) => ORDER[a.role] - ORDER[b.role]), [boards.data]);
+  const list = useMemo(
+    () =>
+      [...(boards.data ?? [])].sort(
+        (a, b) => Number(b.board_id === 'jobs') - Number(a.board_id === 'jobs') || ORDER[a.role] - ORDER[b.role],
+      ),
+    [boards.data],
+  );
   const [chosen, setChosen] = useQueryState('board', parseAsString);
   const [showDone, setShowDone] = useQueryState('all', parseAsBoolean.withDefault(false));
   // A board's filters, sort and open item mean nothing on another board.
@@ -86,16 +97,29 @@ export function BoardsView() {
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-3">
-      <FilterChips
-        label="Board"
-        value={boardId ?? ''}
-        onChange={(v) => {
-          if (v === boardId) return;
-          void setChosen(v);
-          void setBoardState(CLEARED);
-        }}
-        options={list.map((b) => ({ value: b.board_id, label: b.name, count: b.items }))}
-      />
+      <div role="group" aria-label="Board" className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
+        {list.map((b) => (
+          <button
+            key={b.board_id}
+            type="button"
+            aria-pressed={b.board_id === boardId}
+            title={b.name}
+            onClick={() => {
+              if (b.board_id === boardId) return;
+              void setChosen(b.board_id);
+              void setBoardState(CLEARED);
+            }}
+            className={cn(
+              'inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-sm whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              b.board_id === boardId
+                ? 'border-foreground bg-foreground text-background'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+            )}
+          >
+            {b.name}
+          </button>
+        ))}
+      </div>
       {board.isPending ? (
         <RowsSkeleton rows={10} />
       ) : board.error ? (
@@ -133,6 +157,8 @@ function BoardScreen({
   const [itemId, setItemId] = useQueryState('item');
   const [automate, setAutomate] = useQueryState('automate', parseAsBoolean.withDefault(false));
   const [needs, setNeeds] = useQueryState('needs', parseAsBoolean.withDefault(false));
+  // Group the rows by any status, person or choice column. This only changes how they are laid out here; monday is untouched.
+  const [groupBy, setGroupBy] = useQueryState('group');
   const automations = useAutomations(board.board_id, tracked);
   const notes = useBoardNotes(board.board_id, NOTES_ON.has(board.role));
   const readNow = useReadNow(board.board_id, board.role);
@@ -141,7 +167,13 @@ function BoardScreen({
 
   // Filtering trails the typing slightly on big boards (Engineering has hundreds of items).
   const deferredQ = useDeferredValue(q);
-  const matching = filterItems(board.items, { person, status, q: deferredQ }, board);
+  const isJobs = board.board_id === 'jobs';
+  const [notJobs, setNotJobs] = useQueryState('notjobs', parseAsBoolean.withDefault(false));
+  // The Jobs board shows real jobs; monday items that are not jobs yet wait behind one chip.
+  const pool = isJobs ? board.items.filter((i) => (notJobs ? !i.job : i.job)) : board.items;
+  const notJobCount = isJobs ? board.items.filter((i) => !i.job).length : 0;
+  const waiting = useMondayStatus().data?.staged ?? 0;
+  const matching = filterItems(pool, { person, status, q: deferredQ }, board);
   const canDraft = hasRole('OPERATOR');
   const items = needs && tracked ? matching.filter((i) => needsAction(automations.data, i.id, canDraft).any) : matching;
   const needCount = tracked ? board.items.filter((i) => needsAction(automations.data, i.id, canDraft).any).length : 0;
@@ -160,12 +192,19 @@ function BoardScreen({
           value={view}
           onChange={(v) => void setView(v === 'table' ? null : v)}
           tabs={[
-            ['table', 'Main table'],
-            ['kanban', 'Kanban'],
-            ['calendar', 'Calendar'],
+            ['table', 'Table'],
+            ...(hasRole('MANAGER')
+              ? ([
+                  ['kanban', 'Columns by status'],
+                  ['calendar', 'Calendar'],
+                  ['timeline', 'Timeline'],
+                ] as const)
+              : []),
+            ['late', 'Late or urgent'],
           ]}
         />
         <div className="flex flex-wrap items-center gap-2 pb-1">
+          <SavedViews screen="boards" />
           {readRole && hasRole(readRole) && (
             <Button variant="ghost" size="sm" disabled={readNow.isPending} onClick={() => readNow.mutate()}>
               {readNow.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
@@ -173,7 +212,7 @@ function BoardScreen({
             </Button>
           )}
           <DownloadMenu list={`boards/${board.board_id}`} />
-          {tracked && <AutomateButton data={automations.data} onOpen={() => void setAutomate(true)} />}
+          {tracked && hasRole('MANAGER') && <AutomateButton data={automations.data} onOpen={() => void setAutomate(true)} />}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -198,6 +237,25 @@ function BoardScreen({
             ))}
           </NativeSelect>
         )}
+        {view === 'table' &&
+          board.columns.some((c) => ['status', 'color', 'people', 'person', 'multiple-person', 'dropdown'].includes(c.type)) && (
+            <NativeSelect
+              aria-label="Group by"
+              value={groupBy ?? ''}
+              onChange={(e) => void setGroupBy(e.target.value || null)}
+              className="w-auto"
+            >
+              <option value="">Grouped as on monday</option>
+              {board.items.some((i) => i.family) && <option value="family">Group by customer group</option>}
+              {board.columns
+                .filter((c) => ['status', 'color', 'people', 'person', 'multiple-person', 'dropdown'].includes(c.type))
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    Group by {c.title.toLowerCase()}
+                  </option>
+                ))}
+            </NativeSelect>
+          )}
         {statusColumn && (
           <NativeSelect
             aria-label={statusColumn.title}
@@ -249,18 +307,59 @@ function BoardScreen({
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        {board.label} · read from monday {since(board.read_at) || 'not yet'} · {items.length} of {board.items.length} item
-        {board.items.length === 1 ? '' : 's'}
-        {board.hide_done && !showDone ? ', finished ones hidden' : ''}. Read-only: change things on monday, and they show here after the
-        next read.
+        {isJobs
+          ? 'Jobs are saved in the app. Put one on a monday board from its row.'
+          : `${board.label} · ${items.length} of ${pool.length} item${pool.length === 1 ? '' : 's'}${board.hide_done && !showDone ? ', finished ones hidden' : ''} · last updated from monday: ${since(board.read_at) || 'never'}. ${waiting > 0 ? `${waiting} change${waiting === 1 ? '' : 's'} waiting. ` : ''}Changes go to monday only when a manager sends them.`}
       </p>
+      {pool.length >= 100 &&
+        (() => {
+          const counts = new Map<string, number>();
+          for (const i of pool) {
+            const v = (i.values[board.status_column] ?? '').trim();
+            if (v) counts.set(v, (counts.get(v) ?? 0) + 1);
+          }
+          const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+          return top.length ? (
+            <p className="text-sm">
+              {pool.length} items: {top.map(([k, n]) => `${n} ${k.toLowerCase()}`).join(', ')}.
+            </p>
+          ) : null;
+        })()}
+      {isJobs && notJobCount > 0 && (
+        <button
+          type="button"
+          className="justify-self-start rounded-full border px-3 py-1 text-xs hover:bg-muted"
+          onClick={() => void setNotJobs(notJobs ? null : true)}
+        >
+          {notJobs ? 'Back to the jobs' : `${notJobCount} monday items are not jobs yet`}
+        </button>
+      )}
 
+      <SinceStrip kind="board" refId={board.board_id} />
       <BoardChanges boardId={board.board_id} />
       <BoardHealth boardId={board.board_id} onOpenItem={(id) => select(id)} />
 
       <div className={cn('grid items-start gap-4', wide && selected && 'grid-cols-[minmax(0,1fr)_24rem]')}>
         <div className="min-w-0">
-          {items.length === 0 ? (
+          {view === 'late' ? (
+            <LateUrgent />
+          ) : items.length === 0 && isJobs && !notJobs && !filtered ? (
+            <EmptyState title="No jobs yet">
+              <span className="grid justify-items-center gap-3">
+                <span>Start one here, or turn the items already on monday into jobs.</span>
+                <span className="flex flex-wrap justify-center gap-2">
+                  <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent('allied:new', { detail: { kind: 'job' } }))}>
+                    Start a job
+                  </Button>
+                  {notJobCount > 0 && (
+                    <Button size="sm" variant="outline" onClick={() => void setNotJobs(true)}>
+                      Make jobs from monday items ({notJobCount})
+                    </Button>
+                  )}
+                </span>
+              </span>
+            </EmptyState>
+          ) : items.length === 0 ? (
             <EmptyState title={filtered ? 'Nothing on this board matches' : 'This board has no items to show'}>
               {filtered
                 ? 'Clear the filters or try a shorter search.'
@@ -270,6 +369,8 @@ function BoardScreen({
             </EmptyState>
           ) : view === 'kanban' ? (
             <BoardKanban board={board} items={items} onSelect={(i) => select(i.id)} automations={automations.data} notes={notes.data} />
+          ) : view === 'timeline' ? (
+            <BoardTimeline board={board} items={items} onSelect={(i) => select(i.id)} />
           ) : view === 'calendar' ? (
             <BoardCalendar board={board} items={items} onSelect={(i) => select(i.id)} />
           ) : (
@@ -282,6 +383,7 @@ function BoardScreen({
               onSelect={(i) => select(i.id === itemId ? null : i.id)}
               automations={automations.data}
               notes={notes.data}
+              groupBy={groupBy}
             />
           )}
         </div>

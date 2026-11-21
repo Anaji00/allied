@@ -43,12 +43,15 @@ export function PersonSelect({
   none = 'Nobody yet',
   className,
   placeholder,
+  area = 'general',
 }: {
   value: string;
   onChange: (email: string) => void;
   none?: string;
   className?: string;
   placeholder?: string;
+  /** In engineering areas the engineers come first; everywhere else leadership does. */
+  area?: 'engineering' | 'general';
 }) {
   const people = useAppPeople();
   const list = people.data ?? [];
@@ -65,22 +68,36 @@ export function PersonSelect({
   }
   const known = list.some((p) => p.email.toLowerCase() === value.toLowerCase());
   const engineers = list.filter((p) => p.role === 'engineer');
-  const rest = list.filter((p) => p.role !== 'engineer');
+  const leaders = list.filter((p) => p.role === 'leadership');
+  const rest = list.filter((p) => p.role !== 'engineer' && p.role !== 'leadership');
+  const option = (p: (typeof list)[number]) => (
+    <option key={p.email || p.name} value={p.email} disabled={!p.email}>
+      {p.label}
+    </option>
+  );
+  const groups =
+    area === 'engineering'
+      ? ([
+          ['Engineers', engineers],
+          ['Leadership', leaders],
+        ] as const)
+      : ([
+          ['Leadership', leaders],
+          ['Engineers', engineers],
+        ] as const);
   return (
     <NativeSelect className={className} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">{people.isPending ? 'Loading people…' : none}</option>
       {value && !known && <option value={value}>{value}</option>}
-      {engineers.length > 0 && (
-        <optgroup label="Engineers">
-          {engineers.map((p) => (
-            <option key={p.email || p.name} value={p.email} disabled={!p.email}>
-              {p.label}
-            </option>
-          ))}
-        </optgroup>
+      {groups.map(([label, group]) =>
+        group.length > 0 ? (
+          <optgroup key={label} label={label}>
+            {group.map(option)}
+          </optgroup>
+        ) : null,
       )}
       {rest.length > 0 && (
-        <optgroup label={engineers.length ? 'Everyone else' : 'People'}>
+        <optgroup label={engineers.length || leaders.length ? 'Everyone else' : 'People'}>
           {rest.map((p) => (
             <option key={p.email || p.name} value={p.email} disabled={!p.email}>
               {p.label}

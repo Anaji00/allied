@@ -51,7 +51,7 @@ def test_one_draft_keeps_its_send_and_review_buttons_several_get_review_all(monk
     from app.services.coordination import notify
 
     sent = []
-    for k, v in {"NTFY_URL": "https://ntfy.example.test", "NTFY_TOPIC": "t", "APP_BASE_URL": "https://192.168.12.235:8443"}.items():
+    for k, v in {"NTFY_URL": "https://ntfy.example.test", "NTFY_TOPIC": "t", "NTFY_TOKEN": "tok", "APP_BASE_URL": "https://192.168.12.235:8443"}.items():
         monkeypatch.setattr(settings, k, v)
     monkeypatch.setattr(notify, "_quiet", lambda at=None: False)
     monkeypatch.setattr(quick.httpx, "post", lambda url, json, headers, timeout: sent.append(json) or type("R", (), {"status_code": 200})())

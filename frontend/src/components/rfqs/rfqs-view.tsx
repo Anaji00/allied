@@ -1,13 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { parseAsInteger, parseAsStringLiteral, useQueryState } from 'nuqs';
+import { parseAsBoolean, parseAsInteger, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2, Plus } from 'lucide-react';
 import { DataTable, columnHelper, recordKey } from '@/components/data/data-table';
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
+import { OwnerField } from '@/components/organize/owner-field';
+import { Tags } from '@/components/organize/tags';
 import { OpenJob } from '@/components/jobs/open-job';
+import { CompareForOrder } from '@/components/jobs/compare-for-order';
+import { RecordFields } from '@/components/data/record-fields';
 import { UpdatesPanel } from '@/components/data/updates-panel';
 import { CommentCount, useCommentCounts } from '@/components/data/updates-panel';
 import { SavedViews } from '@/components/data/saved-views';
@@ -114,6 +118,8 @@ export function RfqsView() {
   // `id` is the link alerts and autopilot already use.
   const [id, setId] = useQueryState('id', parseAsInteger);
   const [adding, setAdding] = useState(false);
+  // "+ New" lands here with ?new=true: open the form once, then clear the flag.
+  const [wantsNew, setWantsNew] = useQueryState('new', parseAsBoolean);
   const { data, isPending, isFetching, error, refetch } = useQuery({
     queryKey: ['rfqs', show],
     queryFn: async () => (await fetchRfqs(show !== 'all', show === 'mine')) as Page,
@@ -339,8 +345,11 @@ export function RfqsView() {
       </div>
       {canEdit && (
         <AddRfq
-          open={adding}
-          onOpenChange={setAdding}
+          open={adding || Boolean(wantsNew)}
+          onOpenChange={(o) => {
+            setAdding(o);
+            if (!o) void setWantsNew(null);
+          }}
           onAdded={(rid) => {
             void setShow(null);
             void setId(rid);
@@ -369,11 +378,21 @@ function RfqDetail({ rfq: r, canEdit }: { rfq: Rfq; canEdit: boolean }) {
     },
     onError: (e) => toast.error('Not saved', { description: e.message }),
   });
-  const st = STATE[r.state] ?? { label: r.state, tone: 'neutral' as Tone };
+  const [comparing, setComparing] = useState(false);
+  const st = STATE[r.state] ?? { label: words(r.state), tone: 'neutral' as Tone };
 
   return (
     <div className="grid gap-4">
       <OpenJob rfqId={r.id} />
+      <OwnerField kind="rfq" refId={r.number} />
+      <Tags kind="rfq" refId={r.number} />
+      <Button variant="outline" size="sm" className="justify-self-start" onClick={() => setComparing(true)}>
+        Compare drawings
+      </Button>
+      {comparing && (
+        <CompareForOrder orderRef={r.number} jobRef={(r as { job_ref?: string | null }).job_ref} onClose={() => setComparing(false)} />
+      )}
+      <RecordFields kind="rfq" refId={r.number} title="Details (click to change)" />
       <div className="flex flex-wrap gap-1.5">
         <ToneBadge tone={st.tone}>{st.label}</ToneBadge>
         {(r.reasons ?? []).map((x) => (

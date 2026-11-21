@@ -36,6 +36,18 @@ _LINK_MINUTES = {
 }
 
 
+def _ai_health() -> Dict[str, Any]:
+    """{ready, provider, model, reason}: whether the AI buttons can work, and a plain reason when they cannot (so a screen can disable them with it)."""
+    try:
+        from app.services.ai.providers import get_provider
+
+        st = get_provider().status()
+        ready = bool(st.get("ready"))
+        return {"ready": ready, "provider": st.get("provider"), "model": st.get("model"), "reason": None if ready else (st.get("detail") or "The AI is not set up.")}
+    except Exception as exc:  # noqa: BLE001
+        return {"ready": False, "provider": None, "model": None, "reason": f"The AI could not be checked ({type(exc).__name__})."}
+
+
 @router.get("/status", summary="What is automated right now")
 def automation_status(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
     """Reports each automated link, whether it is live, and the hand-work left."""
@@ -124,6 +136,7 @@ def automation_status(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
         "mail": mail,
         "mailbox": inbox,
         "workers": _workers(inbox),
+        "ai": _ai_health(),
     }
 
 

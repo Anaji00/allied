@@ -1,13 +1,5 @@
-import { Suspense } from 'react';
-import { RowsSkeleton } from '@/components/data/states';
-import { AssistantView } from '@/components/tools/assistant-view';
+import { redirect } from 'next/navigation';
 
-export const metadata = { title: 'Document tools' };
-
-export default function AssistantPage() {
-  return (
-    <Suspense fallback={<RowsSkeleton rows={6} />}>
-      <AssistantView />
-    </Suspense>
-  );
+export default function Page() {
+  redirect('/toolkit');
 }

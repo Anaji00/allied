@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
+from app.api.v1.view_models import BallSummary
 from app.core.security import require_operator, require_viewer
 from app.services.coordination import ball, updates
 
@@ -50,8 +51,8 @@ def open_items(who: str = Query("all", pattern="^(all|me)$"), kind: str = Query(
     return ball.list_open(who, user.get("email", ""), kind, late)
 
 
-@router.get("/summary", summary="The management view: where the ball sits, who holds the most, what is oldest")
-def summary(_user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+@router.get("/summary", summary="The management view: where the ball sits, who holds the most, what is oldest", response_model=BallSummary, response_model_exclude_unset=True)
+def summary(_user: dict = Depends(require_viewer)) -> Any:
     return ball.summary()
 
 

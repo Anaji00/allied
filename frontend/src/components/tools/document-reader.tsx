@@ -14,7 +14,6 @@ import { money, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { CopyButton, pctOf } from './ai-output';
 
-
 const DOC_TYPES = [
   ['AUTO', 'Work it out for me'],
   ['CUSTOMER_PO', 'Customer purchase order'],
@@ -30,7 +29,10 @@ const ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.txt';
 // A note only counts as a pass if it reads like one: "could not read the
 // drawing number" next to an OK is how a warning gets read as reassurance.
 const PROBLEM_NOTE = /could not|cannot|not read|needs a person|no allied|must not|unresolved|by hand|does not resolve|first \d+/i;
-const clean = (t: string) => String(t || '').replace(/[\p{Extended_Pictographic}️]/gu, '').trim();
+const clean = (t: string) =>
+  String(t || '')
+    .replace(/[\p{Extended_Pictographic}️]/gu, '')
+    .trim();
 const display = (v: unknown) => (v == null || v === '' ? '–' : typeof v === 'object' ? JSON.stringify(v) : String(v));
 
 type Sample = { sample_id: string; title: string; document_type: string; sample_filename: string; sample_text: string };
@@ -53,7 +55,10 @@ export function DocumentReader() {
     mutationFn: async ({ files, type }: { files: File[]; type: string }) => {
       if (files.length === 1) return { scans: [await uploadDocumentScan(files[0], type)], notes: [] as string[] };
       const res = await batchUploadDocuments(files);
-      return { scans: res.scans ?? [], notes: [...(res.batch_summary_notes ?? []), ...(res.failed_scans ? [`${res.failed_scans} file(s) couldn’t be read.`] : [])] };
+      return {
+        scans: res.scans ?? [],
+        notes: [...(res.batch_summary_notes ?? []), ...(res.failed_scans ? [`${res.failed_scans} file(s) couldn’t be read.`] : [])],
+      };
     },
     onSuccess: (res) => {
       setResults(res.scans);
@@ -229,7 +234,9 @@ function ScanResult({ result }: { result: any }) {
                       {l.description}
                       {(l.dimensions || l.drawing_ref || l.heat_number) && (
                         <span className="block text-xs text-muted-foreground">
-                          {[l.dimensions, l.drawing_ref && `Drawing ${l.drawing_ref}`, l.heat_number && `Heat ${l.heat_number}`].filter(Boolean).join(' · ')}
+                          {[l.dimensions, l.drawing_ref && `Drawing ${l.drawing_ref}`, l.heat_number && `Heat ${l.heat_number}`]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </span>
                       )}
                       {Number(l.confidence) < 0.8 && <ToneBadge tone="warn">Please check</ToneBadge>}
@@ -301,7 +308,9 @@ function Reconciliation({ rec }: { rec: any }) {
   const ok = rec.reconciliation_status === 'RECONCILED_APPROVED';
   const title =
     REC_TITLE[rec.reconciliation_status] ??
-    (Number(rec.cost_variance_amount) > 0 ? `Overbilled by ${money(rec.cost_variance_amount)}. Payment held.` : 'Doesn’t match the purchase order. Payment held.');
+    (Number(rec.cost_variance_amount) > 0
+      ? `Overbilled by ${money(rec.cost_variance_amount)}. Payment held.`
+      : 'Doesn’t match the purchase order. Payment held.');
   return (
     <div className={cn('grid gap-1.5 rounded-md p-3 text-[13px]', ok ? 'bg-ok-soft' : 'bg-bad-soft')}>
       <p className={cn('font-medium', ok ? 'text-ok' : 'text-bad')}>{title}</p>

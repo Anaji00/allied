@@ -132,34 +132,80 @@ export function AuthProvider({ children }) {
     };
     void syncProfile();
 
-    setUnauthorizedHandler(async () => {
+    // One refresh at a time: several requests that hit the expiry together share it. The server hands back a new refresh token
+    // each time, so a second call with the old one would fail and look like a lost session.
+    let refreshing = null;
+    const renew = () => {
+      if (refreshing) return refreshing;
+      // Another tab may have just renewed: its newer tokens are in storage. Use them instead of spending the old refresh token again,
+      // which the server treats as a sign-in used twice.
+      const stored = readStoredSession();
+      if (stored?.refresh_token && stored.refresh_token !== _session?.refresh_token && stored.access_token) {
+        setSession(stored);
+        return Promise.resolve({ token: stored.access_token });
+      }
       const refresh = _session?.refresh_token;
-      if (!refresh) {
-        setSession(EMPTY_SESSION);
-        toast.error('Your session expired — please sign in again.');
-        return null;
-      }
-      try {
-        const { access_token: accessToken } = await refreshAccessToken(refresh);
-        setSession({ ..._session, access_token: accessToken });
-        void syncProfile();
-        return accessToken;
-      } catch (err) {
-        // Refresh token expired, the account was disabled or deleted, or the password was changed elsewhere.
-        setSession(EMPTY_SESSION);
-        const why = 'Your session ended. Sign in again.';
-        if (why) {
-          try {
-            sessionStorage.setItem('allied.signin.notice', why);
-          } catch {
-            // Private windows refuse storage; the toast below still tells them.
+      if (!refresh) return Promise.resolve({ rejected: true });
+      refreshing = (async () => {
+        try {
+          // A restart or a bad moment on the server is retried a couple of times before anything is given up.
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              const out = await refreshAccessToken(refresh);
+              setSession({
+                ..._session,
+                access_token: out.access_token,
+                refresh_token: out.refresh_token || _session.refresh_token,
+                tokenAt: new Date().toISOString(),
+              });
+              void syncProfile();
+              return { token: out.access_token };
+            } catch (err) {
+              if (!err?.transient) return { rejected: true, why: err?.message };
+              if (attempt === 2) return { transient: true };
+              toast('The server is restarting, trying again…', { id: 'server-restarting' });
+              await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+            }
           }
+          return { transient: true };
+        } finally {
+          refreshing = null;
         }
-        toast.error(why || 'Your session expired — please sign in again.');
+      })();
+      return refreshing;
+    };
+
+    setUnauthorizedHandler(async () => {
+      if (!_session?.refresh_token) {
+        setSession(EMPTY_SESSION);
+        toast.error('Your session expired — please sign in again.', { id: 'session-ended' });
         return null;
       }
+      const out = await renew();
+      if (out?.token) return out.token;
+      // The server is only having a bad moment: keep the session, the next request tries again.
+      if (out?.transient) return null;
+      // Refresh token expired, the account was disabled or deleted, or the password was changed elsewhere.
+      setSession(EMPTY_SESSION);
+      const why = out?.why && /password was changed/i.test(out.why) ? out.why : 'Your session ended. Sign in again.';
+      try {
+        sessionStorage.setItem('allied.signin.notice', why);
+      } catch {
+        // Private windows refuse storage; the toast below still tells them.
+      }
+      toast.error(why, { id: 'session-ended' });
+      return null;
     });
-    return () => setUnauthorizedHandler(null);
+
+    // Renew quietly well before the 8 hours are up, so a working session is never interrupted.
+    const quiet = window.setInterval(() => {
+      const at = Date.parse(_session?.tokenAt || _session?.loginTime || '');
+      if (_session?.refresh_token && Number.isFinite(at) && Date.now() - at > 7 * 3600_000) void renew();
+    }, 5 * 60_000);
+    return () => {
+      window.clearInterval(quiet);
+      setUnauthorizedHandler(null);
+    };
   }, []);
 
   /** Authenticates against the backend. Returns {ok} or {ok:false, error}. */

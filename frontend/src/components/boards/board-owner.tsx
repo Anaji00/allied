@@ -46,7 +46,7 @@ export function OwnerPicker({ boardId, itemId }: { boardId: string; itemId: stri
     <div className="grid gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">Set the owner</span>
       <div className="flex flex-wrap items-center gap-2">
-        <PersonSelect value={email} onChange={setEmail} none="Choose a person" className="w-auto min-w-48" />
+        <PersonSelect area="engineering" value={email} onChange={setEmail} none="Choose a person" className="w-auto min-w-48" />
         <Button size="sm" variant="outline" disabled={!email || stage.isPending} onClick={() => stage.mutate()}>
           {stage.isPending && <Loader2 className="animate-spin" />}
           Save for monday

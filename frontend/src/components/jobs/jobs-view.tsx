@@ -22,7 +22,17 @@ const WHO: Record<string, string> = {
 const col = columnHelper<JobRow>();
 
 const columns = col.columns([
-  col.accessor('ref', { header: 'Job', cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span> }),
+  col.accessor('ref', {
+    header: 'Job',
+    cell: (c) => (
+      <span className="font-mono text-xs">
+        {c.getValue()}
+        {(c.row.original as { changed_since_seen?: boolean }).changed_since_seen && (
+          <span className="ml-1.5 inline-block size-2 rounded-full bg-primary align-middle" title="Changed since you last looked" />
+        )}
+      </span>
+    ),
+  }),
   col.accessor('title', { header: 'What', meta: { className: 'max-w-72 truncate' } }),
   col.accessor('customer', {
     header: 'Customer',
@@ -44,7 +54,7 @@ const columns = col.columns([
           {w.who && <span className="text-xs text-muted-foreground">{WHO[w.who] ?? w.who}</span>}
         </span>
       ) : (
-        <span className="text-muted-foreground">Nothing</span>
+        <span className="text-muted-foreground">No one</span>
       );
     },
   }),
@@ -67,7 +77,9 @@ export function JobsView() {
   if (!list.data) return <EmptyState title="Not available yet">Jobs show up here once they are switched on.</EmptyState>;
 
   const items = list.data.items;
-  const shown = stage === 'all' ? items : items.filter((j) => j.stage === stage);
+  // "Late": waiting on something for more than three days.
+  const late = (j: JobRow) => (j.waiting ?? []).some((w) => w.since && Date.now() - new Date(w.since).getTime() > 3 * 86_400_000);
+  const shown = stage === 'all' ? items : stage === 'late' ? items.filter(late) : items.filter((j) => j.stage === stage);
   const count = (s: string) => items.filter((j) => j.stage === s).length;
 
   return (
@@ -78,6 +90,7 @@ export function JobsView() {
         onChange={setStage}
         options={[
           { value: 'all', label: 'All', count: items.length },
+          ...(items.some(late) ? [{ value: 'late', label: 'Waiting a while', count: items.filter(late).length }] : []),
           ...STAGES.filter(([k]) => count(k) > 0).map(([k, label]) => ({ value: k, label, count: count(k) })),
         ]}
       />

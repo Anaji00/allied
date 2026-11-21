@@ -56,15 +56,17 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire, "type": "access"})
+    to_encode.update({"exp": expire, "type": "access", "iat": datetime.now(timezone.utc).timestamp()})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_refresh_token(data: dict) -> str:
-    """Creates a long-lived JWT refresh token."""
+def create_refresh_token(data: dict, jti: Optional[str] = None, expires_at: Optional[float] = None) -> str:
+    """Creates a long-lived JWT refresh token with an id (jti). `jti` and `expires_at` let the same current token be signed again unchanged (the grace window for parallel refreshes)."""
+    import uuid
+
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    expire = datetime.fromtimestamp(expires_at, tz=timezone.utc) if expires_at else datetime.now(timezone.utc) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "type": "refresh", "jti": jti or uuid.uuid4().hex[:32], "iat": datetime.now(timezone.utc).timestamp()})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
@@ -117,7 +119,7 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
     email = payload.get("sub", "")
-    role = await run_in_threadpool(_live_role, email, payload.get("pv"))  # may query the database on a cache miss
+    role = await run_in_threadpool(_live_role, email, payload.get("pv"), payload.get("iat"))  # may query the database on a cache miss
 
     return {
         "email": email,
@@ -166,7 +168,7 @@ def forget_account(email: str) -> None:
         _accounts.pop((email or "").strip().lower(), None)
 
 
-def _live_role(email: str, stamp: Optional[str] = None) -> str:
+def _live_role(email: str, stamp: Optional[str] = None, issued_at: Optional[float] = None) -> str:
     """The account's current role. Refuses removed and disabled accounts.
 
     Token claims are a snapshot taken at login, so the role is read from the
@@ -193,6 +195,11 @@ def _live_role(email: str, stamp: Optional[str] = None) -> str:
             detail="The password was changed. Sign in again.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if issued_at is not None:                                       # sessions ended because a refresh token was used twice: an access token issued before that is refused
+        from app.core import refresh_state
+
+        if float(issued_at) < refresh_state.revoked_before(email):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your sessions were ended for safety. Sign in again.", headers={"WWW-Authenticate": "Bearer"})
     return role
 
 

@@ -265,9 +265,28 @@ def list_open(who: str = "all", me: str = "", kind: str = "", late_only: bool = 
     return sorted(items, key=lambda i: -i["days_waiting"])
 
 
+def _casing(names: List[str]) -> Dict[str, str]:
+    """One spelling for each name that is written in several cases (Helen, helen, HELEN): a mixed-case spelling if there is one, else the most common; an all-lowercase single spelling becomes Title Case."""
+    groups: Dict[str, List[str]] = {}
+    for n in names:
+        groups.setdefault(str(n).casefold(), []).append(str(n))
+    out: Dict[str, str] = {}
+    for key, variants in groups.items():
+        mixed = [v for v in variants if v != v.lower() and v != v.upper()]
+        pick = max(set(mixed), key=variants.count) if mixed else max(set(variants), key=variants.count)
+        if pick == pick.lower() and "@" not in pick:
+            pick = pick.title()
+        out[key] = pick
+    return out
+
+
 def summary() -> Dict[str, Any]:
-    """The management view: where the ball sits across the business, who is holding the most, what's oldest."""
+    """The management view: where the ball sits across the business, who is holding the most, what's oldest. `late_means` says in words what late and escalated mean; each holder has waiting_days (their oldest wait)."""
     items = list_open()
+    spell = _casing([i["ball_name"] or i["ball_person"] or "?" for i in items])
+    for i in items:
+        who_ = i["ball_name"] or i["ball_person"] or "?"
+        i["ball_name"] = spell.get(str(who_).casefold(), who_) if i["ball_name"] else i["ball_name"]
     by_kind: Dict[str, Dict[str, Any]] = {}
     people: Dict[str, Dict[str, Any]] = {}
     for i in items:
@@ -276,13 +295,16 @@ def summary() -> Dict[str, Any]:
         k["late"] += i["days_waiting"] >= settings.BALL_NUDGE_DAYS
         k["oldest_days"] = max(k["oldest_days"], i["days_waiting"])
         who = i["ball_name"] or i["ball_person"] or "?"
-        p = people.setdefault(who, {"name": who, "kind": i["ball_with"], "count": 0, "late": 0, "oldest_days": 0.0})
+        who = spell.get(str(who).casefold(), who)
+        p = people.setdefault((i["ball_with"], str(who).casefold()), {"name": who, "kind": i["ball_with"], "count": 0, "late": 0, "oldest_days": 0.0})
         p["count"] += 1
         p["late"] += i["days_waiting"] >= settings.BALL_NUDGE_DAYS
         p["oldest_days"] = max(p["oldest_days"], i["days_waiting"])
     return {"open": len(items), "late": sum(i["days_waiting"] >= settings.BALL_NUDGE_DAYS for i in items),
             "escalated": sum(i["level"] >= 2 for i in items), "by_kind": sorted(by_kind.values(), key=lambda k: -k["count"]),
-            "by_holder": sorted(people.values(), key=lambda p: (-p["late"], -p["count"]))[:15], "oldest": items[:10],
+            "by_holder": [{**p, "waiting_days": int(p["oldest_days"])} for p in sorted(people.values(), key=lambda p: (-p["late"], -p["count"]))[:15]], "oldest": items[:10],
+            "late_means": (f"Late means someone has had the ball for {settings.BALL_NUDGE_DAYS} working days or more. Escalated means {settings.BALL_ESCALATE_DAYS} days or more (the owner is told), "
+                           f"and {settings.BALL_LEADERSHIP_DAYS} days or more reaches leadership. Every escalated item is also late and also open: the three are not separate piles."),
             "rules": {"nudge_days": settings.BALL_NUDGE_DAYS, "escalate_days": settings.BALL_ESCALATE_DAYS,
                       "leadership_days": settings.BALL_LEADERSHIP_DAYS}}
 

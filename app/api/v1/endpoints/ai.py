@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.core.logging import logger
+from app.api.v1.view_models import ExplainResponse, SuggestItemResponse
 from app.core.security import get_current_user, require_operator, require_viewer
 from app.services.ai import features, speech, store
 from app.services.ai.drawings import check_drawings
@@ -272,13 +273,18 @@ async def order_status(number: str = Query(..., min_length=2), request: Request 
 # ---------------------------------------------------------------------------
 
 
-@router.post("/exceptions/{exception_id}/explain", summary="Plain-English explanation of a stuck job")
+@router.post("/exceptions/{exception_id}/explain", summary="Plain-English explanation of a stuck job", response_model=ExplainResponse, response_model_exclude_unset=True)
 def explain(exception_id: str, user: dict = Depends(require_viewer)):
     from app.services.exception_queue_service import exception_queue_service
 
     item = next((e for e in exception_queue_service.list_exceptions() if e.exception_id == exception_id), None)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such exception.")
+    from app.core import status_words
+
+    fixed = status_words.explain_text(item.exception_type)
+    if fixed:                                                         # a known kind of exception is explained in the same words every time, with no AI call
+        return {"suggestion_id": None, "result": {"explanation": fixed[0], "suggested_fix": fixed[1]}}
     try:
         result, sid = features.explain_exception(item.model_dump(mode="json"), actor=user.get("email", "system"))
     except Exception as exc:  # noqa: BLE001
@@ -290,7 +296,7 @@ class ItemRequest(BaseModel):
     raw_text: str = Field(..., min_length=2, max_length=500)
 
 
-@router.post("/items/suggest", summary="Suggest the catalogue item a customer meant")
+@router.post("/items/suggest", summary="Suggest the catalogue item a customer meant", response_model=SuggestItemResponse, response_model_exclude_unset=True)
 def suggest_item(body: ItemRequest, user: dict = Depends(require_operator)):
     try:
         result, sid, candidates = features.suggest_item(body.raw_text, actor=user.get("email", "system"))

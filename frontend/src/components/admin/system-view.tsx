@@ -41,12 +41,12 @@ export function SystemView() {
         value={tab}
         onChange={(t) => void setTab(t === 'health' ? null : t)}
         tabs={[
-          ['health', 'Health'],
-          ['automation', 'What runs by itself'],
+          ['health', 'Is everything working?'],
+          ['automation', 'What the system does by itself'],
           ...(hasRole('OPERATOR') ? ([['changes', mondayWaiting ? `monday changes (${mondayWaiting})` : 'monday changes']] as const) : []),
           ['monday', 'monday.com link'],
-          ...(hasRole('MANAGER') ? ([['forms', 'Required forms']] as const) : []),
-          ...(hasRole('MANAGER') ? ([['templates', 'Job templates']] as const) : []),
+          ...(hasRole('MANAGER') ? ([['forms', 'Settings: required forms']] as const) : []),
+          ...(hasRole('MANAGER') ? ([['templates', 'Settings: job templates']] as const) : []),
         ]}
       />
       {tab === 'changes' && hasRole('OPERATOR') && <MondayChanges />}
@@ -179,10 +179,27 @@ function Health() {
   const c: any = (data as any)?.components ?? {};
   if (!data && error) return <ErrorState error={error} onRetry={() => void refetch()} />;
   if (!data) return <RowsSkeleton rows={5} />;
-  const healthy = String((data as any).status).toLowerCase() === 'healthy';
+  const status = String((data as any).status).toLowerCase();
+  const healthy = status === 'healthy';
+  const database = (data as any).database ?? {};
+  const schema = (data as any).schema ?? {};
+  // A damaged data file, or data from a newer version of the app: said plainly, in red, with the server's own message.
+  const serious = status === 'damaged' || status === 'database_newer_than_app';
+  const seriousText =
+    (status === 'database_newer_than_app' ? schema.message : null) ??
+    database.file_check?.text ??
+    schema.message ??
+    (status === 'damaged'
+      ? 'The data file looks damaged. Do not keep working until someone checks it.'
+      : 'The data is from a newer version of the app than the one running.');
 
   return (
     <div className="grid gap-4">
+      {serious && (
+        <div role="alert" className="rounded-lg border border-bad bg-bad-soft p-3 text-sm font-medium text-bad">
+          {seriousText}
+        </div>
+      )}
       <div className={cn('flex flex-wrap items-center gap-3 rounded-lg p-3 text-sm', healthy ? 'bg-ok-soft' : 'bg-warn-soft')}>
         <span className={cn('font-medium', healthy ? 'text-ok' : 'text-warn')}>
           {healthy ? 'The services are running' : 'Something needs a look'}
@@ -218,7 +235,7 @@ function Health() {
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         <Card
-          title="Reading from Sage"
+          title={`Reading from ${c.sage_odbc_reader?.source_label ?? 'Sage'}`}
           description="Parts, customers and order history. Read-only."
           badge={stateBadge(c.sage_odbc_reader?.status)}
         >
@@ -256,7 +273,8 @@ function Health() {
           <Facts
             items={[
               ['Name', (data as any).service ?? '–'],
-              ['Environment', (data as any).environment ?? '–'],
+              ['Environment', (data as any).environment_label ?? (data as any).environment ?? '–'],
+              ...(database.file_check?.text ? ([['Data file check', database.file_check.text]] as [string, string][]) : []),
               ['Reported', dateTime((data as any).timestamp)],
             ]}
           />
@@ -337,11 +355,11 @@ function Automation() {
   const poll = useMutation({
     mutationFn: async () => (await pollMailboxNow()) as { ok: boolean; detail: string; ingested: number; orders_created: number },
     onSuccess: (r) => {
-      if (r.ok) toast.success(`Mailbox checked: ${r.ingested} message(s), ${r.orders_created} order(s)`);
-      else toast.warning('The mailbox wasn’t checked', { description: r.detail });
+      if (r.ok) toast.success(r.ingested > 0 ? `${r.ingested} new emails read. ${r.orders_created} orders made.` : 'No new mail.');
+      else toast.warning(`The mailbox could not be read. ${r.detail}`);
       void client.invalidateQueries({ queryKey: ['automation'] });
     },
-    onError: (e) => toast.error('The mailbox wasn’t checked', { description: e.message }),
+    onError: (e) => toast.error(`The mailbox could not be read. ${e.message}`),
   });
 
   if (!data && error) return <ErrorState error={error} onRetry={() => void refetch()} />;
@@ -430,11 +448,18 @@ function Automation() {
               variant="outline"
               className="ml-auto"
               disabled={poll.isPending || !data.mailbox.enabled}
-              title={data.mailbox.enabled ? undefined : data.mailbox.detail}
-              onClick={() => poll.mutate()}
+              title={data.mailbox.enabled ? 'Reads new mail. If an email is an order, the app makes the order.' : data.mailbox.detail}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    'Check the mailbox now?\n\nThe app will read new mail. Any email that is a customer order becomes a new order. Nothing is sent to anyone.',
+                  )
+                )
+                  poll.mutate();
+              }}
             >
               {poll.isPending && <Loader2 className="animate-spin" />}
-              Check the order mailbox now
+              Check the mailbox now
             </Button>
           )}
         </div>
@@ -560,11 +585,11 @@ function Monday() {
     mutationFn: async (id: number) =>
       ok(api.POST('/api/v1/webhooks/monday/events/{event_id}/replay', { params: { path: { event_id: id } } })),
     onSuccess: (_r, id) => {
-      toast.success(`Event #${id} is running again`);
+      toast.success('Run again. Check Today for anything new.');
       void client.invalidateQueries({ queryKey: ['monday'] });
       void client.invalidateQueries({ queryKey: ['inbox'] });
     },
-    onError: (e) => toast.error('It didn’t run again', { description: e.message }),
+    onError: (e) => toast.error(`It did not run again. ${e.message}`),
   });
 
   const rows = events.data?.events ?? [];
@@ -589,9 +614,9 @@ function Monday() {
             tone: f === 'FAILED' || f === 'DEAD' ? ('bad' as const) : f === 'RETRY' ? ('warn' as const) : undefined,
           }))}
         />
-        {hasRole('OPERATOR') && (
+        {hasRole('ADMIN') && (
           <Button size="sm" variant="outline" className="ml-auto" onClick={() => setTesting(true)}>
-            Send a test event…
+            Try a monday change (test only)…
           </Button>
         )}
       </div>
@@ -636,9 +661,21 @@ function Monday() {
                 />
                 {selected.last_error && <p className="rounded-md bg-bad-soft p-2 text-bad">{selected.last_error}</p>}
                 {['FAILED', 'DEAD', 'IGNORED'].includes(selected.status) && hasRole('OPERATOR') && (
-                  <Button size="sm" className="justify-self-start" disabled={replay.isPending} onClick={() => replay.mutate(selected.id)}>
+                  <Button
+                    size="sm"
+                    className="justify-self-start"
+                    disabled={replay.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          'Run this change again?\n\nThe app will do again what it did for this change on monday. This can make a second draft or alert. Nothing is sent to anyone.',
+                        )
+                      )
+                        replay.mutate(selected.id);
+                    }}
+                  >
                     {replay.isPending && <Loader2 className="animate-spin" />}
-                    Replay after fixing the item
+                    Run this change again
                   </Button>
                 )}
               </div>
@@ -719,7 +756,7 @@ function TestEvent({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Send a test event</DialogTitle>
+          <DialogTitle>Try a monday change (test only)</DialogTitle>
           <DialogDescription>Runs through the same path as a real board change.</DialogDescription>
         </DialogHeader>
         {live && (

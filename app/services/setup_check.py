@@ -1,6 +1,7 @@
 """The "set these first" list: the few settings that must be right, what stops working while each is blank, and how to fix it.
 Reports only whether something is set, never its value, so no secret ever leaves this module."""
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from app.config import settings
@@ -17,7 +18,6 @@ def _item(key: str, level: str, label: str, ok: bool, stops: str, fix: str) -> D
 
 
 def _backups_ok() -> bool:
-    from datetime import datetime, timedelta, timezone
 
     from app.services import backups
 
@@ -26,6 +26,15 @@ def _backups_ok() -> bool:
         return bool(settings.BACKUP_ENABLED and newest and datetime.fromisoformat(newest[0]["made"]) > datetime.now(timezone.utc) - timedelta(days=2))
     except Exception:  # noqa: BLE001 - an unreadable folder counts as "not running"
         return False
+
+
+def _email_plays_on_auto() -> List[str]:
+    """The autopilot plays that write to vendors or customers and are set to go without a person's OK."""
+    from app.services.coordination import autopilot
+
+    modes = autopilot.modes()
+    return [n for n in ("vendor_chaser", "rfq_vendor_chaser", "quote_followup", "vendor_late_chase", "rfq_acknowledge", "rfq_ask_vendors", "vendor_reply", "shipment_notice", "delivery_reply")
+            if modes.get(n) == "auto"]
 
 
 def checklist() -> Dict[str, Any]:
@@ -57,10 +66,23 @@ def checklist() -> Dict[str, Any]:
               "New sales order numbers could clash with Sage's.", "Set SO_NUMBER_FLOOR to the last sales order number used in Sage 50."),
         _item("ai", "recommended", "AI key (Groq free tier)", _has("GROQ_API_KEY"),
               "Emails are not read by AI: keyword sorting only, no summaries, no scans of messy PDFs.", "Set GROQ_API_KEY."),
+        _item("live_mode", "recommended", "Running as Test, not Live (APP_ENV is not production)", settings.is_production,
+              "The System page says \"Test\" and the app does not insist on real secrets: the shipped default passwords and signing key are accepted, so anyone who knows them could sign in.",
+              "When the real secrets are set (JWT_SECRET_KEY, SECRET_KEY and ADMIN_PASSWORD), set APP_ENV=production: the System page then says \"Live\" and the app refuses to start with default secrets."),
+        _item("lead_search", "recommended", "People search on LinkedIn is switched off", not settings.LEAD_WEB_SEARCH,
+              "The optional lead search scrapes personal profiles through a search engine; that may not fit LinkedIn's terms and exposes personal data.", "Leave LEAD_WEB_SEARCH off; add leads by hand or import a CSV. Only the owner should turn it on, after checking the terms."),
+        _item("ai_zdr", "recommended", "AI reads mail text: zero data retention not confirmed", bool(settings.ALLIED_GROQ_ZDR_CONFIRMED),
+              "Mail text sent to the AI may be kept by the provider under its default terms.", "The owner turns on Zero Data Retention in the Groq console (Data Controls), then sets ALLIED_GROQ_ZDR_CONFIRMED=true. The app cannot check this itself."),
         _item("app_address", "recommended", "App address people can open", settings.APP_BASE_URL not in ("", "http://localhost:3000"),
               "Links in alerts and approve-from-phone buttons point at this computer only.", "Set APP_BASE_URL to the address phones can reach."),
         _item("backups", "needed", "Database backups are running", _backups_ok(),
               "A broken disk or a bad update could lose everything, with no copy to go back to.", "Leave BACKUP_ENABLED on; check System > Backups, or run one now."),
+        _item("backup_copy", "needed", "A second copy of the backups (another disk or share)", _has("BACKUP_COPY_DIR"),
+              "Every backup is on the same disk as the database: if that disk fails, both are gone.", "Set BACKUP_COPY_DIR to a folder on another disk or a share you control (not a cloud-synced folder)."),
+        _item("po_limit", "needed", "Purchase order approval limit", _has("PO_APPROVAL_LIMIT"),
+              "A manager can approve a purchase order of any size; nothing needs an administrator.", "Set PO_APPROVAL_LIMIT to the largest amount a manager may approve. Above it, only an administrator can."),
+        _item("autopilot_auto", "needed", "Emails written by the autopilot wait for a person", not _email_plays_on_auto(),
+              "The autopilot is set to send follow-up emails to vendors or customers without anyone looking at them first.", "Set those plays back to suggest in AUTOPILOT_MODES (or on the Automations screen): " + ", ".join(_email_plays_on_auto() or ["none"]) + "."),
         _item("fedex", "optional", "FedEx", _has("FEDEX_CLIENT_ID"), "No live FedEx prices; the carrier rate card is used.", "Set the FedEx client id, secret and account number."),
         _item("push", "optional", "Phone push alerts (ntfy)", _has("NTFY_URL") and _has("NTFY_TOPIC"),
               "Urgent alerts stay in the app and email; no phone push notifications.", "Set NTFY_URL and NTFY_TOPIC."),

@@ -12,7 +12,6 @@ import { useAuth } from '@/context/AuthContext';
 import { executeSystemAction } from '@/lib/api';
 import { ProposalCard, proposalOf, type Outcome, type Proposal } from './proposal';
 
-
 type Spec = {
   type: string;
   title: string;
@@ -57,8 +56,8 @@ export function Tasks() {
         <TaskForm key={t.type} spec={t} />
       ))}
       <p className="text-xs text-muted-foreground lg:col-span-2">
-        Everything else the assistant used to run has its own screen now: new orders and supplier bills in Orders, quotes in Wear &
-        quotes, outreach in Leads, Sage files in Sage & imports, problems in the Inbox.
+        Everything else the assistant used to run has its own screen now: new orders and supplier bills in Orders, quotes in Wear & quotes,
+        outreach in Leads, Sage files in Sage & imports, problems in the Inbox.
       </p>
     </div>
   );
@@ -102,7 +101,12 @@ function TaskForm({ spec }: { spec: Spec }) {
       {spec.fields.map((f) => (
         <Field key={f.key} label={f.optional ? `${f.label} (optional)` : f.label}>
           {f.multiline ? (
-            <Textarea rows={5} value={values[f.key] ?? ''} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} required={!f.optional} />
+            <Textarea
+              rows={5}
+              value={values[f.key] ?? ''}
+              onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+              required={!f.optional}
+            />
           ) : (
             <Input
               inputMode={f.numeric ? 'numeric' : undefined}
@@ -132,7 +136,9 @@ function TaskForm({ spec }: { spec: Spec }) {
           }}
         />
       ) : outcome ? (
-        <Result res={{ status: outcome.status === 'DONE' ? 'success' : outcome.status.toLowerCase(), detail: outcome.text, data: outcome.data }} />
+        <Result
+          res={{ status: outcome.status === 'DONE' ? 'success' : outcome.status.toLowerCase(), detail: outcome.text, data: outcome.data }}
+        />
       ) : (
         res && !proposalOf(res) && <Result res={res} />
       )}

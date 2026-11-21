@@ -49,4 +49,11 @@ def for_person(user: Dict[str, Any], limit: int = 20) -> Dict[str, Any]:
               + [{"kind": "ball", "ref": f"{b['item_type']}:{b['item_ref']}", "title": b.get("label") or b["item_ref"], "status_word": b["status_word"], "link": b["link"], "age_days": b["age_days"]}
                  for b in ball_lines])
     merged.sort(key=lambda i: -i["age_days"])
-    return {"total": sum(counts.values()), "counts": counts, "drafts": draft_lines, "alerts": alert_lines, "ball": ball_lines, "items": merged}
+    all_open = sum(counts.values())
+    try:
+        from app.services import my_day
+
+        total = my_day.items(user)["need_action"]                   # the ONE number: what Today's list says needs the person (the badge, the headline and /my-day agree)
+    except Exception:  # noqa: BLE001 - if Today can't be worked out, fall back to everything open
+        total = all_open
+    return {"total": total, "all_open": all_open, "counts": counts, "drafts": draft_lines, "alerts": alert_lines, "ball": ball_lines, "items": merged}

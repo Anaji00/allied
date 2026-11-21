@@ -19,9 +19,10 @@ from app.config import settings
 from app.core.logging import logger
 
 
-def _sig(action_id: str, email: str, expires: int) -> str:
+def _sig(action_id: str, email: str, expires: int, key: Optional[str] = None) -> str:
+    """The link's signature. With QUICK_LINK_KEY set, links are signed with that key alone (a leaked sign-in key can't approve drafts); with it blank they use the sign-in key, as before."""
     msg = f"quick:{action_id}:{email.lower()}:{expires}".encode()
-    return hmac.new(settings.JWT_SECRET_KEY.encode(), msg, hashlib.sha256).hexdigest()[:40]
+    return hmac.new((key or settings.QUICK_LINK_KEY or settings.JWT_SECRET_KEY).encode(), msg, hashlib.sha256).hexdigest()[:40]
 
 
 def token(action_id: str, email: str) -> Dict[str, str]:
@@ -35,7 +36,10 @@ def check(action_id: str, e: str, x: str, s: str) -> Optional[str]:
         expires = int(x)
     except (TypeError, ValueError):
         return None
-    if expires < time.time() or not s or not hmac.compare_digest(s, _sig(action_id, e or "", expires)):
+    if expires < time.time() or not s:
+        return None
+    keys = [settings.QUICK_LINK_KEY or settings.JWT_SECRET_KEY] + ([settings.JWT_SECRET_KEY] if settings.QUICK_LINK_KEY else [])        # links sent before the key was set still work until they lapse
+    if not any(hmac.compare_digest(s, _sig(action_id, e or "", expires, k)) for k in keys):
         return None
     return (e or "").lower()
 
@@ -77,11 +81,10 @@ def push_draft(action_id: str, summary: str, email: str) -> str:
     if _reachable():
         t = token(action_id, email)
         post = f"{settings.APP_BASE_URL.rstrip('/')}/api/v1/assistant/quick/{action_id}"
-        payload["actions"] = [
-            {"action": "http", "label": "Send", "url": post, "method": "POST", "clear": True,
-             "headers": {"Content-Type": "application/x-www-form-urlencoded"}, "body": urlencode({**t, "decision": "send"})},
-            {"action": "view", "label": "Review", "url": page_url(action_id, email)},
-        ]
+        payload["actions"] = [{"action": "view", "label": "Review", "url": page_url(action_id, email)}]
+        if settings.NTFY_TOKEN:                      # a one-tap Send is only put on a phone when the push channel is locked with a token: an open topic could be read by anyone who guesses its name
+            payload["actions"].insert(0, {"action": "http", "label": "Send", "url": post, "method": "POST", "clear": True,
+                                          "headers": {"Content-Type": "application/x-www-form-urlencoded"}, "body": urlencode({**t, "decision": "send"})})
     else:
         payload["message"] += "\n\nOpen Allied Operations to send or cancel it."
     headers = {"Authorization": f"Bearer {settings.NTFY_TOKEN}"} if settings.NTFY_TOKEN else {}

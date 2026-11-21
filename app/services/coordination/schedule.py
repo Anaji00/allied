@@ -378,12 +378,18 @@ class CoordinationWorker:
             self._step("monday_stage", monday_push.expire_old)          # staged changes nobody pushed for a month are dropped
             self._step("ball_chase", ball.run)                          # climb the ladder on items waiting too long
             self._step("held", alerts.release_held)
+            self._step("expire_test_alerts", alerts.expire_tests)
+            self._step("expire_old_notices", alerts.expire_old_info)          # information-only alerts older than NOTICE_AUTOCLOSE_DAYS close themselves
+            self._step("close_orphaned_alerts", alerts.close_orphaned_item_alerts)          # an alert about a board row that is gone closes itself
+            from app.services import worker_health
+
+            self._step("worker_health", worker_health.check_and_alert)           # one alert while a background job is failing; it closes when they are all well
             from app.services.coordination import purchase_orders as _pos
 
-            self._step("po_stuck_sends", _pos.alert_stuck_sends)
+            self._step("po_stuck_sends", _pos.alert_stuck_sends)          # a PO stuck in sending for ten minutes is told to leadership once a day
             from app.services.outbound_email_service import outbound_email_service as _mail
 
-            self._step("mail_ledger_prune", _mail.prune_ledger)          # routine mail rows older than 180 days go; vendor mail rows never do        # a PO stuck in sending for ten minutes is told to leadership once a day
+            self._step("mail_ledger_prune", _mail.prune_ledger)          # routine mail rows older than 180 days go; vendor mail rows never do
             if settings.BACKUP_ENABLED:
                 from app.services import backups
 
@@ -402,6 +408,20 @@ class CoordinationWorker:
                     self._step("briefs", secretary.send_briefs)   # each person's own "your day" note
                     if "error" not in self.last.get("briefs", {}):  # retried next loop if it failed
                         self._briefs_date = local.date()
+            try:
+                from app.services import leads as _leads
+
+                stamp = (local.date(), local.hour)
+                if getattr(self, "_lead_seq_stamp", None) != stamp:
+                    self._lead_seq_stamp = stamp
+                    self._step("lead_sequences", _leads.scheduled_run)                  # drafts only, business hours, daily limit; off by default
+                week = local.isocalendar()[:2]
+                if local.weekday() == 0 and local.hour >= settings.DIGEST_HOUR and getattr(self, "_lead_digest_week", None) != week:
+                    self._step("lead_digest", _leads.weekly_digest)
+                    if "error" not in self.last.get("lead_digest", {}):
+                        self._lead_digest_week = week
+            except Exception as exc:  # noqa: BLE001 - the lead steps never stop the other jobs
+                logger.warning(f"Lead scheduling skipped: {type(exc).__name__}")
             self._stop.wait(30)
 
 

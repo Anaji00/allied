@@ -1,5 +1,6 @@
 """The prospect search reports what it found, and never invents people."""
 
+import pytest as _pytest_lead
 import pytest
 
 from app.services import lead_agent as la
@@ -73,3 +74,11 @@ def test_assistant_action_reports_an_outage_too(client, admin_token, search, mon
     )
     assert res.status_code == 503
     assert "@" not in res.text
+
+
+@_pytest_lead.fixture(autouse=True)
+def _search_switched_on(monkeypatch):
+    """The people search is off by default (LEAD_WEB_SEARCH); these tests are about how it behaves when the owner turns it on."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "LEAD_WEB_SEARCH", True)

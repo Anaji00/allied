@@ -332,6 +332,18 @@ def vendor_chase(j: Dict[str, Any], on: date, manual: bool = False) -> Optional[
                         "_why": [w for w in why if w]})
 
 
+def _vendor_label(name: str) -> str:
+    """Who is being asked, in words a person recognises: a contact the boards call "HELEN" who works for a configured vendor reads "Helen at Zibo"; anything else is just the name, capitalised."""
+    raw = (name or "").strip()
+    key = raw.casefold()
+    pretty = raw.title() if raw and (raw == raw.upper() or raw == raw.lower()) else raw
+    for part in (settings.VENDOR_ALIASES or "").split(","):
+        alias, _, vendor = part.partition("=")
+        if alias.strip().casefold() == key and vendor.strip() and vendor.strip().casefold() != key:
+            return f"{pretty} at {vendor.strip().title()}"
+    return pretty
+
+
 def play_rfq_vendor_chaser(on: date) -> List[Intent]:
     """RFQs waiting on a vendor's price too long: ask each bidding vendor for it."""
     out = []
@@ -352,7 +364,7 @@ def play_rfq_vendor_chaser(on: date) -> List[Intent]:
                        f"Bidding vendors: {r.get('vendor')}",
                        f"Quote due to the customer {(r.get('effective_due_at') or r.get('due_at') or '')[:10]}"]
                 out.append(Intent("draft", f"rfq-vendor-chase:{r['id']}:{name.casefold()}:{_week(on)}",
-                                  f"Ask {name} for their price on {r['number']} ({r['customer']})",
+                                  f"Ask {_vendor_label(name)} for a price on {r['number']} ({r['customer']})",
                                   to=reviewers(r.get("owner_email")), tool="send_email",
                                   args={"to": email, "subject": f"Price for {r['subject'] or r['number']}?", "body": body,
                                         "_why": why}))
@@ -448,7 +460,7 @@ PLAYS: Dict[str, Play] = {
 # ---------------------------------------------------------------------------
 
 
-def _draft(play: str, intent: Intent, auto: bool) -> str:
+def _draft(play: str, intent: Intent, auto: bool, explicit: bool = False) -> str:
     """Puts a draft in the confirm queue of the first person in `to`, or carries it out (auto)."""
     from sqlalchemy.exc import IntegrityError
 
@@ -460,6 +472,9 @@ def _draft(play: str, intent: Intent, auto: bool) -> str:
     if leaks:                                               # warned in the draft's "why", and an automatic one waits for a person
         intent.args = {**intent.args, "_why": list(intent.args.get("_why") or []) + [w for w in leaks if w not in (intent.args.get("_why") or [])]}
         auto = False
+    for number in set(rfqs._RFQ_NUMBER.findall(intent.summary or "")):                      # no follow-up draft is made for an RFQ that is already won, lost or not bid
+        if rfqs.is_closed(number):
+            return "skipped: " + number + " is closed"
     action_id = uuid.uuid5(uuid.NAMESPACE_URL, f"allied-autopilot:{intent.key}").hex
     owner = (intent.to or reviewers())[0]
     # Auto only carries out what can really go: with mail off an email would only be drafted
@@ -486,6 +501,12 @@ def _draft(play: str, intent: Intent, auto: bool) -> str:
             return "drafted"
         if row is not None and not stale and not (auto and row.status == "FAILED"):
             return "already"
+        if row is None and not auto and not explicit:                          # a person's own "draft it now" is never swallowed by this; the one-a-day key still applies
+            # The key carries the week, so a new week would make a second draft for the same target while the first is still waiting. One waiting draft per target is enough.
+            fresh = workdays.now() - timedelta(hours=settings.AUTOPILOT_DRAFT_HOURS)
+            for twin in db.query(AssistantActionDB).filter(AssistantActionDB.user_role == "AUTOPILOT", AssistantActionDB.status == "PENDING", AssistantActionDB.summary == intent.summary).limit(20):
+                if (twin.args or {}).get("_play") == play and workdays.as_utc(twin.created_at) >= fresh:
+                    return "already"
         if row is None:
             db.add(AssistantActionDB(id=action_id, user_email=owner, user_role="AUTOPILOT", tool=intent.tool,
                                      args={**intent.args, "_play": play}, summary=intent.summary,
@@ -554,13 +575,13 @@ def after_done(args: Dict[str, Any], user: Dict[str, Any], result: Optional[Dict
             logger.info(f"RFQ row added ({result['monday_item_id']}) but RFQ {args['_rfq_id']} not linked: {exc}")
 
 
-def carry_out(name: str, mode: str, intents: List[Intent], dry_run: bool = False) -> List[Dict[str, Any]]:
+def carry_out(name: str, mode: str, intents: List[Intent], dry_run: bool = False, explicit: bool = False) -> List[Dict[str, Any]]:
     """Does what a play or a reaction decided, as far as its mode allows. One failing step
     is recorded and the rest still run."""
     did = []
     for it in intents:
         try:
-            outcome = _one(name, mode, it, dry_run)
+            outcome = _one(name, mode, it, dry_run, explicit)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Autopilot {name}: {it.summary} failed: {exc}")
             outcome = f"failed: {exc}"[:200]
@@ -571,12 +592,12 @@ def carry_out(name: str, mode: str, intents: List[Intent], dry_run: bool = False
     return did
 
 
-def _one(name: str, mode: str, it: Intent, dry_run: bool) -> str:
+def _one(name: str, mode: str, it: Intent, dry_run: bool, explicit: bool = False) -> str:
     if dry_run:
         outcome = {"draft": "would draft" if mode == "suggest" else "would send",
                    "alert": "would tell staff", "work": "would do"}[it.kind]
     elif it.kind == "draft":
-        outcome = _draft(name, it, auto=mode == "auto")
+        outcome = _draft(name, it, auto=mode == "auto", explicit=explicit)
     elif it.kind == "alert":
         nid = alerts.notify(f"autopilot_{name}", f"autopilot:{it.key}", it.title, it.body,
                             to=it.to, include_leadership=it.leadership, link="/automation")

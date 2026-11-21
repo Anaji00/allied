@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
+from app.api.v1.view_models import PacketAttached, PacketRead, WaitingPacket
 from app.core.security import require_operator
 from app.services.coordination import jobs, packets
 
@@ -19,21 +20,21 @@ def _fail(exc: Exception):
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That request could not be processed. Check what was entered and try again.")
 
 
-@router.post("", summary="Read a scanned packet (PDF). It joins a job when a printed PO or sales order number matches exactly one; otherwise it waits")
-def upload(file: UploadFile = File(...), user: dict = Depends(require_operator)) -> Dict[str, Any]:
+@router.post("", summary="Read a scanned packet (PDF). It joins a job when a printed PO or sales order number matches exactly one; otherwise it waits", response_model=PacketRead, response_model_exclude_unset=True)
+def upload(file: UploadFile = File(...), user: dict = Depends(require_operator)) -> Any:
     try:
         return packets.ingest(packets.read_upload(file.file), file.filename or "packet.pdf", user)
     except (LookupError, jobs.JobError, ValueError, TypeError) as exc:
         _fail(exc)
 
 
-@router.get("", summary="Packets waiting to be attached to a job")
-def waiting(_user: dict = Depends(require_operator)) -> List[Dict[str, Any]]:
+@router.get("", summary="Packets waiting to be attached to a job", response_model=List[WaitingPacket], response_model_exclude_unset=True)
+def waiting(_user: dict = Depends(require_operator)) -> Any:
     return packets.unattached()
 
 
-@router.post("/{packet}/attach", summary="Attach every document of a packet to a job")
-def attach(packet: str, body: Dict[str, Any] = Body(...), _user: dict = Depends(require_operator)) -> Dict[str, Any]:
+@router.post("/{packet}/attach", summary="Attach every document of a packet to a job", response_model=PacketAttached, response_model_exclude_unset=True)
+def attach(packet: str, body: Dict[str, Any] = Body(...), _user: dict = Depends(require_operator)) -> Any:
     try:
         return packets.attach(packet, str(body.get("job") or ""))
     except (LookupError, jobs.JobError, ValueError, TypeError) as exc:

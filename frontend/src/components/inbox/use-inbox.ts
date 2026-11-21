@@ -471,8 +471,11 @@ export function useInbox({ everyone = false } = {}) {
   const drafts = useQuery({
     queryKey: ['inbox', 'drafts'],
     queryFn: async () =>
-      // A chat proposal is confirmed in the chat it came from, within minutes; the Inbox holds the drafts.
-      ((await ok(api.GET('/api/v1/assistant/actions'))) as { actions: Draft[] }).actions.filter((d) => d.kind !== 'assistant'),
+      // A chat proposal is confirmed in the chat it came from, within minutes; the Inbox holds the drafts. An email a person
+      // drafted from a record or by hand also has kind "assistant", so emails are always kept.
+      ((await ok(api.GET('/api/v1/assistant/actions'))) as { actions: Draft[] }).actions.filter(
+        (d) => d.kind !== 'assistant' || d.tool === 'send_email',
+      ),
     enabled,
     ...POLL,
   });

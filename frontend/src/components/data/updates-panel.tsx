@@ -205,6 +205,28 @@ function Composer({
   const [mentions, setMentions] = useState<string[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const picker = useRef<HTMLInputElement>(null);
+  const [translating, setTranslating] = useState(false);
+  // Writes the comment again in another language, for the person to check before posting. Nothing is posted by this.
+  async function translate(target: string) {
+    if (!target) return;
+    const guess = /\p{Script=Han}/u.test(text) ? 'zh' : /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(text) ? 'vi' : 'en';
+    if (guess === target) return toast.info('It is already in that language');
+    setTranslating(true);
+    try {
+      const res = await authFetch('/api/v1/ai/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, target, source: guess }),
+      });
+      const body = (await res.json().catch(() => null)) as { result?: string; detail?: string } | null;
+      if (!res.ok || !body?.result) throw new Error(typeof body?.detail === 'string' ? body.detail : 'The translation did not work.');
+      setText(body.result);
+    } catch (e) {
+      toast.error('Not translated', { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setTranslating(false);
+    }
+  }
   const word = /(?:^|\s)@(\w*)$/.exec(text)?.[1];
   const people = useQuery({
     queryKey: ['updates', 'people', word ?? ''],
@@ -295,6 +317,20 @@ function Composer({
           <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
+        )}
+        {text.trim().length > 1 && (
+          <select
+            aria-label="Translate what I wrote"
+            className="h-8 rounded-md border bg-transparent px-1.5 text-xs text-muted-foreground"
+            value=""
+            disabled={translating}
+            onChange={(e) => void translate(e.target.value)}
+          >
+            <option value="">Translate…</option>
+            <option value="en">to English</option>
+            <option value="vi">to Vietnamese</option>
+            <option value="zh">to Chinese</option>
+          </select>
         )}
         {attach && (
           <>

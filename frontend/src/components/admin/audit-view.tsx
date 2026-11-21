@@ -28,6 +28,8 @@ type Entry = {
   resource_id: string | null;
   facility: string | null;
   detail: string | null;
+  /** A plain sentence from the server, where it has one. */
+  text?: string | null;
 };
 type Page = { total: number; entries: Entry[]; resource_types: string[] };
 
@@ -51,21 +53,38 @@ function tone(action: string): Tone {
   return 'info';
 }
 
+const nameOf = (email: string | null) =>
+  email
+    ? email
+        .split('@')[0]
+        .replace(/[._]+/g, ' ')
+        .replace(/\d+$/, '')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim() || email
+    : 'The system';
+
+/** One plain sentence for a row: the server's own where it sends one, otherwise who, what and which record. Never raw data. */
+function sentence(e: Entry) {
+  if (e.text) return e.text;
+  const what = KIND[e.resource_type] ?? words(e.resource_type);
+  return `${nameOf(e.actor_email)}: ${words(e.action).toLowerCase()}, ${what.toLowerCase()}${e.resource_id ? ` ${e.resource_id}` : ''}.`;
+}
+const looksLikeData = (t: string | null | undefined) => Boolean(t && /^\s*[{[]/.test(t));
+
 const col = columnHelper<Entry>();
 const columns = col.columns([
   col.accessor('timestamp', { header: 'When', cell: (c) => <span className="whitespace-nowrap">{dateTime(c.getValue())}</span> }),
-  col.accessor('action', { header: 'What happened', cell: (c) => <ToneBadge tone={tone(c.getValue())}>{words(c.getValue())}</ToneBadge> }),
-  col.accessor('resource_type', {
-    header: 'Record',
+  col.accessor('action', {
+    header: 'What happened',
+    meta: { className: 'max-w-[44rem]' },
     cell: (c) => (
-      <span className="grid">
-        <span>{KIND[c.getValue()] ?? words(c.getValue())}</span>
-        {c.row.original.resource_id && <span className="font-mono text-xs text-muted-foreground">{c.row.original.resource_id}</span>}
+      <span className="flex items-start gap-2">
+        <ToneBadge tone={tone(c.getValue())}>{words(c.getValue())}</ToneBadge>
+        <span className="text-[13px] text-pretty">{sentence(c.row.original)}</span>
       </span>
     ),
   }),
-  col.accessor('actor_email', { header: 'Who', meta: { className: 'max-w-56 truncate' }, cell: (c) => c.getValue() || '–' }),
-  col.accessor('detail', { header: 'Details', meta: { className: 'max-w-[28rem] truncate' }, cell: (c) => c.getValue() || '' }),
+  col.accessor('actor_email', { header: 'Who', meta: { className: 'max-w-56 truncate' }, cell: (c) => nameOf(c.getValue()) }),
 ]);
 
 export function AuditView() {
@@ -269,7 +288,16 @@ export function AuditView() {
                   ],
                 ]}
               />
-              {selected.detail && <p className="text-[13px] whitespace-pre-wrap">{selected.detail}</p>}
+              <p className="text-[13px]">{sentence(selected)}</p>
+              {selected.detail &&
+                (looksLikeData(selected.detail) ? (
+                  <details className="text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">Technical details</summary>
+                    <pre className="mt-1 max-h-60 overflow-auto rounded bg-muted/50 p-2 whitespace-pre-wrap">{selected.detail}</pre>
+                  </details>
+                ) : (
+                  <p className="text-[13px] whitespace-pre-wrap">{selected.detail}</p>
+                ))}
             </div>
           )}
         </DetailPanel>

@@ -24,7 +24,14 @@ def test_sage_purchase_orders_csv_format():
 
 def test_sage_export_api_endpoints():
     """Verify REST API downloads and batch payload."""
-    # Summary
+    # Summary: this file starts with an empty database, so it makes the order the summary counts
+    import uuid
+
+    from app.models.orders import InboundOrderRequest
+    from app.services.order_orchestrator import OrderOrchestrator
+
+    OrderOrchestrator().process_inbound_order(InboundOrderRequest(customer_name="Owens Corning Starr Composites", customer_po_number=f"9{uuid.uuid4().int % 10**6}",
+                                                                  shipping_address="4837 Highway 81 South, Starr, SC 29684", line_items=[{"raw_item_text": "OC262064", "quantity": 1, "unit_price": 1385.0}]), actor_email="x@alliedweldingsystems.com")
     sum_resp = client.get("/api/v1/sage/export/summary")
     assert sum_resp.status_code == 200
     assert sum_resp.json()["sales_orders_count"] >= 1
