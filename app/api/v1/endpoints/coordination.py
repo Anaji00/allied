@@ -179,6 +179,25 @@ class ForwarderEmail(BaseModel):
     body: str = Field(..., min_length=1)
 
 
+class FreightRfqDraftBody(BaseModel):
+    forwarder_email: str = Field(..., max_length=254)
+    po_id: Optional[int] = None
+    text: str = Field("", max_length=100000, description="The vendor quote's text, if it is not a file of the PO")
+    quote_file_id: Optional[int] = Field(None, description="A file attached to this PO's job (the vendor's quote)")
+    origin: str = Field("", max_length=120)
+    destination: str = Field("", max_length=120)
+
+
+@shipments_router.post("/freight-rfq-draft", summary="Draft a freight quote request to the forwarder from a vendor quote's weights and dimensions; blanks are left and listed; names no customer; nothing is sent")
+def freight_rfq_draft(body: FreightRfqDraftBody, user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.services import landed_cost as lc
+
+    try:
+        return lc.freight_rfq_from_po(body.po_id, body.text, body.quote_file_id, body.forwarder_email, body.origin, body.destination, user)
+    except lc.CostError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
 @shipments_router.post("/forwarder-email", summary="Read a forwarder's status email into its shipment")
 def forwarder_email(body: ForwarderEmail, user: dict = Depends(require_operator)):
     return shipments.ingest_forwarder_email(body.sender, body.subject, body.body, actor=user.get("email", "system"))
@@ -227,7 +246,7 @@ class VendorJobIn(BaseModel):
 @vendors_router.post("", summary="Add a vendor job")
 def add_vendor_job(body: VendorJobIn, user: dict = Depends(require_operator)):
     if not (body.vendor or "").strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Say which vendor.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Say which vendor this order is with.")
     try:
         return vendors.create(body.model_dump(exclude_none=True), user)
     except Exception as exc:  # noqa: BLE001
@@ -429,7 +448,7 @@ def alert_rollup(everyone: bool = False, user: dict = Depends(require_viewer)):
 def alert_rollup_ack(body: Dict[str, Any] = Body(...), user: dict = Depends(require_viewer)):
     group = str(body.get("group") or "")
     if not group:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Say which group.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose which group of alerts to close.")
     return {"acknowledged": alerts.acknowledge_group(group, user.get("email", "unknown"), any_alert=user.get("role") in ("ADMIN", "MANAGER"))}
 
 
@@ -438,21 +457,21 @@ def acknowledge(notification_id: int, user: dict = Depends(require_viewer)):
     result = alerts.acknowledge(notification_id, user.get("email", "unknown"),
                                 any_alert=user.get("role") in ("ADMIN", "MANAGER"))
     if result == "missing":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such alert.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That alert was not found; it may already be closed.")
     if result == "forbidden":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This alert was sent to someone else.")
     if result == "done":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already acknowledged.")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That alert is already closed. Nothing more to do.")
     return {"acknowledged": notification_id}
 
 
 def _alert_result(result: Any, ok: Any) -> Any:
     if result == "missing":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such alert.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That alert was not found; it may already be closed.")
     if result == "forbidden":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This alert was sent to someone else.")
     if result == "done":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already acknowledged.")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That alert is already closed. Nothing more to do.")
     if result == "bad":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="That time or person is not valid (a time in the next 30 days, or a real email address).")
     return ok

@@ -76,9 +76,9 @@ def decode_token(token: str) -> dict:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your sign-in has expired. The app renews it by itself; if you still see this, sign in again.")
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="That sign-in is not valid. Sign in again.")
 
 
 # ---------------------------------------------------------------------------
@@ -110,13 +110,13 @@ async def get_current_user(
             }
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
+            detail="You need to sign in first.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     payload = decode_token(credentials.credentials)
     if payload.get("type") != "access":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="That is not a sign-in token. Sign in again.")
 
     email = payload.get("sub", "")
     role = await run_in_threadpool(_live_role, email, payload.get("pv"), payload.get("iat"))  # may query the database on a cache miss
@@ -377,7 +377,7 @@ async def verify_monday_webhook(
             return "jwt"
         except jwt.InvalidTokenError as exc:
             logger.warning(f"Rejected monday webhook: invalid JWT ({exc})")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook token.")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="The webhook secret did not match, so the request was refused.")
 
     if settings.MONDAY_WEBHOOK_SECRET or settings.MONDAY_WEBHOOK_TOKEN:
         logger.warning("Rejected unauthenticated monday webhook request")

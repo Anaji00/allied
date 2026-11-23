@@ -6,9 +6,10 @@ import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 
 const TABS: { href: string; label: string; minRole?: 'OPERATOR' | 'MANAGER' }[] = [
-  { href: '/admin', label: 'All admin' },
+  { href: '/admin', label: 'Overview' },
   { href: '/health', label: 'System' },
-  { href: '/logistics', label: 'Logistics' },
+  { href: '/admin/automations', label: 'Automations' },
+  { href: '/quality', label: 'Material test papers' },
   { href: '/alerts', label: 'People & alerts' },
   { href: '/orders?tab=sage', label: 'Sage & imports', minRole: 'MANAGER' },
   { href: '/admin/audit', label: 'Audit trail', minRole: 'MANAGER' },
@@ -19,7 +20,7 @@ export function AdminTabs() {
   const pathname = usePathname();
   const { hasRole } = useAuth();
   return (
-    <nav aria-label="Admin" className="mb-4 flex gap-1 overflow-x-auto border-b">
+    <nav aria-label="Control room" className="mb-4 flex gap-1 overflow-x-auto border-b">
       {TABS.filter((t) => !t.minRole || hasRole(t.minRole)).map((t) => {
         const on = t.href === '/admin' ? pathname === '/admin' : pathname === t.href || pathname.startsWith(`${t.href}/`);
         return (

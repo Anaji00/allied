@@ -94,6 +94,8 @@ def build(po_id: int, destination: str = "", currency: str = "") -> Dict[str, An
     if cur and cur not in _CURRENCIES:
         raise jobs.JobError("The currency must be one of: " + ", ".join(sorted(_CURRENCIES)) + ".")
     po = purchase_orders.get(po_id)
+    if not cur and po.get("currency") in _CURRENCIES:                  # the invoice follows the purchase order's own currency unless one is chosen here
+        cur = po["currency"]
     dest, dest_source = (given, "chosen by you") if given else infer_destination(po)
     if po.get("status") == "CANCELLED":
         raise jobs.JobError("This purchase order was cancelled; there is nothing to import.")

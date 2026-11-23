@@ -6,9 +6,45 @@ const BUSINESS_TZ = 'America/Chicago';
 
 const moneyCache = new Map<string, Intl.NumberFormat>();
 
-export function money(value: unknown, currency = 'USD') {
+// US dollars are the one currency the app shows. Other currencies are converted with today's rates from the server and the original
+// amount stays beside it, so nothing is hidden. A currency with no rate is shown as it is, never guessed.
+const FX_KEY = 'allied.fx';
+let fxRates: Record<string, number> | null = null;
+try {
+  fxRates =
+    typeof localStorage !== 'undefined' ? (JSON.parse(localStorage.getItem(FX_KEY) || 'null') as Record<string, number> | null) : null;
+} catch {
+  fxRates = null;
+}
+/** Called once the server's rates arrive. Returns true when this is the first time rates are known, so screens can redraw. */
+let fxAsOf: string | null = null;
+/** Where the rates come from, for the small note beside any dollar figure that was converted. */
+export function fxNote(): string | null {
+  return fxRates
+    ? `Dollar amounts marked “about” are converted for display${fxAsOf ? ` at rates of ${fxAsOf}` : ''}. The original currency is in brackets.`
+    : null;
+}
+export function setFxRates(rates: Record<string, number> | null | undefined, asOf?: string | null): boolean {
+  const first = !fxRates;
+  if (asOf) fxAsOf = asOf;
+  fxRates = rates && Object.keys(rates).length ? rates : fxRates;
+  try {
+    if (fxRates) localStorage.setItem(FX_KEY, JSON.stringify(fxRates));
+  } catch {
+    // Private windows refuse storage; the rates still work for this page.
+  }
+  return first && !!fxRates;
+}
+/** The amount in US dollars, or null when it is not a number or there is no rate for that currency. */
+export function toUsd(value: unknown, currency = 'USD'): number | null {
   const n = Number(value);
-  if (value === null || value === undefined || value === '' || Number.isNaN(n)) return '–';
+  if (value === null || value === undefined || value === '' || Number.isNaN(n)) return null;
+  if (currency === 'USD') return n;
+  const rate = fxRates?.[currency];
+  return rate && rate > 0 ? n * rate : null;
+}
+
+function fmtIn(currency: string, n: number) {
   let fmt = moneyCache.get(currency);
   if (!fmt) {
     fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
@@ -17,10 +53,40 @@ export function money(value: unknown, currency = 'USD') {
   return fmt.format(n);
 }
 
+export function money(value: unknown, currency = 'USD') {
+  const n = Number(value);
+  if (value === null || value === undefined || value === '' || Number.isNaN(n)) return '–';
+  const usd = currency === 'USD' ? null : toUsd(n, currency);
+  if (usd !== null)
+    return `about ${fmtIn('USD', usd)} (${currency} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+  return fmtIn(currency, n);
+}
+
+/** Several amounts in their own currencies, added up as US dollars. Null when any of them has no rate. */
+export function sumUsd(items: { value: unknown; currency?: string | null }[]): string | null {
+  let total = 0;
+  for (const it of items) {
+    const u = toUsd(it.value ?? 0, it.currency || 'USD');
+    if (u === null) return null;
+    total += u;
+  }
+  return `about ${fmtIn('USD', total)}`;
+}
+
+/** For money that is actually paid or wired: the real currency first and plain, the dollar figure beside it. */
+export function moneyOrig(value: unknown, currency = 'USD') {
+  const n = Number(value);
+  if (value === null || value === undefined || value === '' || Number.isNaN(n)) return '–';
+  if (currency === 'USD') return fmtIn('USD', n);
+  const own = `${currency} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const usd = toUsd(n, currency);
+  return usd === null ? own : `${own} (about ${fmtIn('USD', usd)})`;
+}
+
 /** An amount with its currency named when it is not US dollars: "CN¥54,242.28 (Chinese Yuan)". Nothing is converted. */
 export function moneyNamed(value: unknown, currency = 'USD') {
   const text = money(value, currency);
-  if (text === '–' || currency === 'USD') return text;
+  if (text === '–' || currency === 'USD' || text.startsWith('about')) return text;
   // One code per amount ("CNY 5,659.16"), so mixed currencies are never mistaken for dollars.
   const n = Number(value);
   return `${currency} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

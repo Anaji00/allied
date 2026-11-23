@@ -19,11 +19,11 @@ RUN python -m venv /opt/venv \
 # --- Runtime ------------------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
 
-# tesseract-ocr: pytesseract reads scanned POs and drawings through it.
+# tesseract-ocr (+ eng, osd and Simplified Chinese data): pytesseract reads scanned POs, vendor quotes and drawings through it, Chinese pages included.
 # tini: passes stop signals on, so the workers shut down cleanly.
 # fonts-dejavu-core: PDF downloads need a font with Vietnamese accents (Chinese uses reportlab's built-in font).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tini fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-osd tesseract-ocr-chi-sim tini fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Fixed uid/gid, so host folders mounted at /app/data and /app/output can be

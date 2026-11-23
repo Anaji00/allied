@@ -67,7 +67,7 @@ def test_handing_the_ball_to_an_engineer_starts_the_clock_writes_the_thread_and_
 def test_the_ball_can_sit_with_an_outsider_but_every_choice_must_make_sense():
     so = _order()
     assert ball.set_ball("order", so, ME, "vendor", "KINGCERA")["ball_name"] == "KINGCERA"
-    with pytest.raises(ball.BallError, match="Say who has the ball"):
+    with pytest.raises(ball.BallError, match="Say who it is waiting on"):
         ball.set_ball("order", _order(), ME, "customer", "  ")
     with pytest.raises(ball.BallError, match="I don't know"):
         ball.set_ball("order", _order(), ME, "engineer", "ghost@allied.test")
@@ -150,7 +150,7 @@ def test_a_passed_due_date_goes_straight_to_telling_the_owner(monkeypatch):
     ball.set_ball("order", so, ME, "engineer", ELI, owner=ATHISH, due="2000-01-01")
     _days(monkeypatch, [0.5])
     assert ball.run()["escalated"] == 1
-    assert "was due 2000-01-01" in _alerts(f"ball:{_row(so).id}:")[0].body
+    assert "was due Jan 1, 2000" in _alerts(f"ball:{_row(so).id}:")[0].body
     assert ball.get("order", so)["overdue"] is True
 
 

@@ -197,7 +197,7 @@ export function CarrierPrices() {
                     <RowActions
                       rowLabel={`${l.carrier} ${l.service}`}
                       main={{
-                        label: 'Checked today',
+                        label: 'Mark as checked today',
                         busy: save.isPending,
                         hint: 'I checked this price today',
                         onClick: () =>

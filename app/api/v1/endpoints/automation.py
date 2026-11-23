@@ -195,7 +195,7 @@ def _workers(inbox: Dict[str, Any]) -> List[Dict[str, Any]]:
 @router.get("/outbox", summary="Mail the system has written")
 def outbox(
     limit: int = Query(50, ge=1, le=200),
-    _user: dict = Depends(require_viewer),
+    _user: dict = Depends(require_manager),
 ) -> Dict[str, Any]:
     """Every message drafted, whether or not it was sent, and why."""
     return {

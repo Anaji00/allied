@@ -121,12 +121,44 @@ wrong conversation.
 
 ---
 
+## Meeting day runbook (one page)
+
+**Where to run it.** Only on the demo copy (`demo_seed.py` then `demo_run.py`, see above), never on the live system. The demo copy has made-up data, mail is draft-only and monday and Sage are off. The live backend is already on the new version; only the five newest frontend screens wait for one frontend-only rebuild. Still show everything from the demo copy.
+
+**The day before.** Sign in as manager and admin in two browsers (five wrong passwords lock an account for 15 minutes). Check the three settings (README, "Before the meeting"): at least `ENGINEER_APPROVERS` if you want to show a gate being approved. Open every screen below once. The backend-dependent steps all work. Only if one of the five newest frontend screens is not in the build on the day, skip that step and do not apologise for it.
+
+**The 8 to 10 minute path** (manager or admin sign-in):
+
+1. **Control room (1 min).** One page: what is late, what is waiting, drafts waiting, backups. Say: this replaces five screens of checking.
+2. **Drop in a pasted email (2 min).** Secretary or Toolkit: paste an RFQ email, press Read. Show the fields, the "how sure" and "where from" on each, and the list "check these". Say: it fills in, a person checks, nothing is saved until you press Save. Press nothing that saves.
+3. **Type to the Secretary (1 min).** "Reply to <a name in the demo mail>" shows a draft waiting for approval. Say: drafts only; nothing is sent.
+4. **A job: gates and drawings (2 min).** Open a demo job. Show Gate 1 waiting for the engineer and the cleaned-drawing card (customer details removed, verified by a person). Say: no drawing goes to a vendor unless it is cleaned and checked, and production does not start without the engineer. If the approver is set, approve Gate 1 as the engineer on the demo copy.
+5. **Payments in steps (1 min).** Show a payment schedule 30/50/20 with amounts that add up exactly and which step opens when. Read it; do not record a payment.
+6. **Landed cost (1 min).** Enter a quote with no freight: show "unknown", not zero, and the markup tiers.
+7. **Logistics (1 min).** Show the quiet-shipment flag and the forwarder update **preview** (not Apply).
+8. **Close on the safety rules (30 s).** Everything is a draft; monday and Sage are read-only and export-only; nothing here has been tried on Allied's real data yet.
+
+**Do NOT click** (even on the demo copy, so the habit is safe): anything called Send, Approve and send, Record payment, Mark delivered or Close freight, Apply (forwarder update), Push to monday, Commit or Bring in (Sage), Undo import, Send nudge (use **Practice** if you show nudges), Save on an extracted form, bulk Apply (use the dry run). Never open the live address during the demo.
+
+**If something breaks.** Stay calm and say: "That is the demo copy, and this is exactly why we rehearse on a copy first." Then (a) refresh once; (b) if a screen shows a plain-sentence error, read it out, they are written to be read; (c) if a screen is blank, move to the next step; (d) never fix anything live in front of them; (e) if the AI is slow or busy, say the free tier has limits and the rule-based parts do not depend on it.
+
+**Honest limits, say them before they ask.**
+- Sage is export-only: the system prepares files; it never writes into Sage. A trial import into a Sage sample company has not been done.
+- monday is read-only: the system reads boards and prepares notes; nothing is written until a manager pushes and the switch is deliberately turned on.
+- The gates and the redaction check need the owner to name the engineer (`ENGINEER_APPROVERS`); until then nobody can approve and the screens say so.
+- The AI is Groq's free tier: limits per minute and per day, and mail text goes to Groq's servers. `AI_LOCAL_ONLY` turns the AI off entirely; everything described above works without it, by rules.
+- Reading scanned pages needs Tesseract; the live Docker image has it. A figure read from a picture always says "needs a person to confirm against the image".
+- Nothing has been tested on real data. About 4,200 automatic checks pass on made-up data (re-run before quoting a number).
+- It runs on one office computer: the backend rebuild has been done once (with a safety copy made before the migration); the rebuild and rollback procedure is written in the README.
+
+---
+
 ## Known limitations — say these before they find them
 
 - Not yet plugged into live Sage or the live monday board (monday is read-only). It produces the Sage files
   correctly and records what it *would* post to the board. Connecting both is what the
   proposal is for.
-- The 2,394 automatic checks all pass, but they're my checks. Stage 1 proves it against
+- About 4,200 automatic checks pass (re-run before you quote a number), but they're my checks. Stage 1 proves it against
   Allied's real parts and customers, which is the test that counts.
 - Everything lives in one file on one machine. The system copies the database before any upgrade and has a backup script. A second copy to another disk or folder is built in (`BACKUP_COPY_DIR`) but must be set up; say that, not that it exists.
 - Customs papers (commercial invoice, packing list) are prepared, never filed, and the system lists what is missing instead of guessing. Your customs broker still files.

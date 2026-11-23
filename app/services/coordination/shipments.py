@@ -59,7 +59,10 @@ def owner_name(email: Optional[str]) -> Optional[str]:
     name = _names_cache["map"].get(e)
     if name and "@" not in name:
         return name
-    local = re.sub(r"[._\-]+", " ", e.split("@", 1)[0]).strip()
+    raw_local = e.split("@", 1)[0]
+    if re.fullmatch(r"[a-z]+\d+", raw_local):                  # a bare account name with digits (najialessio1) and no staff contact is not a person's name
+        return "Not assigned"
+    local = re.sub(r"[._\-]+", " ", raw_local).strip()
     return local.title() or e
 
 
@@ -79,7 +82,8 @@ def _as_dict(s: ShipmentDB, events: Optional[List[ShipmentEventDB]] = None) -> D
     for k in ("last_update_at", "created_at"):
         d[k] = d[k].isoformat() if d.get(k) else None
     d["status_word"] = status_words.word("shipment", d.get("status"))
-    d["owner_name"] = owner_name(d.get("owner_email"))
+    d["owner_name"] = owner_name(d.get("owner_email")) or "Not assigned"
+    d["forwarder_label"] = (d.get("forwarder") or "").strip() or "No forwarder yet"
     d.update(quiet(d.get("last_update_at"), d.get("status") or "", d.get("forwarder"), alerts.today()))          # last_update_at moves whenever a status or date update is recorded (by a person or from the forwarder's email)
     if events is not None:
         d["events"] = [
@@ -218,7 +222,7 @@ def update(shipment_id: int, changes: Dict[str, Any], who: str, source: str = "m
 
 def _label(s: Dict[str, Any]) -> str:
     ident = s.get("container_no") or s.get("awb") or s.get("reference") or f"#{s.get('id')}"
-    return f"{ident} ({s.get('forwarder') or 'forwarder'}, {s.get('origin') or '?'} to {s.get('destination') or '?'})"
+    return f"{ident}, {s.get('origin') or '?'} to {s.get('destination') or '?'}"
 
 
 def flags(s: Dict[str, Any], on: date) -> List[str]:

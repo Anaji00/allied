@@ -854,6 +854,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sage-import/history/{import_id}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Take back exactly what one import saved (managers): its new rows are removed, rows it changed are put back. Safe to repeat */
+        post: operations["undo_api_v1_sage_import_history__import_id__undo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sage-import/history": {
         parameters: {
             query?: never;
@@ -865,6 +882,877 @@ export interface paths {
         get: operations["history_api_v1_sage_import_history_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/shipment/{shipment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A shipment's pipeline record: tracking, BOL, quote options, freight actual and quoted, variance */
+        get: operations["get_pipeline_api_v1_pipelines_shipment__shipment_id__get"];
+        /** Set a shipment's pipeline and tracking number (a UPS number is checked) */
+        put: operations["put_pipeline_api_v1_pipelines_shipment__shipment_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/parse/mountain-movers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read quote options, BOL numbers, pickup and delivery dates out of a Mountain Movers email (suggestions: a person confirms) */
+        post: operations["parse_mm_api_v1_pipelines_parse_mountain_movers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/forwarder-digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read a forwarder's weekly update; with apply=true move each matching shipment's ETA (ambiguous dates are never applied) */
+        post: operations["forwarder_digest_api_v1_pipelines_forwarder_digest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/shipment/{shipment_id}/delivered": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delivery confirmed: record the freight paid, flag a variance, stage the SO-to-invoice payload for Sage and open the delivery payments (manager) */
+        post: operations["delivered_api_v1_pipelines_shipment__shipment_id__delivered_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/rfq-from-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read an RFQ out of an email: fields with confidence and source. Saves nothing */
+        post: operations["rfq_from_email_api_v1_extract_rfq_from_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/order-from-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read a customer order out of an email: fields with confidence and source. Saves nothing */
+        post: operations["order_from_email_api_v1_extract_order_from_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/po-from-pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read a scanned or digital purchase order (PDF): fields with confidence, page and source line. Saves nothing */
+        post: operations["po_from_pdf_api_v1_extract_po_from_pdf_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/vendor-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read a vendor's quote (text, or a PDF file with the form field 'file'): number, total, validity, lead time, terms, weights. Saves nothing */
+        post: operations["vendor_quote_api_v1_extract_vendor_quote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/call-to-job-note": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn a call's text into a short note with the PO numbers, dates and who-will-do-what. Saves nothing */
+        post: operations["call_to_job_note_api_v1_extract_call_to_job_note_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Call this when the person saves the form: what they kept, changed or added is counted per field */
+        post: operations["feedback_api_v1_extract_feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/extraction-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How often people kept or changed each suggested field, per way it was found (manager) */
+        get: operations["extraction_stats_api_v1_ai_extraction_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prefill/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Likely values for a new order, PO, RFQ or shipment, each with where it came from */
+        get: operations["prefill_api_v1_prefill__kind__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records/{kind}/{ref}/duplicate-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A record's fields without its numbers, dates and status, for 'make another like this' */
+        get: operations["duplicate_template_api_v1_records__kind___ref__duplicate_template_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/create/from-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Paste text: it says what it is (RFQ, order, shipment) and proposes the body to create. Saves nothing */
+        post: operations["create_from_text_api_v1_create_from_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Owner, tags and who has the ball for many records, with a dry run first (default) */
+        post: operations["bulk_api_v1_records_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My remembered choices (last customer, vendor, currency, forwarder, owner, view) */
+        get: operations["get_defaults_api_v1_me_defaults_get"];
+        /** Remember some choices for me (blank forgets one) */
+        put: operations["put_defaults_api_v1_me_defaults_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/control/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Control room in one call: quiet shipments, payments due (managers), gates waiting, drawings not yet verified, drafts waiting, backups */
+        get: operations["control_attention_api_v1_control_attention_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secretary/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Secretary start page in one call: mail needing a reply, drafts waiting, order emails, bills to check and money owed to us (managers), late orders */
+        get: operations["secretary_summary_api_v1_secretary_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/secretary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Type what you want (reply to someone, chase what is owed, my summary): drafts only, nothing is sent */
+        post: operations["ai_secretary_api_v1_ai_secretary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/can": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the signed-in person may do, as plain flags with the reason for each no */
+        get: operations["me_can_api_v1_me_can_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search by what you want to DO: plain-language tasks with where to go and whether you may */
+        get: operations["search_tasks_api_v1_search_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/glossary/app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Plain definitions of the words the app uses, for tooltips */
+        get: operations["glossary_api_v1_glossary_app_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/glossary/app/{term}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** A manager changes or adds a plain definition */
+        put: operations["put_term_api_v1_glossary_app__term__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nudges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent nudges: your own, or everyone's for an admin */
+        get: operations["nudge_history_api_v1_nudges_get"];
+        put?: never;
+        /** Send a nudge or a milestone blast now (named senders and admins). practice=true sends nothing */
+        post: operations["send_nudge_api_v1_nudges_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/tariffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The tariff table, newest first, with a stale warning */
+        get: operations["tariffs_api_v1_landed_cost_tariffs_get"];
+        put?: never;
+        /** Add a tariff rate with its as-of date (the newest rate in force on a date is used) */
+        post: operations["add_tariff_api_v1_landed_cost_tariffs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/tariffs/{rate_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a tariff rate */
+        delete: operations["delete_tariff_api_v1_landed_cost_tariffs__rate_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/calculate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Work out the landed cost and the markup tiers without saving (unknown duty or freight is flagged, never zero) */
+        post: operations["calculate_api_v1_landed_cost_calculate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/sheets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save a landed cost sheet */
+        post: operations["create_sheet_api_v1_landed_cost_sheets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/sheets/{sheet_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A saved landed cost sheet */
+        get: operations["get_sheet_api_v1_landed_cost_sheets__sheet_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/sheets/{sheet_id}/pick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record which markup tier was picked (audited) */
+        post: operations["pick_api_v1_landed_cost_sheets__sheet_id__pick_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/sheets/{sheet_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A person confirms the figures read from a scan against the image (needed before a tier can be picked) */
+        post: operations["confirm_api_v1_landed_cost_sheets__sheet_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/sheets/{sheet_id}/xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The markup workbook (xlsx) for a saved sheet */
+        get: operations["sheet_xlsx_api_v1_landed_cost_sheets__sheet_id__xlsx_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/cargo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read weights, dimensions and package counts out of a vendor quote's text (flagged: a person confirms them) */
+        post: operations["cargo_api_v1_landed_cost_cargo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/landed-cost/freight-rfq": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Draft a freight quote request to the forwarder from the quote's weights and dimensions (staged for a person to send; names no customer) */
+        post: operations["freight_rfq_api_v1_landed_cost_freight_rfq_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/po/{po_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The payment schedule of a vendor PO: tranches, triggers, what is due and paid (manager: it holds supplier amounts) */
+        get: operations["get_schedule_api_v1_payments_po__po_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/po/{po_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set a PO's payment terms as tranches (manager) */
+        put: operations["put_schedule_api_v1_payments_po__po_id__schedule_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/po/{po_id}/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Say a payment trigger happened, e.g. delivery confirmed (manager); the matching tranches become due once */
+        post: operations["fire_api_v1_payments_po__po_id__fire_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/tranche/{tranche_id}/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a vendor payment once: updates the job's payment sheet, stages a monday update, rebuilds the xlsx ledger and stages a remittance email (manager) */
+        post: operations["record_payment_api_v1_payments_tranche__tranche_id__record_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/po/{po_id}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The payments recorded against a PO (manager) */
+        get: operations["po_payments_api_v1_payments_po__po_id__payments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/ledger.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The master vendor-payments ledger as an Excel file, one sheet per vendor (manager) */
+        get: operations["ledger_file_api_v1_payments_ledger_xlsx_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/due": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every vendor payment that is due and unpaid (manager) */
+        get: operations["due_api_v1_payments_due_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gates/job/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The two engineer gates of a job, with their ids, plain words, who decided, and what the signed-in person may do with each */
+        get: operations["job_gates_api_v1_gates_job__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gates/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask the engineer to approve Gate 1 (vendor shop drawing) or Gate 2 (measurement photos) */
+        post: operations["request_gate_api_v1_gates_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gates/{gate_id}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** An engineer in ENGINEER_APPROVERS approves or rejects; final unless a manager revokes it */
+        post: operations["decide_gate_api_v1_gates__gate_id__decide_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gates/override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A manager lets a step go ahead without the gate, with a written reason (audited) */
+        post: operations["override_gate_api_v1_gates_override_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gates/{gate_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A manager revokes a decision, with a written reason (audited) */
+        post: operations["revoke_gate_api_v1_gates__gate_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/redaction/job/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The redaction records of a job's drawings: checked, verified, attested, void */
+        get: operations["job_redactions_api_v1_redaction_job__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/redaction/job/{job_id}/terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the check looks for on this job: the customer, its spellings, contacts and PO numbers */
+        get: operations["job_terms_api_v1_redaction_job__job_id__terms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/redaction/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Redact a PDF or DXF drawing, check the copy again and store it on the job; other files wait for an engineer's attestation */
+        post: operations["check_drawing_api_v1_redaction_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/redaction/{artifact_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A person confirms the redacted copy shows nothing of the customer (engineer or manager) */
+        post: operations["verify_drawing_api_v1_redaction__artifact_id__verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/redaction/attest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** An engineer in ENGINEER_APPROVERS attests a DWG (or other file) is free of the customer's details; void if the file changes */
+        post: operations["attest_drawing_api_v1_redaction_attest_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6135,6 +7023,18 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** AttestBody */
+        AttestBody: {
+            /** Job Id */
+            job_id: number;
+            /** File Id */
+            file_id: number;
+            /**
+             * Statement
+             * @description What the engineer checked
+             */
+            statement: string;
+        };
         /** AutomatedFormRequest */
         AutomatedFormRequest: {
             /** Pulse Id */
@@ -6438,6 +7338,11 @@ export interface components {
              */
             page_second: number;
         };
+        /** Body_po_from_pdf_api_v1_extract_po_from_pdf_post */
+        Body_po_from_pdf_api_v1_extract_po_from_pdf_post: {
+            /** File */
+            file: string;
+        };
         /** Body_post_voice_note_api_v1_engineering_notes_voice_post */
         Body_post_voice_note_api_v1_engineering_notes_voice_post: {
             /**
@@ -6562,6 +7467,16 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_vendor_quote_api_v1_extract_vendor_quote_post */
+        Body_vendor_quote_api_v1_extract_vendor_quote_post: {
+            /** File */
+            file?: string | null;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
         /** Body_voice_command_api_v1_assistant_voice_command_post */
         Body_voice_command_api_v1_assistant_voice_command_post: {
             /**
@@ -6609,6 +7524,23 @@ export interface components {
             }[];
         } & {
             [key: string]: unknown;
+        };
+        /** BulkIn */
+        BulkIn: {
+            /** Kind */
+            kind: string;
+            /** Refs */
+            refs: string[];
+            /** Changes */
+            changes: {
+                [key: string]: unknown;
+            };
+            /**
+             * Dry Run
+             * @description True (the default) only shows what would change
+             * @default true
+             */
+            dry_run: boolean;
         };
         /**
          * CSVImportPayload
@@ -6710,6 +7642,17 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** CallIn */
+        CallIn: {
+            /** Text */
+            text: string;
+            /**
+             * Use Ai
+             * @description Ask the AI for a better summary (uses the free quota); the plain summary is always there
+             * @default false
+             */
+            use_ai: boolean;
+        };
         /** CallRequest */
         CallRequest: {
             /** Transcript */
@@ -6721,6 +7664,14 @@ export interface components {
             from_number: string;
             /** Call Id */
             call_id?: string | null;
+        };
+        /** CargoBody */
+        CargoBody: {
+            /**
+             * Text
+             * @description The vendor quote's text
+             */
+            text: string;
         };
         /**
          * CertificateOfConformance
@@ -6853,6 +7804,19 @@ export interface components {
              * @description Message text content
              */
             content: string;
+        };
+        /** CheckBody */
+        CheckBody: {
+            /** Job Id */
+            job_id: number;
+            /** File Id */
+            file_id: number;
+            /**
+             * Extra Terms
+             * @description Anything else that names the customer (a plant address, a part number prefix)
+             * @default []
+             */
+            extra_terms: string[];
         };
         /**
          * ChemicalComposition
@@ -7026,10 +7990,51 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DecideBody */
+        DecideBody: {
+            /** Approve */
+            approve: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
         /** DecisionIn */
         DecisionIn: {
             /** Confirm */
             confirm: boolean;
+        };
+        /** DeliveryBody */
+        DeliveryBody: {
+            /** Sales Order Number */
+            sales_order_number: string;
+            /** Freight Actual */
+            freight_actual: string;
+            /** Freight Quoted */
+            freight_quoted?: string | null;
+            /**
+             * Po Ids
+             * @default []
+             */
+            po_ids: number[];
+        };
+        /** DigestBody */
+        DigestBody: {
+            /** Text */
+            text: string;
+            /**
+             * Apply
+             * @description False only shows what would change
+             * @default false
+             */
+            apply: boolean;
+            /**
+             * Sender
+             * @description The From address of the mail the text came from: dates are applied only for a freight forwarder's own address (FORWARDER_DOMAINS), or by a manager
+             * @default
+             */
+            sender: string;
         };
         /**
          * DispatchRequest
@@ -7273,6 +8278,30 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** EmailIn */
+        EmailIn: {
+            /**
+             * Text
+             * @description The email's text (paste it)
+             * @default
+             */
+            text: string;
+            /**
+             * Mail Id
+             * @description Or the number of an email the app already holds
+             */
+            mail_id?: number | null;
+            /**
+             * Sender
+             * @default
+             */
+            sender: string;
+            /**
+             * Subject
+             * @default
+             */
+            subject: string;
+        };
         /**
          * EmailIngestionResult
          * @description Result of autonomous email ingestion and conversion.
@@ -7393,6 +8422,26 @@ export interface components {
             /** Source Line */
             source_line?: string | null;
         };
+        /** FeedbackIn */
+        FeedbackIn: {
+            /** Extraction Id */
+            extraction_id: string;
+            /**
+             * Fields
+             * @description {name: final value} or {name: {shown, final}}: what the person saved
+             */
+            fields: {
+                [key: string]: unknown;
+            };
+        };
+        /** FireBody */
+        FireBody: {
+            /**
+             * Trigger
+             * @description PROFORMA, DELIVERY_CONFIRMED, CUSTOM, PO_ISSUED or GATE2_APPROVED (the last two normally fire by themselves)
+             */
+            trigger: string;
+        };
         /** FollowBody */
         FollowBody: {
             /**
@@ -7420,6 +8469,57 @@ export interface components {
             subject: string;
             /** Body */
             body: string;
+        };
+        /** FreightRfqBody */
+        FreightRfqBody: {
+            /** Forwarder Email */
+            forwarder_email: string;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+            /**
+             * Destination
+             * @default
+             */
+            destination: string;
+            /**
+             * Text
+             * @description The vendor quote's text, to read the weights and dimensions from
+             */
+            text: string;
+            /** Job Id */
+            job_id?: number | null;
+        };
+        /** FromTextIn */
+        FromTextIn: {
+            /** Text */
+            text: string;
+            /**
+             * Kind
+             * @default
+             */
+            kind: string;
+            /**
+             * Sender
+             * @default
+             */
+            sender: string;
+        };
+        /** GateRequest */
+        GateRequest: {
+            /** Job Id */
+            job_id: number;
+            /** Gate */
+            gate: number;
+            /** Po Id */
+            po_id?: number | null;
+            /**
+             * File Ids
+             * @default []
+             */
+            file_ids: number[];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -7864,6 +8964,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** LineBody */
+        LineBody: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Quantity */
+            quantity: string;
+            /** Unit Cost */
+            unit_cost: string;
+            /**
+             * Category
+             * @default
+             */
+            category: string;
+            /**
+             * Hs Code
+             * @default
+             */
+            hs_code: string;
+            /**
+             * Country
+             * @default
+             */
+            country: string;
+            /**
+             * From Ocr
+             * @description The figures were read from a scan: they are flagged for a person to confirm
+             * @default false
+             */
+            from_ocr: boolean;
+        };
         /**
          * LoginRequest
          * @description Credentials for JWT token acquisition.
@@ -7958,6 +9091,19 @@ export interface components {
             role: "user" | "assistant";
             /** Content */
             content: string;
+        };
+        /** MilestoneIn */
+        MilestoneIn: {
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Due
+             * @description YYYY-MM-DD
+             */
+            due?: string | null;
         };
         /** MondayLinkState */
         MondayLinkState: {
@@ -8117,6 +9263,37 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** NudgeIn */
+        NudgeIn: {
+            /**
+             * Kind
+             * @description nudge or milestone
+             * @default nudge
+             */
+            kind: string;
+            /**
+             * To
+             * @description Allied staff emails (no outside addresses)
+             */
+            to: string[];
+            /** Message */
+            message: string;
+            /**
+             * Channels
+             * @description app, email, sms
+             * @default [
+             *       "app"
+             *     ]
+             */
+            channels: string[];
+            milestone?: components["schemas"]["MilestoneIn"] | null;
+            /**
+             * Practice
+             * @description True rehearses it: nothing is sent and nothing reaches anyone
+             * @default false
+             */
+            practice: boolean;
+        };
         /** OEMUpgradeRequest */
         OEMUpgradeRequest: {
             /** Current Part */
@@ -8217,6 +9394,17 @@ export interface components {
          * @enum {string}
          */
         OrderStatus: "RECEIVED" | "VALIDATED" | "PROCESSING" | "SYNCED_TO_SAGE" | "VALIDATION_ERROR" | "SAGE_ERROR";
+        /** OverrideBody */
+        OverrideBody: {
+            /** Reason */
+            reason: string;
+            /** Job Id */
+            job_id: number;
+            /** Gate */
+            gate: number;
+            /** Po Id */
+            po_id?: number | null;
+        };
         /** PacketAttached */
         PacketAttached: {
             /** Job Id */
@@ -8341,6 +9529,35 @@ export interface components {
             pdf_url?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** PickBody */
+        PickBody: {
+            /** Tier */
+            tier: string;
+        };
+        /** PipelineBody */
+        PipelineBody: {
+            /**
+             * Pipeline
+             * @description US_OFFICE_PARCEL, US_MOUNTAIN_MOVERS or CN_FREIGHT_FORWARDER
+             */
+            pipeline: string;
+            /**
+             * Tracking No
+             * @default
+             */
+            tracking_no: string;
+            /**
+             * Carrier
+             * @default
+             */
+            carrier: string;
+            /** Bol File Id */
+            bol_file_id?: number | null;
+            /** Quote Options */
+            quote_options?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /**
          * PredictiveWearEquipment
@@ -8711,6 +9928,34 @@ export interface components {
             /** Executive Summary */
             executive_summary: string;
         };
+        /** RateBody */
+        RateBody: {
+            /** Category */
+            category: string;
+            /** Rate Percent */
+            rate_percent: string;
+            /**
+             * Hs Code
+             * @default
+             */
+            hs_code: string;
+            /**
+             * Country
+             * @default
+             */
+            country: string;
+            /**
+             * Effective From
+             * @description As-of date YYYY-MM-DD; blank = today
+             * @default
+             */
+            effective_from: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
         /** ReadyToSend */
         ReadyToSend: {
             /** Sales Orders */
@@ -8731,6 +9976,11 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /** ReasonBody */
+        ReasonBody: {
+            /** Reason */
+            reason: string;
         };
         /** RecipeIn */
         RecipeIn: {
@@ -8805,6 +10055,44 @@ export interface components {
              * Format: date-time
              */
             reconciled_at?: string;
+        };
+        /** RecordBody */
+        RecordBody: {
+            /**
+             * Paid On
+             * @description YYYY-MM-DD
+             */
+            paid_on: string;
+            /**
+             * Amount
+             * @description Must equal what the payment is due for; blank means that amount
+             */
+            amount?: string | null;
+            /**
+             * Method
+             * @default WIRE
+             */
+            method: string;
+            /**
+             * Reference
+             * @default
+             */
+            reference: string;
+            /** Wire File Id */
+            wire_file_id?: number | null;
+            /** Proforma File Id */
+            proforma_file_id?: number | null;
+            /**
+             * Idem Key
+             * @description The same key twice is one payment; blank uses the payment itself
+             * @default
+             */
+            idem_key: string;
+            /**
+             * Draft Remittance
+             * @default true
+             */
+            draft_remittance: boolean;
         };
         /**
          * RefreshRequest
@@ -9068,6 +10356,37 @@ export interface components {
              */
             confidence: number;
         };
+        /** ScheduleBody */
+        ScheduleBody: {
+            /**
+             * Terms
+             * @description 30/50/20, 30/70, 50/50 or custom percentages adding up to exactly 100
+             */
+            terms: string;
+            /**
+             * Total
+             * @description Defaults to the PO's own total
+             */
+            total?: string | null;
+            /**
+             * Currency
+             * @default
+             */
+            currency: string;
+            /**
+             * Triggers
+             * @description One per payment: PO_ISSUED, PROFORMA, GATE2_APPROVED, DELIVERY_CONFIRMED, CUSTOM
+             */
+            triggers?: string[] | null;
+            /** Labels */
+            labels?: string[] | null;
+            /**
+             * Confirm Reason
+             * @description Needed when the total is more than the PO's own total: why it is right
+             * @default
+             */
+            confirm_reason: string;
+        };
         /** ScorePart */
         ScorePart: {
             /** Label */
@@ -9133,6 +10452,45 @@ export interface components {
              * @default
              */
             link_ref: string;
+        };
+        /** SecretaryIn */
+        SecretaryIn: {
+            /**
+             * Prompt
+             * @description What you want, in your own words
+             */
+            prompt: string;
+        };
+        /** SheetBody */
+        SheetBody: {
+            /** Lines */
+            lines: components["schemas"]["LineBody"][];
+            /**
+             * Freight
+             * @description Blank means unknown, never zero
+             */
+            freight?: string | null;
+            /**
+             * Currency
+             * @default USD
+             */
+            currency: string;
+            /** As Of */
+            as_of?: string | null;
+            /**
+             * Tiers
+             * @description Markup percentages; blank uses the default tiers
+             */
+            tiers?: string[] | null;
+            /** Job Id */
+            job_id?: number | null;
+            /** Rfq Id */
+            rfq_id?: number | null;
+            /**
+             * Vendor Quote Ref
+             * @default
+             */
+            vendor_quote_ref: string;
         };
         /** ShipmentEventOut */
         ShipmentEventOut: {
@@ -9218,6 +10576,8 @@ export interface components {
             project_item_id?: string | null;
             /** Forwarder */
             forwarder?: string | null;
+            /** Forwarder Label */
+            forwarder_label?: string | null;
             /** Mode */
             mode?: string | null;
             /** Reference */
@@ -9343,6 +10703,16 @@ export interface components {
             primary_wear_bottlenecks: string[];
             /** Status */
             status: string;
+        };
+        /** TermIn */
+        TermIn: {
+            /** Plain */
+            plain: string;
+        };
+        /** TextBody */
+        TextBody: {
+            /** Text */
+            text: string;
         };
         /** ThreadComment */
         ThreadComment: {
@@ -10932,6 +12302,39 @@ export interface operations {
             };
         };
     };
+    undo_api_v1_sage_import_history__import_id__undo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                import_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     history_api_v1_sage_import_history_get: {
         parameters: {
             query?: {
@@ -10952,6 +12355,1816 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pipeline_api_v1_pipelines_shipment__shipment_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shipment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_pipeline_api_v1_pipelines_shipment__shipment_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shipment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    parse_mm_api_v1_pipelines_parse_mountain_movers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TextBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forwarder_digest_api_v1_pipelines_forwarder_digest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DigestBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delivered_api_v1_pipelines_shipment__shipment_id__delivered_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shipment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeliveryBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rfq_from_email_api_v1_extract_rfq_from_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    order_from_email_api_v1_extract_order_from_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    po_from_pdf_api_v1_extract_po_from_pdf_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_po_from_pdf_api_v1_extract_po_from_pdf_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vendor_quote_api_v1_extract_vendor_quote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_vendor_quote_api_v1_extract_vendor_quote_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    call_to_job_note_api_v1_extract_call_to_job_note_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    feedback_api_v1_extract_feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extraction_stats_api_v1_ai_extraction_stats_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prefill_api_v1_prefill__kind__get: {
+        parameters: {
+            query?: {
+                customer?: string;
+                vendor?: string;
+                job?: string;
+            };
+            header?: never;
+            path: {
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    duplicate_template_api_v1_records__kind___ref__duplicate_template_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_from_text_api_v1_create_from_text_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FromTextIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_api_v1_records_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_defaults_api_v1_me_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    put_defaults_api_v1_me_defaults_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    control_attention_api_v1_control_attention_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    secretary_summary_api_v1_secretary_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    ai_secretary_api_v1_ai_secretary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretaryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    me_can_api_v1_me_can_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    search_tasks_api_v1_search_tasks_get: {
+        parameters: {
+            query?: {
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    glossary_api_v1_glossary_app_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    put_term_api_v1_glossary_app__term__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                term: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nudge_history_api_v1_nudges_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_nudge_api_v1_nudges_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NudgeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tariffs_api_v1_landed_cost_tariffs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    add_tariff_api_v1_landed_cost_tariffs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RateBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_tariff_api_v1_landed_cost_tariffs__rate_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rate_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    calculate_api_v1_landed_cost_calculate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SheetBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_sheet_api_v1_landed_cost_sheets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SheetBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sheet_api_v1_landed_cost_sheets__sheet_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sheet_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pick_api_v1_landed_cost_sheets__sheet_id__pick_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sheet_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PickBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_api_v1_landed_cost_sheets__sheet_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sheet_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sheet_xlsx_api_v1_landed_cost_sheets__sheet_id__xlsx_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sheet_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cargo_api_v1_landed_cost_cargo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CargoBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    freight_rfq_api_v1_landed_cost_freight_rfq_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FreightRfqBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_schedule_api_v1_payments_po__po_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                po_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_schedule_api_v1_payments_po__po_id__schedule_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                po_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fire_api_v1_payments_po__po_id__fire_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                po_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FireBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_payment_api_v1_payments_tranche__tranche_id__record_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tranche_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    po_payments_api_v1_payments_po__po_id__payments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                po_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ledger_file_api_v1_payments_ledger_xlsx_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    due_api_v1_payments_due_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    job_gates_api_v1_gates_job__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_gate_api_v1_gates_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_gate_api_v1_gates__gate_id__decide_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gate_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    override_gate_api_v1_gates_override_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverrideBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_gate_api_v1_gates__gate_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                gate_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_redactions_api_v1_redaction_job__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_terms_api_v1_redaction_job__job_id__terms_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_drawing_api_v1_redaction_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_drawing_api_v1_redaction__artifact_id__verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attest_drawing_api_v1_redaction_attest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttestBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

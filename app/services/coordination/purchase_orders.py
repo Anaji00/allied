@@ -74,9 +74,38 @@ def _job_ref_of(job_id: Any) -> Optional[str]:
         return row.ref if row else None
 
 
+CURRENCIES = {"USD", "CAD", "CNY", "EUR", "GBP", "JPY", "MXN", "AUD"}
+
+
+def _currency(value: Any) -> Optional[str]:
+    """A currency as typed: three letters from the list the paperwork knows, or blank. Anything else is refused, never guessed."""
+    cur = str(value or "").strip().upper()
+    if not cur:
+        return None
+    if cur not in CURRENCIES:
+        raise jobs.JobError("The currency must be one of: " + ", ".join(sorted(CURRENCIES)) + " (or left blank).")
+    return cur
+
+
+def effective_currency(r: PurchaseOrderDB) -> Dict[str, Optional[str]]:
+    """The PO's own currency when it has been stated; else the one on its vendor payment schedule when there is one; else nothing (never assumed to be dollars)."""
+    if r.currency:
+        return {"currency": r.currency, "currency_source": "purchase order"}
+    try:
+        from app.models.db_models import PaymentScheduleDB
+
+        with SessionLocal() as db:
+            s = db.query(PaymentScheduleDB).filter(PaymentScheduleDB.po_id == r.id, PaymentScheduleDB.currency.isnot(None)).order_by(PaymentScheduleDB.id.desc()).first()
+            if s is not None and s.currency:
+                return {"currency": s.currency, "currency_source": "payment schedule"}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"currency": None, "currency_source": None}
+
+
 def _as_dict(r: PurchaseOrderDB) -> Dict[str, Any]:
     revs = revision_view(r)
-    return {"revisions": revs, "revision_mismatch": [x["line"] for x in revs if x["mismatch"]],
+    return {**effective_currency(r), "revisions": revs, "revision_mismatch": [x["line"] for x in revs if x["mismatch"]],
             "revision_sent": [x["revision_sent"] for x in revs], "revision_acked": [x["revision_acked"] for x in revs],
             "id": r.id, "job_id": r.job_id, "po_number": r.po_number, "vendor": r.vendor, "vendor_email": r.vendor_email, "lines": r.lines or [],
             "terms": r.terms, "ship_via": r.ship_via, "good_thru": r.good_thru, "status": r.status, "approved_by": r.approved_by,
@@ -133,7 +162,7 @@ def get(po_id: int) -> Dict[str, Any]:
 
 
 def create(job: Any, vendor: str, user: Dict[str, Any], lines: Optional[List[Dict[str, Any]]] = None, terms: str = "", ship_via: str = "",
-           good_thru: str = "") -> Dict[str, Any]:
+           good_thru: str = "", currency: str = "") -> Dict[str, Any]:
     """The PO for this vendor on this job: made once; asking again returns the one that exists (one number per vendor per job).
     Two requests at once still make one: a lock in this process, and a unique index in the database behind it."""
     from app.services.coordination.autopilot import vendor_email
@@ -142,6 +171,7 @@ def create(job: Any, vendor: str, user: Dict[str, Any], lines: Optional[List[Dic
     if not vendor:
         raise jobs.JobError("Say which vendor the purchase order is for.")
     j = jobs.get(job)
+    cur = _currency(currency)
     with _lock:
         have = find_for_vendor(j["id"], vendor)
         if have:
@@ -158,7 +188,7 @@ def create(job: Any, vendor: str, user: Dict[str, Any], lines: Optional[List[Dic
         try:
             with SessionLocal() as db:
                 row = PurchaseOrderDB(job_id=j["id"], vendor=vendor, vendor_email=vendor_email(vendor), lines=lines, terms=terms or None,
-                                      ship_via=ship_via or None, good_thru=good_thru or None, status="DRAFT", created_by=user.get("email", "system"))
+                                      ship_via=ship_via or None, good_thru=good_thru or None, currency=cur, status="DRAFT", created_by=user.get("email", "system"))
                 db.add(row)
                 db.commit()
                 db.refresh(row)
@@ -201,6 +231,8 @@ def update(po_id: int, changes: Dict[str, Any], user: Dict[str, Any]) -> Dict[st
         for k in ("terms", "ship_via", "good_thru"):
             if k in changes:
                 setattr(row, k, re.sub(r"[\x00-\x1f\x7f]+", " ", str(changes[k] or "")).strip()[:256] or None)
+        if "currency" in changes:
+            row.currency = _currency(changes["currency"])
         if "incoterm" in changes:
             term = re.sub(r"[^A-Za-z0-9 ]+", "", str(changes["incoterm"] or "")).strip().upper()[:16]
             if term and term not in _INCOTERMS:
@@ -388,7 +420,7 @@ def pdf(po_id: int) -> bytes:
         r = _row(db, po_id)
         return order_documents.vendor_po_pdf({
             "po_number": r.po_number or "", "vendor_name": r.vendor, "vendor_address": _vendor_address(r.vendor), "terms": r.terms or "",
-            "incoterm": " ".join(x for x in (r.incoterm, r.incoterm_place) if x),
+            "incoterm": " ".join(x for x in (r.incoterm, r.incoterm_place) if x), "currency": effective_currency(r)["currency"] or "",
             "ship_via": r.ship_via or "", "good_thru": r.good_thru or "", "lines": r.lines or [],
             "date": r.approved_at.strftime("%m/%d/%y") if r.approved_at else ""})
 
@@ -486,6 +518,10 @@ def finish_send(po_id: int, sent: bool, token: Any = None) -> None:
         if r is not None and r.status == "SENDING":
             r.status, r.sent_at = ("SENT", datetime.now(timezone.utc)) if sent else ("APPROVED", None)
             db.commit()
+            if sent:
+                from app.services import payments
+
+                payments.fire(int(po_id), "PO_ISSUED")                      # the first payment (the deposit) becomes due once the PO has really gone to the vendor
         elif r is not None and sent and r.status == "APPROVED":          # a manager reopened it while the mail was still going: it did go, so it is SENT
             r.status, r.sent_at = "SENT", datetime.now(timezone.utc)
             db.commit()
@@ -703,7 +739,12 @@ def attachments(file_ids: List[Any], strict: bool = False) -> List[Dict[str, Any
     """The files to attach. With strict=True a file that was removed (or can no longer be read) stops the send with a plain message, instead of
     the vendor receiving an email that quietly lacks its drawing."""
     out = []
+    from app.services import redaction
+
     for fid in file_ids or []:
+        blocked = redaction.vendor_block(fid)                                  # the customer-redaction firewall: only a verified redacted (or attested) copy goes to a vendor
+        if blocked:
+            raise ValueError(blocked)
         try:
             path, name, mime = item_files.open_file(int(fid))
             out.append({"filename": name, "content": path.read_bytes(), "mime": mime})

@@ -13,7 +13,7 @@ import json
 import re
 import time
 from datetime import timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.core.audit import audit_log
@@ -460,8 +460,24 @@ def _kind(row: AssistantActionDB) -> str:
     return "recipe" if play.startswith("recipe_") else _KINDS.get(play, play or "other")
 
 
+def delivery_note() -> Optional[str]:
+    """What will really happen to a mail draft when it is approved, in plain words: nothing is sent (draft only), it goes to the pilot inbox (redirected while testing), or None when it goes to the person it names."""
+    try:
+        from app.services.outbound_email_service import outbound_email_service
+
+        st = outbound_email_service.status()
+    except Exception:  # noqa: BLE001
+        return None
+    if st["mode"] == "DRAFT_ONLY":
+        return "Draft only: nothing is sent"
+    if st["mode"] == "REDIRECTED":
+        return f"Redirected to {st['redirect_to']} while testing"
+    return None
+
+
 def pending(user: Dict[str, Any]) -> List[Dict[str, Any]]:
     now = workdays.now()
+    note = delivery_note()
     with SessionLocal() as db:
         rows = (db.query(AssistantActionDB)
                 .filter(AssistantActionDB.status == "PENDING",
@@ -471,6 +487,7 @@ def pending(user: Dict[str, Any]) -> List[Dict[str, Any]]:
         # The reviewer sees exactly what would go out (args), and why the system drafted it.
         return [{"id": r.id, "tool": r.tool, "summary": r.summary, "status": r.status, "status_word": status_words.word("draft", r.status), "kind": _kind(r),
                  "from": "autopilot" if r.user_role == "AUTOPILOT" else "assistant",
-                 "args": {k: v for k, v in (r.args or {}).items() if not k.startswith("_")},
+                 "args": {**{k: v for k, v in (r.args or {}).items() if not k.startswith("_")}, **({"delivery_note": note} if note and (r.args or {}).get("to") else {})},
+                 "delivery_note": note if (r.args or {}).get("to") else None,
                  "why": list((r.args or {}).get("_why") or []), "created_at": workdays.as_utc(r.created_at).isoformat()}
                 for r in rows if workdays.as_utc(r.created_at) >= now - _ttl(r)][:500]

@@ -56,7 +56,10 @@ export function MailQueue() {
     setShowState(v);
     void setFilter(v === 'drafts' ? 'drafts' : null);
   };
-  const [composing, setComposing] = useState(false);
+  // ?new=1 (from the Secretary start page) opens the new-draft form straight away.
+  const [openNew, setOpenNew] = useQueryState('new');
+  const [composingLocal, setComposing] = useState(false);
+  const composing = composingLocal || openNew === '1';
   // Drafts waiting for a person's OK, counted from the same queries the Today list uses.
   const draftsWaiting = useInbox().items.filter((i) => i.source === 'drafts').length;
   const [mine, setMine] = useState(false);
@@ -202,7 +205,14 @@ export function MailQueue() {
         </ul>
       )}
       <ReplyDialog draft={draft} onClose={() => setDraft(null)} />
-      {composing && <NewDraft onClose={() => setComposing(false)} />}
+      {composing && (
+        <NewDraft
+          onClose={() => {
+            setComposing(false);
+            void setOpenNew(null);
+          }}
+        />
+      )}
     </div>
   );
 }

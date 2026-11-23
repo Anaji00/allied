@@ -163,3 +163,42 @@ def read(data: bytes) -> Dict[str, Any]:
         "size_mm": [round(part_w * factor, 2), round(part_h * factor, 2)], "circles_mm": sorted(round(c * factor, 2) for c in circles),
         "dimensions_mm": sorted(round(d * factor, 3) for d in dims), "counts": counts, "entities": n,
     }
+
+
+# ---------------------------------------------------------------------------
+# Title block: exact fields from the attributes of the title block insert (no AI)
+# ---------------------------------------------------------------------------
+
+_TB_FIELDS = {
+    "drawing_number": ("dwg_no", "dwgno", "drawing_no", "drawing_number", "drawingnumber", "number", "part_no", "partno", "dwg", "sheet_no"),
+    "revision": ("rev", "revision", "rev_no", "revno"),
+    "material": ("material", "mat", "matl"),
+    "customer": ("customer", "client", "company", "customer_name", "owner"),
+    "title": ("title", "description", "desc", "part_name", "name"),
+    "scale": ("scale",),
+    "drawn_by": ("drawn", "drawn_by", "drawnby", "designer"),
+    "date": ("date", "drawn_date"),
+}
+
+
+def title_block(data: bytes) -> Dict[str, Any]:
+    """{attributes: {tag: text}, fields: {drawing_number, revision, material, customer, title, scale, drawn_by, date}, customer_found}: the title block's own attribute text, read exactly (multi-line text keeps its
+    lines). A field the file does not carry is simply absent: nothing is guessed. The customer field is what the redaction check looks for."""
+    doc = _read(data)
+    attrs: Dict[str, str] = {}
+    for layout in list(doc.layouts):
+        for e in layout:
+            if e.dxftype() == "INSERT":
+                for a in e.attribs:
+                    tag = str(a.dxf.tag or "").strip()
+                    text = str(a.dxf.text or "").replace("\P", "\n").strip()
+                    if tag and text and tag.lower() not in {k.lower() for k in attrs}:
+                        attrs[tag] = text
+    lower = {k.lower().replace(" ", "_"): v for k, v in attrs.items()}
+    fields: Dict[str, str] = {}
+    for name, tags in _TB_FIELDS.items():
+        for t in tags:
+            if t in lower:
+                fields[name] = lower[t]
+                break
+    return {"attributes": attrs, "fields": fields, "customer_found": "customer" in fields}

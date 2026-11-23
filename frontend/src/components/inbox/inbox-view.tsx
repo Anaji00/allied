@@ -154,10 +154,12 @@ export function InboxView() {
   function decideMany(list: InboxItem[], confirm: boolean) {
     const drafts = list.filter((i) => i.draft);
     if (!drafts.length) return;
+    if (confirm && !window.confirm(`Send ${drafts.length} email${drafts.length === 1 ? '' : 's'} to real people? You can undo for a few seconds.`)) return;
     const restore = foldAway(drafts);
     const byId = new Map(drafts.map((i) => [i.draft!.id, i.key]));
     const n = drafts.length;
     queue(`${confirm ? 'Sent' : 'Cancelled'} ${n} draft${n === 1 ? '' : 's'}`, {
+      dropOnLeave: confirm,
       commit: async (keepalive) => {
         const failed = await decideDrafts([...byId.keys()], confirm, keepalive);
         await refresh('drafts');
@@ -186,6 +188,7 @@ export function InboxView() {
     if (!commit) return;
     const restore = foldAway([item]);
     queue(`${action.verb}: ${item.title}`, {
+      dropOnLeave: Boolean(item.draft) && action.id === 'send',
       commit: async (keepalive) => {
         await commit(keepalive);
         await refresh(item.source);
@@ -229,7 +232,12 @@ export function InboxView() {
   );
   useHotkeys('space', () => selected?.draft && !selected.draft.row && togglePick(selected), { preventDefault: true }, [selected]);
   // Shift+Enter: the picked drafts, or else every draft of the open one's kind.
-  useHotkeys('shift+enter', () => decideMany(pickedItems.length ? pickedItems : sameKind, true), [pickedItems, sameKind]);
+  useHotkeys('shift+enter', () => {
+      const list = pickedItems.length ? pickedItems : sameKind;
+      if (list.length === 1) decideMany(list, true);
+    },
+    [pickedItems, sameKind],
+  );
 
   return (
     <div className="grid min-w-0 gap-4">

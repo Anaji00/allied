@@ -59,8 +59,13 @@ def job_page(job: str, since: str = Query("yesterday", max_length=30), user: dic
 
 @router.get("/{job}", summary="One job by id or reference")
 def one(job: str, user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.core.money_view import hide_pos
+
     try:
-        return jobs.get(job, staff=_staff(user))
+        out = jobs.get(job, staff=_staff(user))
+        if isinstance(out.get("purchase_orders"), list):
+            hide_pos(out["purchase_orders"], user)
+        return out
     except (LookupError, jobs.JobError, ValueError) as exc:
         _fail(exc)
 
@@ -83,8 +88,10 @@ def approve_design(job: str, user: dict = Depends(require_manager)) -> Dict[str,
 
 @router.get("/{job}/purchase-orders", summary="The job's purchase orders (one per vendor)")
 def list_pos(job: str, _user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
+    from app.core.money_view import hide_pos
+
     try:
-        return purchase_orders.for_job(jobs.get(job)["id"])
+        return hide_pos(purchase_orders.for_job(jobs.get(job)["id"]), _user)
     except (LookupError, jobs.JobError, ValueError) as exc:
         _fail(exc)
 
@@ -96,7 +103,7 @@ def create_po(job: str, body: Dict[str, Any] = Body(...), user: dict = Depends(r
         if lines is not None and (not isinstance(lines, list) or len(lines) > 100):
             raise jobs.JobError("Lines must be a list (at most 100).")
         return purchase_orders.create(job, str(body.get("vendor") or ""), user, lines, str(body.get("terms") or ""), str(body.get("ship_via") or ""),
-                                      str(body.get("good_thru") or ""))
+                                      str(body.get("good_thru") or ""), str(body.get("currency") or ""))
     except (LookupError, jobs.JobError, ValueError, TypeError) as exc:
         _fail(exc)
 

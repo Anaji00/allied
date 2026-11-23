@@ -314,7 +314,7 @@ export function ItemAutomations({ boardId, itemId, data }: { boardId: string; it
         <article key={d.id} className="grid gap-1.5 rounded-lg border p-2.5 text-[13px]">
           <div className="flex items-start justify-between gap-2">
             <span className="font-medium text-pretty">{d.summary}</span>
-            <ToneBadge tone={DRAFT_STATE[d.status].tone}>{DRAFT_STATE[d.status].label}</ToneBadge>
+            <ToneBadge tone={(DRAFT_STATE[d.status] ?? { tone: 'neutral' as const }).tone}>{(DRAFT_STATE[d.status] ?? { label: d.status }).label}</ToneBadge>
           </div>
           {(d.to || d.subject) && (
             <span className="text-xs text-muted-foreground">
@@ -345,7 +345,7 @@ export function ItemAutomations({ boardId, itemId, data }: { boardId: string; it
           ) : (
             d.decided_at && (
               <span className="text-xs text-muted-foreground">
-                {DRAFT_STATE[d.status].label} {since(d.decided_at)}
+                {(DRAFT_STATE[d.status] ?? { label: d.status }).label} {since(d.decided_at)}
               </span>
             )
           )}

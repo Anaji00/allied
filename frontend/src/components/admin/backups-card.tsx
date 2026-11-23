@@ -51,7 +51,7 @@ export function BackupsCard() {
   });
   const b = q.data;
   if (!b) return null;
-  const failed = b.last_run ? !b.last_run.ok : false;
+  const failed = b.last_run ? b.last_run.ok === false : false;
   return (
     <section className="grid gap-2 rounded-lg border bg-card p-4" aria-label="Backups">
       <div className="flex flex-wrap items-center gap-2">
@@ -65,7 +65,11 @@ export function BackupsCard() {
         </Button>
       </div>
       {(() => {
-        const plain = (b as { text?: string; summary?: string }).text ?? (b as { summary?: string }).summary;
+        // The server's summary is an object {state, text, ...}; only its sentence is shown.
+        const raw = b as { text?: unknown; summary?: unknown };
+        const sum = raw.summary && typeof raw.summary === 'object' ? (raw.summary as { text?: unknown }).text : raw.summary;
+        const found = typeof sum === 'string' ? sum : typeof raw.text === 'string' ? raw.text : undefined;
+        const plain = found;
         if (plain) return <p className="text-sm font-medium">{plain}</p>;
         if (failed)
           return (
@@ -84,7 +88,7 @@ export function BackupsCard() {
             ? ' Its check passed.'
             : ` Its check failed${Object.keys(b.last_run.check.lost ?? {}).length ? `: ${Object.keys(b.last_run.check.lost ?? {}).length} tables lost rows` : ''}.`
           : ''}
-        {b.last_run?.error ? ` ${b.last_run.error}` : ''}
+        {b.last_run?.error ? ' The last backup hit a problem. Ask your administrator.' : ''}
       </p>
       {b.copy?.text &&
         (b.copy.state === 'made' ? (

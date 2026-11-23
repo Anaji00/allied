@@ -17,6 +17,13 @@ from app.services.mtr_service import mtr_service
 router = APIRouter()
 
 
+@router.get("/certs-to-chase", summary="Purchase orders with lines that need a mill test report or certificate and none attached yet, with the vendor and days waiting (no prices)")
+def certs_to_chase(_user: dict = Depends(require_operator)) -> dict:
+    from app.services import certs_to_chase as svc
+
+    return svc.chase_list()
+
+
 @router.get(
     "/mtr/{heat_number}",
     response_model=MTRRecord,

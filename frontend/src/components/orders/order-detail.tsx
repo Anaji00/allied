@@ -34,6 +34,7 @@ type Tab = (typeof TABS)[number][0];
 
 export function OrderDetail({ so }: { so: string }) {
   const { data: order, isPending, error, refetch } = useOrder(so);
+  const { hasRole: canSee } = useAuth();
   const [tab, setTab] = useState<Tab>('lines');
   const [comparing, setComparing] = useState(false);
 
@@ -71,16 +72,16 @@ export function OrderDetail({ so }: { so: string }) {
       {comparing && <CompareForOrder orderRef={order.sales_order_number} jobRef={order.job_ref} onClose={() => setComparing(false)} />}
       <div className="flex flex-wrap items-center gap-2">
         <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
-        {thin && <ToneBadge tone="bad">Margin under {floor}%</ToneBadge>}
+        {thin && canSee('MANAGER') && <ToneBadge tone="bad">Margin under {floor}%</ToneBadge>}
         <ToneBadge tone={order.sage_exported_at ? 'ok' : 'neutral'}>
           {order.sage_exported_at ? `Sent to Sage ${date(order.sage_exported_at)}` : 'Not sent to Sage yet'}
         </ToneBadge>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 rounded-md border p-3 text-center">
+      <div className={`grid ${canSee('MANAGER') ? 'grid-cols-3' : 'grid-cols-1'} gap-2 rounded-md border p-3 text-center`}>
         <Figure label="Sale" value={money(order.total_revenue, order.currency)} />
-        <Figure label="Cost" value={money(order.total_expense, order.currency)} />
-        <Figure label="Margin" value={pct(order.gross_margin_pct)} warn={thin} />
+        {canSee('MANAGER') && <Figure label="Cost" value={money(order.total_expense, order.currency)} />}
+        {canSee('MANAGER') && <Figure label="Margin" value={pct(order.gross_margin_pct)} warn={thin} />}
       </div>
 
       <Facts

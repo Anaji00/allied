@@ -75,6 +75,18 @@ export function BringInFromSage() {
     },
     retry: false,
   });
+  const undoImport = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await authFetch(`${BASE}/history/${id}/undo`, { method: 'POST' });
+      if (!res.ok) throw await failure(res);
+      return (await res.json()) as { message?: string };
+    },
+    onSuccess: (out) => {
+      toast.success(out.message ?? 'Taken back.');
+      void client.invalidateQueries({ queryKey: ['sage-import'] });
+    },
+    onError: (e) => toast.error('It was not taken back', { description: e.message }),
+  });
   const history = useQuery({
     queryKey: ['sage-import', 'history'],
     queryFn: async (): Promise<History[]> => {
@@ -313,6 +325,27 @@ export function BringInFromSage() {
                 <span className="text-xs text-muted-foreground">
                   {dateTime(h.imported_at)} · {h.imported_by}
                 </span>
+                {(h as { undone?: boolean }).undone ? (
+                  <span className="text-xs text-muted-foreground">Taken back</span>
+                ) : (
+                  hasRole('MANAGER') && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                      disabled={undoImport.isPending}
+                      onClick={() => {
+                        if (
+                          window.confirm(`Take back this import?
+
+The rows it added are removed and the values it changed go back. Anything changed since is left alone.`)
+                        )
+                          undoImport.mutate(h.id);
+                      }}
+                    >
+                      Undo this import
+                    </button>
+                  )
+                )}
               </li>
             ))}
           </ul>

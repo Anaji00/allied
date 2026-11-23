@@ -23,8 +23,8 @@ def test_a_batch_in_three_currencies_is_shown_per_currency_and_the_converted_fig
     got = sage_export_service.get_batch_summary(only_new=True)
     d = {k: float(v) - float(base.by_currency.get(k, 0)) for k, v in got.by_currency.items()}
     assert d["USD"] == 61000.0 and d["CAD"] == 66400.0 and d["CNY"] == 65500.0
-    assert "USD" in got.sales_label and "CAD" in got.sales_label and "CNY" in got.sales_label and "about USD" in got.sales_label        # per currency first; the converted total is labelled "about"
-    assert got.purchase_by_currency and "about USD" in got.purchase_label
+    assert "USD" in got.sales_label and "CAD" in got.sales_label and "CNY" in got.sales_label and "about $" in got.sales_label        # per currency first; the converted total is labelled "about"
+    assert got.purchase_by_currency and "about $" in got.purchase_label
     ov = overview()
     assert ov["ready_to_send"]["sales_totals"]["CAD"] >= 66400.0 and "CAD" in ov["text"] and "USD" in ov["text"]
 

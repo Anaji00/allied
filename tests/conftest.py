@@ -57,6 +57,10 @@ settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 settings.DB_DIR = _TEST_TMP
 # Never call a real AI service from tests, even when .env holds a Groq key.
 settings.GROQ_API_KEY = ""
+# The customer-redaction firewall and the engineer gates are hard blocks in production; the older tests that send drawings or ship orders predate them, so they run with both off. The tests of the
+# firewall and the gates switch them on for themselves (monkeypatch).
+settings.REDACTION_ENFORCED = False
+settings.GATES_ENFORCED = False
 settings.AI_FALLBACK_PROVIDER = ""
 # Tests build their own boards, so .env's board layout (Allied's real column
 # names and board ids) must not leak in. Every monday setting goes back to its

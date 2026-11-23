@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -102,7 +103,9 @@ export function SavedViews({ screen, className }: { screen: string; className?: 
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-60">
           {views.data.length === 0 ? (
-            <DropdownMenuLabel className="font-normal text-muted-foreground">No saved views yet.</DropdownMenuLabel>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="font-normal text-muted-foreground">No saved views yet.</DropdownMenuLabel>
+            </DropdownMenuGroup>
           ) : (
             views.data.map((v) => (
               <DropdownMenuItem key={v.id} onClick={() => go(v)} className="gap-2">

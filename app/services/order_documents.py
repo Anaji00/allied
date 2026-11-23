@@ -216,6 +216,8 @@ def _vendor_po_pdf(po: Dict[str, Any]) -> bytes:
     els = [head, Spacer(1, 8), parties, Spacer(1, 8), terms, Spacer(1, 8)]
     if po.get("incoterm"):                                  # printed only when filled in
         els += [Paragraph(f"<b>Incoterm:</b> {_x(po['incoterm'])}", small), Spacer(1, 8)]
+    if po.get("currency"):                                  # printed only when stated: a blank is never filled with dollars
+        els += [Paragraph(f"<b>All prices and amounts are in {_x(po['currency'])}.</b>", small), Spacer(1, 8)]
     els += [lines, Spacer(1, 12), Paragraph("<b>IMPORTANT NOTES:</b>", small)]
     els += [Paragraph(f"{n}) {_x(t)}", small) for n, t in enumerate(notes, 1)]
     els += [Spacer(1, 24), Paragraph("Authorized Signature: ______________________________", small)]

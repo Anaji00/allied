@@ -153,12 +153,12 @@ export function ShipmentsView() {
     col.accessor('forwarder', {
       header: 'Forwarder',
       meta: { className: 'max-w-40 truncate' },
-      cell: (c) => c.getValue() || <span className="text-muted-foreground">Not set</span>,
+      cell: (c) => c.row.original.forwarder_label || c.getValue() || <span className="text-muted-foreground">No forwarder yet</span>,
     }),
     col.accessor('owner_email', {
       header: 'Owner',
       cell: (c) =>
-        c.row.original.owner_name || person(c.getValue(), employeeEmail) || <span className="text-muted-foreground">No owner yet</span>,
+        c.row.original.owner_name || person(c.getValue(), employeeEmail) || <span className="text-muted-foreground">Not assigned</span>,
     }),
   ]);
 
@@ -194,7 +194,7 @@ export function ShipmentsView() {
           {canEdit && (
             <div className="ml-1 flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setReading(true)}>
-                <Mail /> Read forwarder email
+                <Mail /> Read one forwarder email
               </Button>
               <Button size="sm" onClick={() => setAdding(true)}>
                 <Plus /> Add shipment <Kbd className="bg-transparent text-current opacity-60">N</Kbd>

@@ -45,6 +45,11 @@ const KIND: Record<string, string> = {
   LOGISTICS_DISPATCH: 'Shipping and customs',
   USER: 'User accounts',
   MONDAY_EVENT: 'monday changes',
+  TEST_RESOURCE: 'Test entries',
+  SAGE_PO_CSV: 'Sage purchase order files',
+  SAGE_SO_CSV: 'Sage sales order files',
+  ITEM_BALL: 'Who is waiting on whom',
+  ITEM_UPDATE: 'Comments and updates',
 };
 
 function tone(action: string): Tone {
@@ -64,9 +69,17 @@ const nameOf = (email: string | null) =>
     : 'The system';
 
 /** One plain sentence for a row: the server's own where it sends one, otherwise who, what and which record. Never raw data. */
+const SECURITY = /refresh (refused|reuse)/i;
+const isSecurity = (e: Entry) => SECURITY.test(`${e.text ?? ''} ${e.detail ?? ''} ${e.action ?? ''}`);
+
 function sentence(e: Entry) {
+  const raw = `${e.text ?? ''} ${e.detail ?? ''} ${e.action ?? ''}`;
+  if (/refresh reuse/i.test(raw))
+    return 'A sign-in token was used twice; every session of this person was ended. Usually a stale browser tab.';
+  if (/refresh refused/i.test(raw))
+    return 'A sign-in renewal was refused because that sign-in had already ended. Usually a stale browser tab.';
   if (e.text) return e.text;
-  const what = KIND[e.resource_type] ?? words(e.resource_type);
+  const what = KIND[(e.resource_type ?? '').toUpperCase()] ?? words(e.resource_type);
   return `${nameOf(e.actor_email)}: ${words(e.action).toLowerCase()}, ${what.toLowerCase()}${e.resource_id ? ` ${e.resource_id}` : ''}.`;
 }
 const looksLikeData = (t: string | null | undefined) => Boolean(t && /^\s*[{[]/.test(t));
@@ -99,6 +112,7 @@ export function AuditView() {
   const [id, setId] = useQueryState('entry');
   const [draft, setDraft] = useState(q);
   const [exporting, setExporting] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
 
   useEffect(() => {
     if (draft === q) return undefined;
@@ -129,7 +143,9 @@ export function AuditView() {
     placeholderData: keepPreviousData,
     enabled: hasRole('MANAGER'),
   });
-  const rows = data?.entries ?? [];
+  // Sign-in security events (a renewal refused, or a token used twice) are kept out of the default list so the history stays readable.
+  // They are never lost: the toggle beside the filters shows them with a plain sentence.
+  const rows = (data?.entries ?? []).filter((e) => showSecurity || !isSecurity(e));
   const total = data?.total ?? 0;
   const index = rows.findIndex((e) => e.event_id === id);
   const selected = rows[index];
@@ -182,7 +198,7 @@ export function AuditView() {
           <option value="">Every kind of record</option>
           {(data?.resource_types ?? []).map((t) => (
             <option key={t} value={t}>
-              {KIND[t] ?? words(t)}
+              {KIND[t.toUpperCase()] ?? words(t)}
             </option>
           ))}
         </NativeSelect>
@@ -216,6 +232,10 @@ export function AuditView() {
           aria-label="Filter by action"
           className="w-36"
         />
+        <label className="inline-flex items-center gap-1.5 text-[13px]">
+          <input type="checkbox" className="size-4" checked={showSecurity} onChange={(e) => setShowSecurity(e.target.checked)} />
+          Show sign-in security events
+        </label>
         <Button variant="outline" size="sm" className="ml-auto" disabled={!rows.length || exporting} onClick={() => void downloadJson()}>
           <Download /> {exporting ? 'Exporting…' : 'Export filtered'}
         </Button>
@@ -266,7 +286,7 @@ export function AuditView() {
             <div className="grid gap-4">
               <Facts
                 items={[
-                  ['Record', KIND[selected.resource_type] ?? words(selected.resource_type)],
+                  ['Record', KIND[(selected.resource_type ?? '').toUpperCase()] ?? words(selected.resource_type)],
                   [
                     'Reference',
                     selected.resource_id ? (

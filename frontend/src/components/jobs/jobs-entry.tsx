@@ -15,7 +15,10 @@ export function JobsEntry() {
   const boards = useBoards();
   const hasJobsBoard = boards.data?.some((b) => b.board_id === 'jobs') ?? false;
   useEffect(() => {
-    if (hasJobsBoard) router.replace('/boards?board=jobs');
+    // Old links (?section=projects or shipments) land on the right place instead of an empty page.
+    const section = new URLSearchParams(window.location.search).get('section');
+    if (section === 'shipments') router.replace('/logistics');
+    else if (section === 'projects' || hasJobsBoard) router.replace(hasJobsBoard ? '/boards?board=jobs' : '/boards');
   }, [hasJobsBoard, router]);
   if (boards.isPending || hasJobsBoard) return <RowsSkeleton rows={6} />;
   return <JobsHome />;

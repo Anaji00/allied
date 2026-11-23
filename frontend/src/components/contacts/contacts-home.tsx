@@ -3,12 +3,13 @@
 import { parseAsStringLiteral, useQueryState } from 'nuqs';
 import { TabsWithMore } from '@/components/data/tabs-more';
 import { VendorsView } from '@/components/vendors/vendors-view';
+import { CompanyNamesTool } from '@/components/organize/company-names';
 import { VendorContacts } from '@/components/organize/vendor-contacts';
 import { Suppliers } from '@/components/orders/order-tabs';
 import { ContactsList } from './contacts-list';
 
-const SECTIONS = ['customers', 'vendors', 'people', 'suppliers'] as const;
-const LABEL = { customers: 'Customers', vendors: 'Vendors', people: 'Vendor contacts', suppliers: 'Suppliers' };
+const SECTIONS = ['customers', 'vendors', 'people', 'suppliers', 'companies'] as const;
+const LABEL = { customers: 'Customers', vendors: 'Vendors', people: 'Vendor contacts', suppliers: 'Suppliers', companies: 'Company names' };
 
 /** The companies Allied deals with: vendors (with their on-time record) and the carriers' prices. */
 export function ContactsHome() {
@@ -29,6 +30,7 @@ export function ContactsHome() {
       {section === 'vendors' && <VendorsView />}
       {section === 'people' && <VendorContacts />}
       {section === 'suppliers' && <Suppliers />}
+      {section === 'companies' && <CompanyNamesTool />}
     </div>
   );
 }

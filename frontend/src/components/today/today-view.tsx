@@ -75,6 +75,7 @@ export function TodayView() {
     setGone((g) => new Set(g).add(row.id));
     const mail = draftOf(row);
     undo(`${a.label}${mail?.to ? ` to ${mail.to}` : ''}: ${row.sentence}`, {
+      dropOnLeave: /send/i.test(a.label),
       commit: async (keepalive) => {
         const res = await authFetch(a.path, {
           method: a.method,
@@ -225,12 +226,19 @@ export function TodayView() {
                 {(() => {
                   const mail = draftOf(r);
                   if (!mail) return null;
-                  const first = (mail.body ?? '').split(/\r?\n/).find((l) => l.trim()) ?? '';
+                  // The first real sentence: skip a greeting line such as "Hello Helen," and show about 100 characters of what follows.
+                  const lines = (mail.body ?? '')
+                    .split(/\r?\n/)
+                    .map((l) => l.trim())
+                    .filter(Boolean);
+                  const greeting = /^(hi|hello|dear|good (morning|afternoon|evening))\b[^.!?]{0,40}[,:]?$/i;
+                  const first = (lines.length > 1 && greeting.test(lines[0]) ? lines[1] : lines[0]) ?? '';
                   return (
                     <details className="text-xs text-muted-foreground">
                       <summary className="cursor-pointer">
                         To {mail.to || 'nobody yet'}
-                        {first ? `: ${first.length > 90 ? `${first.slice(0, 90)}…` : first}` : ''}
+                        {mail.delivery_note ? ` (${mail.delivery_note})` : ''}
+                        {first ? `: ${first.length > 100 ? `${first.slice(0, 100)}…` : first}` : ''}
                       </summary>
                       <p className="mt-1 font-medium text-foreground">{mail.subject}</p>
                       <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted/50 p-2 font-sans whitespace-pre-wrap">{mail.body}</pre>

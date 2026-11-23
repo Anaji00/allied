@@ -1,6 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { ControlStatus } from './control-status';
+import { DatabaseCheck } from './control-extras';
+import { Nudge } from './nudge';
 import { useAuth } from '@/context/AuthContext';
 
 type Entry = { title: string; line: string; href: string; minRole?: 'OPERATOR' | 'MANAGER' };
@@ -27,7 +30,7 @@ const GROUPS: { name: string; entries: Entry[] }[] = [
         href: '/orders?tab=sage',
         minRole: 'MANAGER',
       },
-      { title: 'Mill certificates', line: 'Material test papers for each batch.', href: '/logistics?section=certificates' },
+      { title: 'Mill certificates', line: 'Material test papers for each batch.', href: '/quality' },
       {
         title: 'Bills checked',
         line: 'Vendor bills compared with their purchase orders.',
@@ -63,12 +66,12 @@ const GROUPS: { name: string; entries: Entry[] }[] = [
       {
         title: 'Ready-made automations',
         line: 'Switch a rule off, ask-first or automatic, and see what it would do today.',
-        href: '/toolkit?tab=automations',
+        href: '/admin/automations',
       },
       {
         title: 'Automation scorecard',
         line: 'How often automatic drafts were sent or cancelled.',
-        href: '/toolkit?tab=scorecard',
+        href: '/admin/automations',
         minRole: 'MANAGER',
       },
       { title: 'What runs by itself', line: 'Every automatic job and its mode.', href: '/health?tab=automation' },
@@ -94,6 +97,9 @@ export function AdminHome() {
   const { hasRole } = useAuth();
   return (
     <div className="grid min-w-0 gap-5">
+      <Nudge />
+      <ControlStatus />
+      <DatabaseCheck />
       {GROUPS.map((g) => {
         const entries = g.entries.filter((e) => !e.minRole || hasRole(e.minRole));
         if (!entries.length) return null;

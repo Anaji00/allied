@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Download, Loader2, Plus, Trash2 } from 'lucide-react';
-import { Field } from '@/components/data/filters';
+import { Field, NativeSelect } from '@/components/data/filters';
 import { ToneBadge, type Tone } from '@/components/data/tone-badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -16,7 +16,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { authFetch } from '@/lib/api';
-import { dateTime, money, words } from '@/lib/format';
+import { dateTime, moneyNamed, words } from '@/lib/format';
+import { BillMatch, FreightRfqButton } from './po-extras';
 import { downloadBlob, jobsCall, type Job } from './job-types';
 
 type Line = {
@@ -44,8 +45,18 @@ const norm = (l: Partial<Line> & { qty?: number | string }): Line => ({
   net_kg: l.net_kg ?? '',
   cert_required: l.cert_required ?? false,
 });
+/** The currency is never assumed: when the purchase order has none recorded, amounts show as plain numbers with a note. */
+const CURRENCIES = ['USD', 'CAD', 'CNY', 'EUR', 'GBP', 'JPY', 'MXN', 'AUD'];
+const cash = (po: { currency?: string | null }, v: unknown) =>
+  po.currency
+    ? moneyNamed(v, po.currency)
+    : Number.isFinite(Number(v))
+      ? Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : '–';
 export type PO = {
   id: number | string;
+  currency?: string | null;
+  currency_source?: string | null;
   job_id?: number | string;
   po_number?: string | null;
   vendor: string;
@@ -171,7 +182,12 @@ export function PurchaseOrders({ job }: { job: Job }) {
               <span className="font-mono text-xs">{p.po_number || 'Number on approval'}</span>
               <span className="font-medium">{p.vendor}</span>
               <ToneBadge tone={st.tone}>{st.label}</ToneBadge>
-              {full && p.lines && p.lines.length > 0 && <span className="ml-auto tabular-nums">{money(total(p.lines))}</span>}
+              {full && hasRole('OPERATOR') && p.lines && p.lines.length > 0 && (
+                <span className="ml-auto tabular-nums">
+                  {cash(p, total(p.lines))}
+                  {!p.currency && <span className="ml-1 text-xs text-muted-foreground">(currency not recorded)</span>}
+                </span>
+              )}
             </div>
             {full && p.lines && p.lines.length > 0 && (
               <table className="w-full text-xs">
@@ -179,7 +195,7 @@ export function PurchaseOrders({ job }: { job: Job }) {
                   <tr>
                     <th className="py-1 pr-2 font-medium">Qty</th>
                     <th className="py-1 pr-2 font-medium">What</th>
-                    <th className="py-1 text-right font-medium">Unit cost</th>
+                    {hasRole('OPERATOR') && <th className="py-1 text-right font-medium">Unit cost</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -216,7 +232,7 @@ export function PurchaseOrders({ job }: { job: Job }) {
                           );
                         })()}
                       </td>
-                      <td className="py-1 text-right tabular-nums">{money(l.unit_cost)}</td>
+                      {hasRole('OPERATOR') && <td className="py-1 text-right tabular-nums">{cash(p, l.unit_cost)}</td>}
                     </tr>
                   ))}
                 </tbody>
@@ -303,11 +319,12 @@ export function PurchaseOrders({ job }: { job: Job }) {
                     <Button
                       size="xs"
                       variant="ghost"
-                      onClick={() =>
+                      onClick={() => {
+                        if (!window.confirm('Mark this purchase order as NOT sent so it can be sent again?')) return;
                         void poCall(`/${p.id}/resolve-send`, 'POST', { sent: false })
                           .then(refresh)
-                          .catch((e: Error) => toast.error('That didn’t save', { description: e.message }))
-                      }
+                          .catch((e: Error) => toast.error('That didn’t save', { description: e.message }));
+                      }}
                     >
                       No, send again
                     </Button>
@@ -339,15 +356,25 @@ export function PurchaseOrders({ job }: { job: Job }) {
                   </Button>
                 )}
                 {p.status === 'SENT' && hasRole('OPERATOR') && (
-                  <Button size="xs" variant="outline" disabled={act.isPending} onClick={() => act.mutate({ po: p, what: 'acknowledge' })}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={act.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Record that ${p.vendor} confirmed this purchase order?`))
+                        act.mutate({ po: p, what: 'acknowledge' });
+                    }}
+                  >
                     Vendor confirmed
                   </Button>
                 )}
+                {hasRole('OPERATOR') && p.status !== 'DRAFT' && <FreightRfqButton poId={Number(p.id)} />}
                 <Button size="xs" variant="ghost" disabled={pdf.isPending} onClick={() => pdf.mutate(p)}>
                   {pdf.isPending ? <Loader2 className="animate-spin" /> : <Download />} PDF
                 </Button>
               </div>
             )}
+            {hasRole('OPERATOR') && p.status !== 'DRAFT' && <BillMatch poId={Number(p.id)} />}
           </article>
         );
       })}
@@ -383,6 +410,7 @@ function EditPO({ po, onClose, onSaved }: { po: PO; onClose: () => void; onSaved
   const [shipVia, setShipVia] = useState(po.ship_via ?? '');
   const [goodThru, setGoodThru] = useState(po.good_thru ?? '');
   const [email, setEmail] = useState(po.vendor_email ?? '');
+  const [currency, setCurrency] = useState(po.currency ?? '');
   const [incoterm, setIncoterm] = useState(po.incoterm ?? '');
   const [incotermPlace, setIncotermPlace] = useState(po.incoterm_place ?? '');
   const setLine = (i: number, patch: Partial<Line>) => setLines((cur) => cur.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -429,6 +457,7 @@ function EditPO({ po, onClose, onSaved }: { po: PO; onClose: () => void; onSaved
         ship_via: shipVia,
         good_thru: goodThru,
         vendor_email: email,
+        currency,
         ...(incoterm.trim() ? { incoterm: incoterm.trim() } : {}),
         ...(incotermPlace.trim() ? { incoterm_place: incotermPlace.trim() } : {}),
       });
@@ -456,6 +485,26 @@ function EditPO({ po, onClose, onSaved }: { po: PO; onClose: () => void; onSaved
             save.mutate();
           }}
         >
+          <Field
+            label={
+              po.currency_source === 'payment schedule' && !po.currency ? 'Currency' : 'Currency (not assumed: leave blank if unknown)'
+            }
+          >
+            <NativeSelect
+              aria-label="Currency"
+              className="h-8 w-auto"
+              value={currency}
+              disabled={po.status !== 'DRAFT'}
+              onChange={(e) => setCurrency(e.target.value)}
+            >
+              <option value="">Not recorded</option>
+              {CURRENCIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
           <fieldset disabled={po.status !== 'DRAFT'} className="m-0 grid min-w-0 gap-2 border-0 p-0 disabled:opacity-70">
             <div
               className="grid grid-cols-[4.5rem_minmax(0,1fr)_5rem_6.5rem_auto] gap-2 text-xs font-medium text-muted-foreground"

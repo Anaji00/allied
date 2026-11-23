@@ -14,7 +14,7 @@ from app.core.database import SessionLocal
 from app.core.logging import logger
 from app.models.db_models import RefreshStateDB
 
-GRACE_SECONDS = 30.0
+GRACE_SECONDS = float(getattr(settings, "REFRESH_GRACE_SECONDS", 600.0))        # how long the PREVIOUS refresh token is still honoured (a second tab that has not yet seen the new one)
 _revoked_cache: Dict[str, Any] = {}
 
 

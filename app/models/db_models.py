@@ -657,6 +657,7 @@ class ReconciliationDB(Base):
     discrepancies = Column(JSON, default=list)
     suggested_action = Column(Text, nullable=True)
     dispute_email_draft = Column(Text, nullable=True)
+    bill_detail = Column(JSON, nullable=True)                               # {"lines": [...], "freight", "currency", "invoice_date"}: the bill as read; empty for bills checked before this was kept
     reconciled_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -760,6 +761,7 @@ class PurchaseOrderDB(Base):
     incoterm_place = Column(String(64), nullable=True)                      # optional: Ningbo ...
     cancelled_at = Column(DateTime(timezone=True), nullable=True)           # a manager cancelled it (the customer cancelled, or it was raised by mistake)
     cancel_reason = Column(String(256), nullable=True)
+    currency = Column(String(3), nullable=True)                              # the currency the prices are in; blank until it is stated, never assumed to be USD
     created_by = Column(String(256), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
@@ -1182,3 +1184,173 @@ class RefreshStateDB(Base):
     prev_superseded_at = Column(Float, nullable=True)
     revoked_before = Column(Float, nullable=False, default=0.0)
     updated_at = Column(Float, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Verified workflows: vendor payments, engineer gates, redaction, landed cost, shipment pipeline
+# ---------------------------------------------------------------------------
+
+class PaymentScheduleDB(Base):
+    """How one vendor PO is paid: tranches that add up to exactly 100.00 percent."""
+
+    __tablename__ = "payment_schedules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    po_id = Column(Integer, nullable=False, index=True)
+    job_id = Column(Integer, nullable=True, index=True)
+    vendor = Column(String(256), nullable=True)
+    currency = Column(String(3), nullable=True)
+    total = Column(Numeric(14, 2), nullable=False, default=0)
+    terms_code = Column(String(64), nullable=True)                           # 30/50/20, 30/70, 50/50 or custom
+    status = Column(String(16), nullable=False, default="ACTIVE")
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class PaymentTrancheDB(Base):
+    __tablename__ = "payment_tranches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    schedule_id = Column(Integer, nullable=False, index=True)
+    seq = Column(Integer, nullable=False, default=1)
+    label = Column(String(80), nullable=True)
+    percent = Column(Numeric(6, 2), nullable=False)
+    amount = Column(Numeric(14, 2), nullable=False)
+    trigger = Column(String(24), nullable=False)                             # PO_ISSUED, PROFORMA, GATE2_APPROVED, DELIVERY_CONFIRMED, CUSTOM
+    due_on = Column(String(10), nullable=True)
+    status = Column(String(12), nullable=False, default="PENDING")           # PENDING, DUE, PAID
+    triggered_at = Column(DateTime(timezone=True), nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class VendorPaymentDB(Base):
+    """One payment entry. Idempotent: the same idem_key is one payment."""
+
+    __tablename__ = "vendor_payments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tranche_id = Column(Integer, nullable=False, index=True)
+    idem_key = Column(String(80), nullable=False, unique=True)
+    paid_on = Column(String(10), nullable=False)
+    amount = Column(Numeric(14, 2), nullable=False)
+    currency = Column(String(3), nullable=True)
+    method = Column(String(24), nullable=True)
+    reference = Column(String(120), nullable=True)
+    wire_file_id = Column(Integer, nullable=True)
+    proforma_file_id = Column(Integer, nullable=True)
+    recorded_by = Column(String(320), nullable=True)
+    recorded_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    ledger_written_at = Column(DateTime(timezone=True), nullable=True)
+    monday_staged_at = Column(DateTime(timezone=True), nullable=True)
+    remittance_action_id = Column(String(36), nullable=True)
+    voided_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class EngineerGateDB(Base):
+    """Gate 1 (vendor shop drawing) or Gate 2 (measurement photos): approved by an engineer, or overridden by a manager with a written reason."""
+
+    __tablename__ = "engineer_gates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=False, index=True)
+    po_id = Column(Integer, nullable=True, index=True)
+    gate = Column(Integer, nullable=False)                                   # 1 or 2
+    file_ids = Column(JSON, nullable=False, default=list)
+    status = Column(String(12), nullable=False, default="PENDING")           # PENDING, APPROVED, REJECTED, OVERRIDDEN, REVOKED
+    requested_by = Column(String(320), nullable=True)
+    requested_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    decided_by = Column(String(320), nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    note = Column(String(500), nullable=True)
+    override_by = Column(String(320), nullable=True)
+    override_reason = Column(String(500), nullable=True)
+    override_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(String(320), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoke_reason = Column(String(500), nullable=True)
+
+
+class RedactedArtifactDB(Base):
+    __tablename__ = "redacted_artifacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=False, index=True)
+    source_file_id = Column(Integer, nullable=False, index=True)
+    source_sha256 = Column(String(64), nullable=False)
+    redacted_file_id = Column(Integer, nullable=True)
+    redacted_sha256 = Column(String(64), nullable=True)
+    method = Column(String(12), nullable=False, default="AUTO")              # AUTO or ATTESTED
+    findings = Column(JSON, nullable=False, default=list)
+    status = Column(String(12), nullable=False, default="PENDING")           # PENDING, CLEAN, VERIFIED, BLOCKED, VOID
+    verified_by = Column(String(320), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    attested_by = Column(String(320), nullable=True)
+    attested_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class LandedCostSheetDB(Base):
+    __tablename__ = "landed_cost_sheets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=True, index=True)
+    rfq_id = Column(Integer, nullable=True, index=True)
+    vendor_quote_ref = Column(String(80), nullable=True)
+    currency = Column(String(3), nullable=True)
+    lines = Column(JSON, nullable=False, default=list)
+    freight = Column(Numeric(14, 2), nullable=True)
+    tariff_total = Column(Numeric(14, 2), nullable=True)
+    tariff_unknown = Column(Boolean, nullable=False, default=False)
+    landed_total = Column(Numeric(14, 2), nullable=True)
+    tiers = Column(JSON, nullable=False, default=list)
+    picked_tier = Column(String(40), nullable=True)
+    created_by = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class TariffRateDB(Base):
+    __tablename__ = "tariff_rates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String(120), nullable=False, index=True)
+    hs_code = Column(String(16), nullable=True)
+    country = Column(String(2), nullable=True)
+    rate_percent = Column(Numeric(6, 2), nullable=False)
+    effective_from = Column(String(10), nullable=True)
+    note = Column(String(300), nullable=True)
+    updated_by = Column(String(320), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class ShipmentPipelineDB(Base):
+    """Fulfilment pipeline fields of a shipment, kept beside it (the shipments table is not changed)."""
+
+    __tablename__ = "shipment_pipeline"
+
+    shipment_id = Column(Integer, primary_key=True)
+    pipeline = Column(String(32), nullable=False)                            # US_OFFICE_PARCEL, US_MOUNTAIN_MOVERS, CN_FREIGHT_FORWARDER
+    tracking_no = Column(String(64), nullable=True)
+    carrier = Column(String(64), nullable=True)
+    bol_file_id = Column(Integer, nullable=True)
+    quote_options = Column(JSON, nullable=False, default=list)
+    forwarder_digest_at = Column(DateTime(timezone=True), nullable=True)
+    freight_cost_actual = Column(Numeric(14, 2), nullable=True)
+    freight_cost_quoted = Column(Numeric(14, 2), nullable=True)
+    freight_populated_at = Column(DateTime(timezone=True), nullable=True)
+    variance_flag = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class SageImportRowDB(Base):
+    """What one Sage import did to each mirror row (created, updated, closed) and the values before, so exactly that import can be undone; UNDONE is the marker that it was."""
+
+    __tablename__ = "sage_import_rows"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    import_id = Column(Integer, nullable=False, index=True)
+    kind = Column(String(24), nullable=False)
+    row_key = Column(String(200), nullable=False)
+    action = Column(String(8), nullable=False)                               # CREATED, UPDATED, CLOSED, UNDONE
+    before = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)

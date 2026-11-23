@@ -190,7 +190,7 @@ export function PackingSlips() {
         minWidth={640}
         empty={
           <EmptyState title="No packing slips here">
-            A packing slip is made when an order ships. Once one is made it shows up here, ready to print.
+            No packing slip has been made yet. Once one is made it shows up here, ready to print.
           </EmptyState>
         }
       />

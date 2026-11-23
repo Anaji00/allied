@@ -55,6 +55,14 @@ def commit(body: Dict[str, Any] = Body(...), user: dict = Depends(require_manage
         _refuse(exc)
 
 
+@router.post("/history/{import_id}/undo", summary="Take back exactly what one import saved (managers): its new rows are removed, rows it changed are put back. Safe to repeat")
+def undo(import_id: int, user: dict = Depends(require_manager)) -> Dict[str, Any]:
+    try:
+        return sage_import.undo(import_id, user)
+    except sage_import.ImportRefused as exc:
+        _refuse(exc)
+
+
 @router.get("/history", summary="The files brought in from Sage 50, newest first")
 def history(limit: int = Query(50, ge=1, le=200), _user: dict = Depends(require_operator)) -> List[Dict[str, Any]]:
     return sage_import.history(limit)

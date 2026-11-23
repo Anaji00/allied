@@ -1,5 +1,6 @@
 'use client';
 
+import { PipelineCard } from './pipeline-card';
 import { ActionBar } from '@/components/data/action-bar';
 import { RecordFields } from '@/components/data/record-fields';
 import { useState } from 'react';
@@ -33,6 +34,7 @@ export function ShipmentDetail({ shipment: s, statuses, canEdit }: { shipment: S
         text={[`Shipment ${identifier(s)}`, `Status: ${statusLabel(s.status, s.mode)}`, `Arrives: ${day(s.eta_current)}`].join('\n')}
         thread={{ itemType: 'shipment', itemRef: String(s.id) }}
       />
+      <PipelineCard shipmentId={s.id} />
       <RecordFields kind="shipment" refId={String(s.id)} title="Details (click to change)" />
       <div className="flex flex-wrap items-center gap-1.5">
         <ToneBadge tone={statusTone(s.status)}>{statusLabel(s.status, s.mode)}</ToneBadge>

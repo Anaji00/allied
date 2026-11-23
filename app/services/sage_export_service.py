@@ -286,7 +286,7 @@ class SageExportService:
         only_new: bool = False,
         mark_exported: bool = False,
     ) -> str:
-        return self.export_sales_orders(customer_filter, facility, only_new, mark_exported)[0]
+        return self.export_sales_orders(customer_filter, facility, only_new, mark_exported, audit=mark_exported)[0]      # a look at the file (the Sage tab's preview) leaves no audit line; marking it exported does
 
     def export_sales_orders(
         self,
@@ -294,6 +294,7 @@ class SageExportService:
         facility: Optional[str] = None,
         only_new: bool = False,
         mark_exported: bool = False,
+        audit: bool = True,
     ) -> Tuple[str, List[str]]:
         """
         Generates official Sage 50 Sales Order import CSV format:
@@ -442,8 +443,8 @@ class SageExportService:
             csv_content = output.getvalue()
             output.close()
 
-            # Audit log entry
-            audit_log(
+            # Audit log entry: only when the file is taken for use (downloaded or marked exported), never for a look
+            audit and audit_log(
                 action="SAGE_50_EXPORT",
                 resource_type="SAGE_SO_CSV",
                 detail=(
@@ -467,7 +468,7 @@ class SageExportService:
         only_new: bool = False,
         mark_exported: bool = False,
     ) -> str:
-        return self.export_purchase_orders(vendor_filter, facility, only_new, mark_exported)[0]
+        return self.export_purchase_orders(vendor_filter, facility, only_new, mark_exported, audit=mark_exported)[0]
 
     def export_purchase_orders(
         self,
@@ -475,6 +476,7 @@ class SageExportService:
         facility: Optional[str] = None,
         only_new: bool = False,
         mark_exported: bool = False,
+        audit: bool = True,
     ) -> Tuple[str, List[str]]:
         """
         Generates official Sage 50 Purchase Order import CSV format:
@@ -613,8 +615,8 @@ class SageExportService:
             csv_content = output.getvalue()
             output.close()
 
-            # Audit log entry
-            audit_log(
+            # Audit log entry: only when the file is taken for use (downloaded or marked exported), never for a look
+            audit and audit_log(
                 action="SAGE_50_EXPORT",
                 resource_type="SAGE_PO_CSV",
                 detail=(
@@ -640,6 +642,10 @@ class SageExportService:
         code = (currency or settings.DEFAULT_CURRENCY).upper()
         if code == "USD":
             return amount
+        from app.services import fx
+
+        if code in ("CAD", "CNY"):                                       # the same rates the Orders screen uses (live when switched on, else the settings), so the two totals agree
+            return (amount * Decimal(str(fx.cad_to_usd() if code == "CAD" else fx.cny_to_usd()))).quantize(Decimal("0.01"))
         rate = settings.FX_RATES.get(code)
         if not rate:
             raise ValueError(f"No exchange rate is configured for '{code}' (set FX_RATES); the amount is not treated as dollars.")
@@ -696,7 +702,7 @@ class SageExportService:
             if not by:
                 return "Nothing ready."
             per = "; ".join(f"{c} {v:,.2f}" for c, v in sorted(by.items()))
-            return per if len(by) == 1 else f"{per} (about USD {usd:,.2f} if converted at today's rates)"
+            return per if len(by) == 1 else f"{per} (about ${usd:,.0f} if converted at today's rates)"
 
         # Report the batch currency honestly: USD once normalised, and say so
         # explicitly when the batch spans more than one source currency.

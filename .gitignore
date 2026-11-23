@@ -23,3 +23,6 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# Tesseract language data downloaded locally (Simplified Chinese)
+/tessdata/

@@ -22,6 +22,8 @@ import { CompareJobFiles } from './compare-job-files';
 import { CallNote } from './call-note';
 import { GoTo } from '@/components/data/go-to';
 import { Tags } from '@/components/organize/tags';
+import { GatesCard, PaymentsCard } from './gates-payments';
+import { RedactionPanel } from './redaction-panel';
 import { AutomationLog } from './automation-log';
 import { PacketRead } from './packet-read';
 import { PrepDialog } from './prep-dialog';
@@ -301,6 +303,9 @@ export function JobPage() {
         </Card>
 
         <PurchaseOrders job={job} />
+        <GatesCard job={job} />
+        <RedactionPanel job={job} />
+        <PaymentsCard job={job} />
 
         <SalesOrderCard job={job} />
 

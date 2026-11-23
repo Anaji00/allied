@@ -186,7 +186,7 @@ async def _caller(request: Request) -> Dict[str, Any]:
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth[7:])
     user = await get_current_user(creds)
     if user.get("role") not in ("ADMIN", "MANAGER", "OPERATOR"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operators only.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only staff (operators and above) can do this; a view-only sign-in cannot.")
     return user
 
 
@@ -279,7 +279,7 @@ def explain(exception_id: str, user: dict = Depends(require_viewer)):
 
     item = next((e for e in exception_queue_service.list_exceptions() if e.exception_id == exception_id), None)
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such exception.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That stuck job was not found; it may already be resolved.")
     from app.core import status_words
 
     fixed = status_words.explain_text(item.exception_type)

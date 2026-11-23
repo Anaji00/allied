@@ -96,7 +96,7 @@ def list_orders(
     db: Session = Depends(get_db),
     _user: dict = Depends(require_viewer),
 ) -> OrderPage:
-    """The orders table. Reads the database, so it survives restarts, unlike the cache."""
+    """The orders table. Reads the database, so it survives restarts, unlike the cache. Cost and margin are for managers; everyone else gets null."""
     floor = float(settings.MIN_GROSS_MARGIN_PCT)
     page = DatabaseService.list_orders(
         db, q=q, view=view, status=order_status, vendor=vendor,
@@ -104,6 +104,12 @@ def list_orders(
     )
     _attach_sage(page["items"])
     _attach_job(page["items"])
+    names = _slip_names()
+    for row in page["items"]:
+        row["has_packing_slip"] = _has_slip(row.get("sales_order_number"), row.get("packing_slip_path"), names)
+    from app.core.money_view import hide_orders
+
+    hide_orders(page["items"], _user)
     return OrderPage(total=page["total"], limit=limit, offset=offset, min_margin_pct=floor, items=page["items"])
 
 
@@ -222,6 +228,27 @@ def orders_attention(_user: dict = Depends(require_viewer)) -> Dict[str, int]:
     return order_attention.counts()
 
 
+def _slip_names() -> set:
+    """The file names in the packing-slip folder, read once (a listing only: nothing is opened, written or moved)."""
+    try:
+        folder = (Path(settings.OUTPUT_DIR) / "packing_slips").resolve()
+        return {p.name for p in folder.iterdir() if p.is_file() and p.resolve().parent == folder}          # a link that leads somewhere else is not a slip
+    except OSError:
+        return set()
+
+
+def _has_slip(so: Any, stored: Any, names: set) -> bool:
+    """A slip exists when the stored path points at a file, or, when it is empty or stale, a file named packing_slip_SO_<number>.pdf is in the slip folder (the same name the download uses)."""
+    try:
+        if stored and Path(str(stored)).is_file():
+            return True
+    except OSError:
+        pass
+    number = str(so or "").strip()
+    number = number[3:] if number.upper().startswith("SO-") else number
+    return bool(_SO_NUMBER_RE.fullmatch(number)) and f"packing_slip_SO_{number}.pdf" in names
+
+
 @router.get("/suspected", summary="Read-only: orders that look like tests or duplicates, with the reason, for a person to decide (nothing is changed)")
 def suspected_orders(_user: dict = Depends(require_manager)) -> Dict[str, Any]:
     from app.services import order_audit
@@ -240,10 +267,12 @@ def get_order(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order {so_number} not found.")
     slip = order.pop("packing_slip_path", None)
-    order["has_packing_slip"] = bool(slip) and Path(slip).is_file()
+    order["has_packing_slip"] = _has_slip(order.get("sales_order_number"), slip, _slip_names())
     _attach_job([order])
     order["min_margin_pct"] = float(settings.MIN_GROSS_MARGIN_PCT)
-    return order
+    from app.core.money_view import hide_order
+
+    return hide_order(order, _user)
 
 
 @router.get(

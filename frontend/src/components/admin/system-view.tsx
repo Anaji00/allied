@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
+import { refreshLog } from '@/lib/authlog';
 import { authFetch, pollMailboxNow, simulateMondayStatus } from '@/lib/api';
 import { api, ok } from '@/lib/api/client';
 import { dateTime, since, words } from '@/lib/format';
@@ -66,6 +67,7 @@ export function SystemView() {
         </>
       )}
       {tab === 'monday' && <Monday />}
+      {hasRole('ADMIN') && <RenewLog />}
     </div>
   );
 }
@@ -544,22 +546,25 @@ const FILTERS = ['', 'FAILED', 'DEAD', 'RETRY', 'DONE', 'IGNORED'] as const;
 
 const ecol = columnHelper<Event>();
 const eventColumns = ecol.columns([
-  ecol.accessor('id', { header: '#', cell: (c) => <span className="tabular-nums">{c.getValue()}</span> }),
-  ecol.accessor('received_at', { header: 'Received', cell: (c) => <span className="whitespace-nowrap">{dateTime(c.getValue())}</span> }),
+  ecol.accessor('id', { header: 'No.', cell: (c) => <span className="tabular-nums">{c.getValue()}</span> }),
+  ecol.accessor('received_at', {
+    header: 'When it arrived',
+    cell: (c) => <span className="whitespace-nowrap">{dateTime(c.getValue())}</span>,
+  }),
   ecol.accessor('item_name', {
-    header: 'Item',
+    header: 'monday item',
     meta: { className: 'max-w-72 truncate' },
     cell: (c) => c.getValue() || (c.row.original.item_id ? `Item ${c.row.original.item_id}` : '–'),
   }),
-  ecol.accessor('label', { header: 'Change', cell: (c) => c.getValue() || words(c.row.original.action) || '–' }),
+  ecol.accessor('label', { header: 'What changed', cell: (c) => c.getValue() || words(c.row.original.action) || '–' }),
   ecol.accessor('status', {
-    header: 'Outcome',
+    header: 'What the app did',
     cell: (c) => {
       const s = EVENT_STATUS[c.getValue()] ?? { label: words(c.getValue()), tone: 'neutral' as Tone };
       return <ToneBadge tone={s.tone}>{s.label}</ToneBadge>;
     },
   }),
-  ecol.accessor('attempts', { header: 'Tries', meta: { align: 'right' } }),
+  ecol.accessor('attempts', { header: 'Times tried', meta: { align: 'right' } }),
 ]);
 
 function Monday() {
@@ -599,6 +604,11 @@ function Monday() {
 
   return (
     <div className="grid gap-4">
+      <p className="text-xs text-muted-foreground">
+        Each line is a change someone made on a monday board. <b>Done</b> means the app handled it. <b>Ignored</b> means it was a change on
+        a board or column the app does not track, so there is nothing to do. <b>Retrying</b> means the app is trying again.{' '}
+        <b>Needs a person</b> or <b>Gave up</b> means someone should look.
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <FilterChips
           label="Show"
@@ -799,5 +809,30 @@ function TestEvent({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** For admins: every sign-in renewal this browser has made (when, why, what the server said, what the app did). */
+function RenewLog() {
+  const [rows, setRows] = useState<ReturnType<typeof refreshLog>>([]);
+  return (
+    <details
+      className="text-xs text-muted-foreground"
+      onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && setRows(refreshLog())}
+    >
+      <summary className="cursor-pointer">Sign-in renewals in this browser (for troubleshooting)</summary>
+      {rows.length === 0 ? (
+        <p className="mt-1">None yet in this browser session.</p>
+      ) : (
+        <ul className="mt-1 grid gap-0.5 font-mono">
+          {rows.map((r, i) => (
+            <li key={i}>
+              {r.at.slice(11, 19)} · {String(r.trigger)} · {String(r.status ?? '')} · {String(r.did ?? '')}
+              {r.why ? ` · ${String(r.why)}` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }

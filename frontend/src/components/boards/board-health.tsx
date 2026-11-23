@@ -55,10 +55,10 @@ export function BoardHealth({ boardId, onOpenItem }: { boardId: string; onOpenIt
       >
         {!clean && <ChevronRight className={cn('size-4 transition-transform', open && 'rotate-90')} aria-hidden />}
         <span className="font-medium">{clean ? 'Nothing to fix' : 'Needs fixing'}</span>
-        <ToneBadge tone={h.clean_pct >= 90 ? 'ok' : h.clean_pct >= 60 ? 'warn' : 'bad'}>{Math.round(h.clean_pct)}% clean</ToneBadge>
+        <ToneBadge tone={h.clean_pct >= 90 ? 'ok' : h.clean_pct >= 60 ? 'warn' : 'bad'}>{Math.round(h.clean_pct)}% complete</ToneBadge>
         {!clean && (
           <span className="text-muted-foreground">
-            {h.items_with_issues} of {h.open_items} open items
+            {h.items_with_issues} of {h.open_items} open items have something missing or odd
           </span>
         )}
       </button>

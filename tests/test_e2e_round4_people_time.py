@@ -36,7 +36,7 @@ CHI = ZoneInfo("America/Chicago")
     ("ADMIN", "post", "/api/v1/autopilot/run", {"dry_run": True}, True),
     ("VIEWER", "get", "/api/v1/autopilot/scorecard", None, False),
     ("MANAGER", "get", "/api/v1/autopilot/scorecard", None, True),
-    ("VIEWER", "get", "/api/v1/mail", None, True),
+    ("VIEWER", "get", "/api/v1/mail", None, False),
     ("VIEWER", "post", "/api/v1/mail/1/handled", None, False),
     ("VIEWER", "patch", "/api/v1/vendors/1", {"follow_up_days": 10}, False),
     ("VIEWER", "get", "/api/v1/boards/1/timeline", None, True),

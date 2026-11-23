@@ -23,13 +23,17 @@ def _fail(exc: Exception):
 @router.get("", summary="Every purchase order once (the PO table, vendor lines and orders merged by PO number)")
 def all_pos(q: str = Query("", max_length=80), vendor: str = Query("", max_length=80), status_text: str = Query("", alias="status", max_length=40),
             user: dict = Depends(require_viewer)) -> List[Dict[str, Any]]:
-    return purchase_orders.unified(q, vendor, status_text, staff=user.get("role") in ("ADMIN", "MANAGER", "OPERATOR"))
+    from app.core.money_view import hide_pos
+
+    return hide_pos(purchase_orders.unified(q, vendor, status_text, staff=user.get("role") in ("ADMIN", "MANAGER", "OPERATOR")), user)
 
 
 @router.get("/{po_id}", summary="One purchase order")
 def one(po_id: int, _user: dict = Depends(require_viewer)) -> Dict[str, Any]:
+    from app.core.money_view import hide_po
+
     try:
-        return purchase_orders.get(po_id)
+        return hide_po(purchase_orders.get(po_id), _user)
     except (LookupError, jobs.JobError, ValueError) as exc:
         _fail(exc)
 
@@ -90,6 +94,18 @@ def packing_list(po_id: int, destination: str = Query("", max_length=2, descript
     info = _paper(po_id, destination, currency)
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(info["po_number"] or f"draft_{po_id}")).strip("_") or f"draft_{po_id}"
     return Response(import_paperwork.packing_list_pdf(info), media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="PL_{name}.pdf"'})
+
+
+@router.get("/{po_id}/bill-match", summary="The PO's lines next to the supplier bills checked against it, with the differences (quantity, unit price, freight) as figures")
+def bill_match(po_id: int, user: dict = Depends(require_operator)) -> Dict[str, Any]:
+    from app.core.money_view import hide_po
+    from app.services import bill_match as bm
+
+    try:
+        po = hide_po(purchase_orders.get(po_id), user)
+    except (LookupError, jobs.JobError, ValueError) as exc:
+        _fail(exc)
+    return bm.for_po(po_id, po)
 
 
 @router.post("/{po_id}/email-draft", summary="Queue the vendor email (PO PDF + design files) for a person to OK; nothing is sent here")

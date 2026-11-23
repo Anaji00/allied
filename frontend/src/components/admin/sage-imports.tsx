@@ -11,13 +11,7 @@ import { EmptyState, ErrorState, RowsSkeleton } from '@/components/data/states';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
-import {
-  downloadSageCsv,
-  fetchCSVTemplates,
-  fetchSageExportSummary,
-  generateSageBatchBundle,
-  unmarkSageExport,
-} from '@/lib/api';
+import { downloadSageCsv, fetchCSVTemplates, fetchSageExportSummary, generateSageBatchBundle, unmarkSageExport } from '@/lib/api';
 import { money } from '@/lib/format';
 import { BringInFromSage } from './sage-bring-in';
 import { ListImport } from './list-import';
@@ -46,6 +40,9 @@ export function SageImports({ param = 'tab' }: { param?: string }) {
     </div>
   );
 }
+
+/** The server writes "about USD 151,993.12"; on screen it reads "about $151,993.12", like every other converted amount. */
+const plainUsd = (t?: string) => (t ? t.replace(/about USD ([\d,]+(?:\.\d+)?)/g, 'about $$$1') : t);
 
 type Summary = {
   sales_orders_count?: number;
@@ -130,23 +127,29 @@ function SageFiles() {
           title="Sales orders"
           facts={[
             ['Ready', String(s.sales_orders_count ?? 0)],
-            ['Total', s.sales_label ?? `about ${money(s.total_sales_volume ?? 0)}`],
+            ['Total', plainUsd(s.sales_label) ?? `about ${money(s.total_sales_volume ?? 0)}`],
           ]}
           label="Download and mark as sent to Sage: sales orders"
           busy={download.isPending && download.variables === 'sales-orders'}
           disabled={download.isPending}
-          onDownload={() => download.mutate('sales-orders')}
+          onDownload={() => {
+            if (window.confirm(`This marks ${s.sales_orders_count ?? 0} sales order(s) as sent to Sage. Continue?`))
+              download.mutate('sales-orders');
+          }}
         />
         <FileCard
           title="Supplier POs"
           facts={[
             ['Lines ready', String(s.purchase_orders_count ?? 0)],
-            ['Payable', s.purchase_label ?? `about ${money(s.total_purchase_volume ?? 0)}`],
+            ['Payable', plainUsd(s.purchase_label) ?? `about ${money(s.total_purchase_volume ?? 0)}`],
           ]}
           label="Download and mark as sent to Sage: supplier POs"
           busy={download.isPending && download.variables === 'purchase-orders'}
           disabled={download.isPending}
-          onDownload={() => download.mutate('purchase-orders')}
+          onDownload={() => {
+            if (window.confirm(`This marks ${s.purchase_orders_count ?? 0} supplier PO line(s) as sent to Sage. Continue?`))
+              download.mutate('purchase-orders');
+          }}
         />
       </div>
 
@@ -212,6 +215,10 @@ function FileCard({
         {busy ? <Loader2 className="animate-spin" /> : <Download />}
         {label}
       </Button>
+      <p className="text-xs text-muted-foreground">
+        Pressing this makes the file and records these orders as sent to Sage, so they are not in the next file. To only look, use the
+        preview below.
+      </p>
     </section>
   );
 }

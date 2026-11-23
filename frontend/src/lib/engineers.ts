@@ -18,7 +18,7 @@ export const ENGINEERS = [
  */
 export const LEADERSHIP = [
   { name: 'Doug Hamlin', title: 'Founder and CEO' },
-  { name: 'Athish Singh', title: 'Senior staff' },
+  { name: 'Athish Singh', title: 'Solutions engineer' },
 ];
 
 /** The sales rep on every customer record. Offered in people lists; her title is not shown anywhere, so none is claimed. */
@@ -51,7 +51,7 @@ export function withEngineers<T extends Person>(people: T[]): Person[] {
   for (const name of SALES) {
     const found = out.find((p) => p.email && norm(p.name) === norm(name));
     if (found) found.role = 'sales';
-    else out.push({ email: '', name, role: 'sales', label: `${name} (no email yet)` });
+    else out.push({ email: '', name, role: 'sales', label: `${name}, office manager (no email yet)` });
   }
   return out.sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
 }

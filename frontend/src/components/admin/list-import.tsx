@@ -241,8 +241,8 @@ export function ListImport() {
       )}
 
       {done && (
-        <div role="status" className="grid gap-1 rounded-md bg-ok-soft p-3 text-[13px]">
-          <p className="font-medium text-ok">
+        <div role="status" className={`grid gap-1 rounded-md p-3 text-[13px] ${done.status === 'SUCCESS' ? 'bg-ok-soft' : 'bg-warn-soft'}`}>
+          <p className={`font-medium ${done.status === 'SUCCESS' ? 'text-ok' : 'text-warn'}`}>
             Done. {done.records_created ?? 0} added, {done.records_updated ?? 0} changed,{' '}
             {Math.max(0, (done.rows_processed ?? 0) - (done.records_created ?? 0) - (done.records_updated ?? 0))} skipped. {label}
           </p>

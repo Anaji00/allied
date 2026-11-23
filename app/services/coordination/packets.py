@@ -254,7 +254,7 @@ def _as_dict(r, staff: bool = True) -> Dict[str, Any]:
     if not staff:
         fields.pop("sales_order_number", None)             # our own sales order number is internal
     return {"id": r.id, "job_id": r.job_id, "kind": r.kind, "label": r.label, "pages": f"{r.page_from}-{r.page_to}" if r.page_to != r.page_from else str(r.page_from),
-            "page_from": r.page_from, "page_to": r.page_to, "fields": fields, "warnings": warnings_for(fields), "confirmed": bool(r.confirmed_at), "confirmed_by": r.confirmed_by, "source": r.source_name, "packet": r.source_sha, "at": r.created_at.isoformat() if r.created_at else None}
+            "page_from": r.page_from, "page_to": r.page_to, "fields": fields, "warnings": warnings_for(fields), "confirmed": bool(r.confirmed_at), "check": None if r.confirmed_at else "needs a person to confirm against the image", "confirmed_by": r.confirmed_by, "source": r.source_name, "packet": r.source_sha, "at": r.created_at.isoformat() if r.created_at else None}
 
 
 def ambiguous_date(text: str) -> bool:
@@ -368,7 +368,7 @@ def for_job(job_id: int, staff: bool = True) -> List[Dict[str, Any]]:
     from app.models.db_models import JobDocumentDB
 
     with _db() as db:
-        return [_as_dict(r, staff) for r in db.query(JobDocumentDB).filter(JobDocumentDB.job_id == job_id).order_by(JobDocumentDB.id).all()]
+        return [_as_dict(r, staff) for r in db.query(JobDocumentDB).filter(JobDocumentDB.job_id == job_id, JobDocumentDB.kind != "PAYMENT_SHEET").order_by(JobDocumentDB.id).all()]      # the vendor payment sheet is money: managers read it through the payment routes only
 
 
 def unattached() -> List[Dict[str, Any]]:

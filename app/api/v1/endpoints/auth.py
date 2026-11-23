@@ -175,6 +175,51 @@ def login(request: LoginRequest, http: Request, db: Session = Depends(get_db)):
     )
 
 
+_REFUSAL_SEEN: dict = {}                 # (who, address, token id, reason) -> [last written at, repeats held back]: a stale tab that keeps retrying leaves one line per 10 minutes, with a count
+_REFUSAL_EVERY_S = 600.0
+_REFUSAL_MAX = 2000
+
+
+def _refusal_due(key: tuple, now: float) -> int:
+    """-1 when this refusal was already written inside the window (count it, write nothing); otherwise the number of repeats held back since the last line (0 for the first)."""
+    seen = _REFUSAL_SEEN.get(key)
+    if seen is not None and now - seen[0] < _REFUSAL_EVERY_S:
+        seen[1] += 1
+        return -1
+    held = seen[1] if seen else 0
+    if len(_REFUSAL_SEEN) >= _REFUSAL_MAX:
+        for k in [k for k, v in _REFUSAL_SEEN.items() if now - v[0] >= _REFUSAL_EVERY_S][:_REFUSAL_MAX // 2] or list(_REFUSAL_SEEN)[:_REFUSAL_MAX // 2]:
+            _REFUSAL_SEEN.pop(k, None)
+    _REFUSAL_SEEN[key] = [now, 0]
+    return held
+
+
+def _refused(detail: str, code: str) -> HTTPException:
+    """A refused renewal. The header names the reason in one word the screen can act on: 'sessions_ended', 'reuse_detected', 'password_changed', 'not_a_renewal_token', 'token_expired' or 'invalid_token'. All of them mean
+    the same thing to a page: stop retrying and ask the person to sign in."""
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail, headers={"X-Auth-Code": code})
+
+
+def _audit_refresh_refused(db: Session, token: str, http: Request, why: str, now: float) -> None:
+    """A refresh that was turned away leaves a line saying why and how old the token was, so the next "your session ended" can be told apart (expired, invalid, wrong type). The claims are read
+    WITHOUT trusting them, only to name who it was and how old the token is; nothing here grants anything."""
+    try:
+        import jwt as _jwt
+
+        claims = _jwt.decode(token, options={"verify_signature": False})
+        who = str(claims.get("sub") or "")
+        if not who or "@" not in who:
+            return
+        age = max(0.0, now - float(claims.get("iat") or now))
+        held = _refusal_due((who.lower(), _client_address(http), str(claims.get("jti") or "")[:16], str(why)[:80]), now)
+        if held < 0:
+            return
+        audit_event(db=db, action="REFRESH_REFUSED", resource_type="USER", resource_id=who[:200], actor_email=who[:200], actor_role="", facility="HQ",
+                    detail=f"reason={str(why)[:80]}; repeats_held_back={held}; token_type={claims.get('type')}; token_age_s={age:.0f}; token_expires_in_s={float(claims.get('exp') or 0) - now:.0f}; server_time={now:.0f}", ip_address=_client_address(http))
+    except Exception:  # noqa: BLE001 - the diagnosis must never change the answer
+        return
+
+
 @router.post("/refresh", response_model=dict, summary="Refresh an access token")
 def refresh_token(request: RefreshRequest, http: Request, db: Session = Depends(get_db)):
     """Exchanges a valid refresh token for a new access token.
@@ -183,12 +228,16 @@ def refresh_token(request: RefreshRequest, http: Request, db: Session = Depends(
     token outlives the access token by weeks, so a disabled or deleted account
     must not be able to keep minting access tokens from one.
     """
-    payload = decode_token(request.refresh_token)
+    import time as _time
+
+    started = _time.time()
+    try:
+        payload = decode_token(request.refresh_token)
+    except HTTPException as exc:
+        _audit_refresh_refused(db, request.refresh_token, http, exc.detail, started)
+        raise _refused(str(exc.detail), "token_expired" if "expired" in str(exc.detail).lower() else "invalid_token")
     if payload.get("type") != "refresh":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token type. Expected refresh token.",
-        )
+        raise _refused("That is not a renewal token. Sign in again.", "not_a_renewal_token")
 
     email = payload.get("sub") or ""
     assert_account_active(db, email)
@@ -200,10 +249,7 @@ def refresh_token(request: RefreshRequest, http: Request, db: Session = Depends(
     # A refresh token made before tokens carried a password stamp cannot be checked against a
     # password change, so it is not renewed: the person signs in once more.
     if stamp is None or stamp != login_guard.password_stamp(user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="The password was changed. Sign in again.",
-        )
+        raise _refused("The password was changed. Sign in again.", "password_changed")
     token_data = {
         "sub": user.email,
         "name": user.full_name,
@@ -214,14 +260,20 @@ def refresh_token(request: RefreshRequest, http: Request, db: Session = Depends(
     from app.core import refresh_state
 
     address = _client_address(http)
+    age = max(0.0, started - float(payload.get("iat") or started))
+    diag = f"token_age_s={age:.0f}; token_expires_in_s={float(payload.get('exp') or 0) - started:.0f}; jti={str(payload.get('jti') or 'none')[:8]}; server_time={started:.0f}"
     if float(payload.get("iat") or 0) < refresh_state.revoked_before(user.email):                 # a token from before this person's sessions were ended
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your sessions were ended for safety. Sign in again.")
+        held = _refusal_due((user.email.lower(), address, str(payload.get("jti") or "")[:16], "sessions_ended_earlier"), started)
+        if held >= 0:
+            audit_event(db=db, action="REFRESH_REFUSED", resource_type="USER", resource_id=user.email, actor_email=user.email, actor_role=user.role, facility=user.facility or "HQ",
+                        detail=f"reason=sessions_ended_earlier; repeats_held_back={held}; {diag}", ip_address=address)
+        raise _refused("Your sessions were ended for safety. Sign in again.", "sessions_ended")
     decision = refresh_state.exchange(user.email, payload.get("jti"))
     if decision["action"] == "theft":
         audit_event(db=db, action="REFRESH_REUSE_DETECTED", resource_type="USER", resource_id=user.email, actor_email=user.email, actor_role=user.role, facility=user.facility or "HQ",
-                    detail="An old refresh token was used again after its grace window; every session of this person was ended", ip_address=address)
+                    detail=f"reason=reuse_after_grace; an old refresh token was used again after its grace window; every session of this person was ended; {diag}", ip_address=address)
         security.forget_account(user.email)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This sign-in was used twice, so all your sessions were ended for safety. Sign in again.")
+        raise _refused("This sign-in was used twice, so all your sessions were ended for safety. Sign in again.", "reuse_detected")
     new_access = create_access_token(token_data)
     # A fresh refresh token comes back too, so a person who keeps working is never asked to sign in again within the refresh window (it slides forward with use). Inside the grace window (parallel
     # refreshes from one page load) the SAME current token is signed again, so nothing forks.
@@ -231,8 +283,8 @@ def refresh_token(request: RefreshRequest, http: Request, db: Session = Depends(
         new_refresh = create_refresh_token(token_data, jti=decision["jti"])
         refresh_state._set_latest_exp(user.email, new_refresh) if not decision.get("unrecorded") else None
     audit_event(db=db, action="TOKEN_REFRESH", resource_type="USER", resource_id=user.email, actor_email=user.email, actor_role=user.role, facility=user.facility or "HQ",
-                detail="Access token renewed" + (" (parallel request inside the grace window)" if decision["action"] == "same" else ""), ip_address=address)
-    return {"access_token": new_access, "token_type": "Bearer", "refresh_token": new_refresh}
+                detail="Access token renewed" + (" (parallel request inside the grace window)" if decision["action"] == "same" else "") + f"; reason={decision['action']}; {diag}", ip_address=address)
+    return {"access_token": new_access, "token_type": "Bearer", "refresh_token": new_refresh, "server_time": int(started)}
 
 
 @router.get("/profile", response_model=UserProfile, summary="Get current user profile")

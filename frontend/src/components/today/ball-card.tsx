@@ -10,6 +10,7 @@ type Summary = {
   late: number;
   escalated: number;
   late_means?: string;
+  no_owner_set?: { label?: string; count?: number } | null;
   by_holder: { name: string; kind?: string; count: number; late?: number; oldest_days?: number; waiting_days?: number }[];
   holders?: { name: string; kind?: string; count: number; late?: number; waiting_days?: number; oldest_days?: number }[];
   oldest: { item_type: string; item_ref: string; label: string; ball_name?: string; days_waiting?: number; overdue?: boolean }[];
@@ -34,9 +35,14 @@ export function BallCard() {
   if (!hasRole('MANAGER') || !s || s.open === 0) return null;
   return (
     <section className="grid gap-2 rounded-lg border bg-card px-4 py-3" aria-label="Who owes what">
-      <p className="text-sm font-medium">
-        Who owes what: {s.open} open{s.late > 0 ? `, ${s.late} late` : ''}
-        {s.escalated > 0 ? `, ${s.escalated} escalated` : ''}
+      <p className="flex flex-wrap items-baseline gap-x-2 text-sm font-medium">
+        <span>
+          {s.open} thing{s.open === 1 ? ' is' : 's are'} waiting on someone else
+          {s.late > 0 ? `, ${s.late} of them late` : ''}.
+        </span>
+        <Link href="/chase" className="text-xs font-normal underline underline-offset-2">
+          See who owes us
+        </Link>
       </p>
       {(s.holders ?? s.by_holder).length > 0 && (
         <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
@@ -44,14 +50,24 @@ export function BallCard() {
             const days = h.waiting_days ?? h.oldest_days;
             return (
               <li key={h.name}>
-                {h.name}: {h.count}
+                {h.name === '?' || !h.name ? 'No owner yet' : h.name}: {h.count} thing{h.count === 1 ? '' : 's'}
                 {days != null && days >= 1 ? `, waiting up to ${Math.round(days)} days` : ''}
               </li>
             );
           })}
         </ul>
       )}
-      {s.late_means && <p className="text-xs text-muted-foreground">{s.late_means}</p>}
+      {s.no_owner_set && (s.no_owner_set.count ?? 0) > 0 && (
+        <p className="text-[13px] text-muted-foreground">
+          {s.no_owner_set.label ?? 'No owner set'}: {s.no_owner_set.count}
+        </p>
+      )}
+      {s.late_means && (
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">What does “late” mean here?</summary>
+          <p className="mt-1">{s.late_means}</p>
+        </details>
+      )}
       {s.oldest.length > 0 && (
         <ul className="grid gap-0.5 text-[13px]">
           {s.oldest.slice(0, 3).map((o) => (
@@ -60,7 +76,11 @@ export function BallCard() {
                 {o.label}
               </Link>
               <span className="text-muted-foreground">
-                {o.ball_name ? ` waiting on ${o.ball_name}` : ''}
+                {o.ball_name
+                  ? o.label.toLowerCase().includes(o.ball_name.toLowerCase())
+                    ? ', waiting on the vendor'
+                    : `, waiting on ${o.ball_name}`
+                  : ''}
                 {o.days_waiting != null ? `, ${days(o.days_waiting)}` : ''}
                 {o.overdue ? ', overdue' : ''}
               </span>

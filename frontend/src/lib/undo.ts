@@ -11,6 +11,8 @@ type Pending = {
   commit: (keepalive: boolean) => Promise<unknown>;
   onUndo: () => void;
   onError: (error: unknown) => void;
+  /** Set for anything that goes outside Allied: leaving the page drops it (it stays waiting) instead of sending it. */
+  dropOnLeave?: boolean;
 };
 
 /**
@@ -19,7 +21,8 @@ type Pending = {
  * Anything still waiting is sent when the page unmounts, and on tab close with
  * `keepalive`, so leaving early never drops a decision.
  */
-export function useUndoQueue() {
+export function useUndoQueue(opts: { dropOnLeave?: boolean } = {}) {
+  const dropOnLeave = Boolean(opts.dropOnLeave);
   const pending = useRef(new Map<string, Pending>());
 
   const send = useCallback(async (p: Pending, keepalive: boolean) => {
@@ -34,13 +37,22 @@ export function useUndoQueue() {
 
   useEffect(() => {
     const queue = pending.current;
-    const flush = () => queue.forEach((p) => void send(p, true));
+    // Leaving the page normally sends what is waiting. For something that goes outside Allied (an email) it is dropped instead: the item
+    // is still waiting for approval next time, so nothing is sent while its Undo notice is on screen.
+    const flush = () => queue.forEach((p) => !p.dropOnLeave && !dropOnLeave && void send(p, true));
     window.addEventListener('pagehide', flush);
     return () => {
       window.removeEventListener('pagehide', flush);
-      queue.forEach((p) => void send(p, false));
+      queue.forEach((p) => {
+        if (dropOnLeave || p.dropOnLeave) {
+          clearTimeout(p.timer);
+          toast.dismiss(p.id);
+          p.onUndo();
+        } else void send(p, false);
+      });
+      queue.clear();
     };
-  }, [send]);
+  }, [send, dropOnLeave]);
 
   /** Shows `message` with Undo; runs `commit` after the delay unless undone. */
   return useCallback(
@@ -50,7 +62,13 @@ export function useUndoQueue() {
         commit,
         onUndo,
         onError,
-      }: { commit: (keepalive: boolean) => Promise<unknown>; onUndo: () => void; onError: (error: unknown) => void },
+        dropOnLeave: dropThis,
+      }: {
+        commit: (keepalive: boolean) => Promise<unknown>;
+        onUndo: () => void;
+        onError: (error: unknown) => void;
+        dropOnLeave?: boolean;
+      },
     ) => {
       const id = `${Date.now()}-${Math.random()}`;
       const entry: Pending = {
@@ -58,6 +76,7 @@ export function useUndoQueue() {
         commit,
         onUndo,
         onError,
+        dropOnLeave: dropThis,
         timer: setTimeout(() => {
           const p = pending.current.get(id);
           if (p) void send(p, false);

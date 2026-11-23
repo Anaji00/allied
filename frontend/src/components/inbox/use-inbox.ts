@@ -53,7 +53,7 @@ export type InboxItem = {
   draft?: {
     id: string;
     kind: string;
-    email?: { to?: string; subject?: string; body?: string };
+    email?: { to?: string; subject?: string; body?: string; delivery_note?: string };
     why: string[];
     /** What goes with the email: the purchase order PDF first, then the design files. */
     attachments?: { name: string; size?: number | null }[];
@@ -105,6 +105,7 @@ type Draft = {
   kind?: string | null;
   args?: Record<string, unknown> | null;
   why?: string[] | null;
+  delivery_note?: string | null;
   created_at?: string | null;
 };
 type MondayEvent = {
@@ -346,7 +347,9 @@ function fromDraft(d: Draft): InboxItem {
   }
   // A vendor's answer updates the order in the app (never monday); everything else is an email.
   const update = d.tool === 'update_vendor_job';
-  const email = update ? undefined : { to: text('to'), subject: text('subject'), body: text('body') };
+  const email = update
+    ? undefined
+    : { to: text('to'), subject: text('subject'), body: text('body'), delivery_note: d.delivery_note ?? text('delivery_note') };
   const facts: [string, string][] = [];
   if (email?.to) facts.push(['To', email.to]);
   if (email?.subject) facts.push(['Subject', email.subject]);

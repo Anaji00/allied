@@ -32,14 +32,31 @@ export function setUnauthorizedHandler(handler) {
 export async function authFetch(url, options = {}) {
   const send = (token) => {
     const headers = new Headers(options.headers || {});
-    if (token) headers.set('Authorization', `Bearer ${token}`);
+    // The sign-in token goes only to Allied's own API, never to another address.
+    let own = false;
+    try {
+      const u = new URL(String(url), window.location.href);
+      own = u.origin === window.location.origin && u.pathname.startsWith('/api/');
+    } catch {
+      own = false;
+    }
+    if (token && own) headers.set('Authorization', `Bearer ${token}`);
     return fetch(url, { ...options, headers });
   };
 
-  let res = await send(_accessToken);
+  const sent = _accessToken;
+  let res = await send(sent);
 
   if (res.status === 401 && _onUnauthorized) {
-    const refreshed = await _onUnauthorized();
+    const body = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    const refreshed = await _onUnauthorized({
+      url: String(url),
+      sentToken: sent,
+      detail: typeof body?.detail === 'string' ? body.detail : '',
+    });
     if (refreshed) {
       _accessToken = refreshed;
       res = await send(refreshed);
@@ -96,8 +113,6 @@ export async function dryRunOrder(payload) {
   return res.json();
 }
 
-
-
 /**
  * Master Data & Batch Order CSV Imports API
  */
@@ -106,9 +121,7 @@ export async function dryRunOrder(payload) {
  * @param {string | null} [csvText]
  */
 export async function importCSVData(importTypeOrPayload, csvText = null) {
-  const body = csvText !== null
-    ? { import_type: importTypeOrPayload, csv_text: csvText }
-    : importTypeOrPayload;
+  const body = csvText !== null ? { import_type: importTypeOrPayload, csv_text: csvText } : importTypeOrPayload;
   const res = await authFetch(`${API_BASE}/csv/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -234,7 +247,6 @@ export async function fetchCachedVendor(vendorId) {
   return res.json();
 }
 
-
 /**
  * Compliance, MTRs & CofC API
  */
@@ -282,7 +294,6 @@ export async function draftQuoteFromWear(payload) {
   }
   return res.json();
 }
-
 
 /**
  * Packing slip PDF. Fetched with the sign-in token and handed over as a file;
@@ -417,9 +428,7 @@ export async function generateSageBatchBundle() {
  * Returns the sales order numbers it marked (empty if none were new).
  */
 export async function downloadSageCsv(kind, params = {}) {
-  const allowed = kind === 'sales-orders'
-    ? ['customer', 'only_new', 'mark_exported']
-    : ['vendor', 'only_new', 'mark_exported'];
+  const allowed = kind === 'sales-orders' ? ['customer', 'only_new', 'mark_exported'] : ['vendor', 'only_new', 'mark_exported'];
   const merged = { only_new: true, mark_exported: true, ...params };
   const query = new URLSearchParams();
   for (const key of allowed) {
@@ -479,7 +488,7 @@ export async function resolveException(exceptionId, payload) {
 export async function simulateMondayStatusTrigger(pulseId, statusLabel) {
   const res = await authFetch(
     `${API_BASE}/webhooks/monday/simulate-trigger?pulse_id=${pulseId}&status_label=${encodeURIComponent(statusLabel)}`,
-    { method: 'POST' }
+    { method: 'POST' },
   );
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -635,8 +644,6 @@ export async function dispatchOrder(soNumber, details = {}) {
   }
   return res.json();
 }
-
-
 
 /**
  * Automation Status
@@ -831,8 +838,7 @@ export const updateShipment = (id, data) => call(`/shipments/${id}`, { method: '
 export const readForwarderEmail = (sender, subject, body) =>
   call('/shipments/forwarder-email', { method: 'POST', json: { sender, subject, body } });
 
-export const fetchAlerts = ({ openOnly = false, everyone = false } = {}) =>
-  call(`/alerts?open_only=${openOnly}&everyone=${everyone}`);
+export const fetchAlerts = ({ openOnly = false, everyone = false } = {}) => call(`/alerts?open_only=${openOnly}&everyone=${everyone}`);
 export const acknowledgeAlert = (id) => call(`/alerts/${id}/acknowledge`, { method: 'POST' });
 export const fetchContacts = () => call('/alerts/contacts');
 export const saveContact = (contact) => call('/alerts/contacts', { method: 'PUT', json: contact });

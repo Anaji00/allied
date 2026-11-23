@@ -37,7 +37,7 @@ const nextConfig = {
       { source: '/audit', destination: '/admin/audit', permanent: false },
       // Folded into Jobs and Orders as sections, so staff work from one place.
       { source: '/shipments', destination: '/logistics', permanent: false },
-      { source: '/vendors', destination: '/contacts', permanent: false },
+      { source: '/vendors', destination: '/contacts?section=vendors', permanent: false },
       { source: '/projects', destination: '/jobs?section=projects', permanent: false },
       { source: '/carriers', destination: '/logistics?section=carriers', permanent: false },
       { source: '/rfqs', destination: '/orders?tab=rfqs', permanent: false },

@@ -164,3 +164,52 @@ def test_reusing_an_old_refresh_token_after_the_grace_window_ends_every_session_
 
         got = dict(db.execute(text("select action, count(*) from audit_log where actor_email = :e and action in ('TOKEN_REFRESH', 'REFRESH_REUSE_DETECTED') group by action"), {"e": EMAIL}).fetchall())
     assert got.get("TOKEN_REFRESH", 0) >= 3 and got.get("REFRESH_REUSE_DETECTED") == 1
+
+
+def test_fifteen_refreshes_in_a_row_each_give_an_access_token_the_very_next_request_accepts(client):
+    """(a) A refresh never hands back an access token the next request rejects (issued-at, expiry, account checks, with the cache emptied in between like an idle account)."""
+    access, refresh = _login(client)
+    for i in range(15):
+        r = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+        assert r.status_code == 200, (i, r.text)
+        assert client.get("/api/v1/auth/profile", headers={"Authorization": f"Bearer {r.json()['access_token']}"}).status_code == 200, i
+        assert abs(r.json()["server_time"] - __import__("time").time()) < 5
+        refresh = r.json()["refresh_token"]
+        if i % 5 == 4:
+            with security._accounts_lock:
+                security._accounts.clear()                                         # (c) a quiet account: the cache is gone, the database says the same
+
+
+def test_the_second_tab_inside_the_grace_window_gets_the_same_current_token_and_one_after_it_ends_every_session_the_documented_rule(client, monkeypatch):
+    """(b) Two tabs hold R0. Both refresh at once: both get R1 (nothing forks). A tab that still holds the PREVIOUS token after the window ends all sessions: that is the reuse rule, and the only
+    way a quiet account is signed out by the server; REFRESH_GRACE_SECONDS sets the window."""
+    import jwt as _jwt
+
+    from app.core import refresh_state
+
+    access, r0 = _login(client)
+    a = client.post("/api/v1/auth/refresh", json={"refresh_token": r0})
+    b = client.post("/api/v1/auth/refresh", json={"refresh_token": r0})
+    jti = lambda r: _jwt.decode(r.json()["refresh_token"], options={"verify_signature": False})["jti"]  # noqa: E731
+    assert a.status_code == b.status_code == 200 and jti(a) == jti(b)
+    nxt = client.post("/api/v1/auth/refresh", json={"refresh_token": a.json()["refresh_token"]})            # tab A moves on to R2
+    assert nxt.status_code == 200 and jti(nxt) != jti(a)
+    monkeypatch.setattr(refresh_state, "GRACE_SECONDS", -1.0)                                                 # the window is over; tab B still holds R1
+    stale = client.post("/api/v1/auth/refresh", json={"refresh_token": b.json()["refresh_token"]})
+    assert stale.status_code == 401 and "used twice" in stale.json()["detail"]
+
+
+def test_every_refresh_leaves_its_reason_and_the_age_of_the_token_and_a_refused_one_says_why(client):
+    from sqlalchemy import text
+
+    access, refresh = _login(client)
+    assert client.post("/api/v1/auth/refresh", json={"refresh_token": refresh}).status_code == 200
+    expired = security.create_refresh_token({"sub": EMAIL, "role": "OPERATOR", "pv": "x"}, expires_at=__import__("time").time() - 60) if False else None
+    old = create_access_token({"sub": EMAIL, "role": "OPERATOR"}, expires_delta=timedelta(seconds=-5))
+    assert client.post("/api/v1/auth/refresh", json={"refresh_token": old}).status_code == 401              # an access token is not a refresh token (and it is expired)
+    with SessionLocal() as db:
+        rows = db.execute(text("select action, detail from audit_log where actor_email = :e and action in ('TOKEN_REFRESH', 'REFRESH_REFUSED') order by id desc limit 4"), {"e": EMAIL}).fetchall()
+    ok = [d for a, d in rows if a == "TOKEN_REFRESH"][0]
+    assert "reason=issue" in ok and "token_age_s=" in ok and "token_expires_in_s=" in ok and "server_time=" in ok
+    refused = [d for a, d in rows if a == "REFRESH_REFUSED"]
+    assert refused and "reason=" in refused[0] and "token_age_s=" in refused[0]

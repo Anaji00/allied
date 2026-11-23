@@ -59,6 +59,7 @@ def main(argv=None) -> int:
     if not env_file.is_file():
         raise SystemExit(f"Refused: {env_file} is missing. Run scripts/demo_seed.py again (with --replace).")
     env = read_env_file(env_file)
+    os.environ.pop("ALLIED_ALLOW_REAL_DB", None)                    # the real database can never be opened from here
     os.environ.update(env)
     from app.config import settings
 
@@ -80,6 +81,11 @@ def main(argv=None) -> int:
     print(f"{sample} sample boards loaded into the board copy (monday stays off and read-only).")
     import uvicorn
 
+    from app.core.logging import logger
+
+    banner = "DEMO COPY, NOT REAL DATA: this app is running on made-up records in " + str(path) + ". Nothing here is real, and nothing leaves this computer."
+    logger.warning(banner)
+    print("=" * len(banner) + "\n" + banner + "\n" + "=" * len(banner))
     print(f"Demo running on http://127.0.0.1:{args.port} with {path}. Point the frontend at it (NEXT_PUBLIC_API_URL=http://localhost:{args.port}).")
     uvicorn.run("app.main:app", host="127.0.0.1", port=args.port)
     return 0

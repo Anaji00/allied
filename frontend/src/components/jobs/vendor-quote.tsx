@@ -8,6 +8,7 @@ import { Field } from '@/components/data/filters';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { PasteToFill } from '@/components/extract/paste-to-fill';
 import { useAuth } from '@/context/AuthContext';
 import { VendorInput } from './vendor-pick';
 import { jobsCall, type Job } from './job-types';
@@ -20,6 +21,7 @@ export function VendorQuoteButton({ job }: { job: Job }) {
   const { hasRole } = useAuth();
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [pasting, setPasting] = useState(false);
   const [form, setForm] = useState({
     vendor: '',
     quote_order_number: '',
@@ -43,11 +45,21 @@ export function VendorQuoteButton({ job }: { job: Job }) {
     },
     onSuccess: (r) => {
       const warnings = (r as { warnings?: string[] } | null)?.warnings ?? [];
-      toast.success('Vendor price recorded', { description: 'That vendor’s purchase order is now a draft, and the managers were told.' });
+      toast.success('Vendor price recorded', {
+        description: 'That vendor’s purchase order is now a draft, and the managers were told.',
+      });
       warnings.forEach((w) => toast.warning(w));
       void client.invalidateQueries({ queryKey: ['jobs'] });
       setOpen(false);
-      setForm({ vendor: '', quote_order_number: '', date: '', total: '', lead_time: '', valid_until: '', currency: '' });
+      setForm({
+        vendor: '',
+        quote_order_number: '',
+        date: '',
+        total: '',
+        lead_time: '',
+        valid_until: '',
+        currency: '',
+      });
     },
     onError: (e) => toast.error('It wasn’t recorded', { description: e.message }),
   });
@@ -63,6 +75,36 @@ export function VendorQuoteButton({ job }: { job: Job }) {
             <DialogTitle>The vendor’s price</DialogTitle>
             <DialogDescription>Fill in what is on their quotation. Leave the rest blank.</DialogDescription>
           </DialogHeader>
+          <Button type="button" variant="outline" size="sm" className="justify-self-start" onClick={() => setPasting(true)}>
+            Paste their quote to fill this in
+          </Button>
+          {pasting && (
+            <PasteToFill
+              kind="vendor-quote"
+              labels={{
+                quote_number: 'Their quote number',
+                date: 'Date',
+                total: 'Total',
+                currency: 'Currency',
+                valid_until: 'Price good until',
+                lead_time: 'Lead time',
+              }}
+              onClose={() => setPasting(false)}
+              onUse={(v) => {
+                const iso = (x?: string) => (x && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : '');
+                setForm((f) => ({
+                  ...f,
+                  quote_order_number: v.quote_number ?? f.quote_order_number,
+                  date: iso(v.date) || f.date,
+                  total: v.total ? v.total.replace(/[^\d.]/g, '') : f.total,
+                  currency: v.currency && v.currency.trim().toUpperCase() !== 'USD' ? v.currency.trim().slice(0, 3) : f.currency,
+                  valid_until: iso(v.valid_until) || f.valid_until,
+                  lead_time: v.lead_time ?? f.lead_time,
+                }));
+                toast.message('Filled in. Check each box before you press Record it.');
+              }}
+            />
+          )}
           <form
             id="vendor-quote"
             className="grid gap-3"

@@ -56,6 +56,7 @@ export function ChaseView() {
         return n;
       });
     undo(`${verb}: ${row.who}, ${row.what}`, {
+      dropOnLeave: /send/i.test(verb),
       commit: async (keepalive) => {
         const res = await authFetch(a.path, {
           method: a.method,

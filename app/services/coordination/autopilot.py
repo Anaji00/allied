@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.core.audit import audit_log
@@ -281,6 +281,108 @@ def play_vendor_chaser(on: date) -> List[Intent]:
     return [i for i in (vendor_chase(j, on) for j in vendors.overview(on)["jobs"] if (j.get("follow_up") or {}).get("due")) if i]
 
 
+def _job_and_po(j: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    """The job and PO record a vendor job line belongs to (for the gate wording); (None, None) when it is not tied to one."""
+    from app.models.db_models import PurchaseOrderDB
+
+    po_id = j.get("purchase_order_id")
+    if not po_id:
+        return None, None
+    with SessionLocal() as db:
+        po = db.get(PurchaseOrderDB, int(po_id))
+        return (po.job_id, po.id) if po else (None, None)
+
+
+TIER_WORDS = {"APPROACHING_7": "ship date within 7 days", "APPROACHING_3": "ship date within 3 days", "OVERDUE": "overdue"}
+
+
+def _leaks(j: Dict[str, Any], text: str) -> List[str]:
+    """What in this text a vendor must never read: the customer of the job (and every customer on the list), or Allied's own sales order number."""
+    import re
+
+    from app.services.coordination import blind
+
+    job_id, _po_id = _job_and_po(j)
+    names = list(blind.customer_names())
+    so = ""
+    if job_id:
+        from app.models.db_models import JobDB
+
+        with SessionLocal() as db:
+            job = db.get(JobDB, job_id)
+            if job is not None:
+                names.append(job.customer or "")
+                so = str(job.sales_order_number or "")
+    hits = blind.found(text, [n for n in names if n], min_len=2)
+    if (so and so in text) or re.search(r"(?i)\bSO[-_ #]*\d{3,}\b", text):
+        hits = hits + ["our sales order number"]
+    return hits
+
+
+def watchdog_body(j: Dict[str, Any], tier: Dict[str, Any], part: Any = None) -> str:
+    from app.services import gates
+
+    what = part if part is not None else (j.get("description") or "your order")
+    po = j.get("po_number") or str(j["id"])
+    job_id, po_id = _job_and_po(j)
+    milestone = gates.milestone_text(job_id, po_id)
+    from app.services.coordination.ball import _say_date
+
+    due = _say_date(tier["due_on"])                                   # "Nov 16", not 2026-11-16
+    if tier["tier"] == "OVERDUE":
+        line = f"The ship date we have for it, {due}, has passed ({-tier['days_left']} day{'s' if tier['days_left'] != -1 else ''} ago)."
+        ask = "Please tell us today where it stands and the new ship date."
+    else:
+        line = f"The ship date we have for it is {due} ({tier['days_left']} day{'s' if tier['days_left'] != 1 else ''} from now)."
+        ask = "Please reconfirm that date, or tell us the new one as soon as you know."
+    return "\n".join(["Hello,", "", f"A check-in on Allied PO {po} ({what}). {line}", f"On our side it is {milestone}.", "",
+                      f"{ask} If it is not shipping on that date, send us the reason.", "", "Thank you,", "Allied Welding Systems"])
+
+
+def play_vendor_watchdog(on: date) -> List[Intent]:
+    """The lead-time watchdog: APPROACHING (7 days, 3 days) and OVERDUE check-in emails, staged for a person's OK. One per PO, promised date and tier, so a rerun or a second pass drafts nothing new;
+    a new promised date starts the tiers again. Each draft is followed by a note staged for monday saying when the check-in went out."""
+    out: List[Intent] = []
+    for j in vendors.overview(on)["jobs"]:
+        try:
+            if j.get("bad_dates"):
+                out.append(Intent("alert", f"vendor-watch-bad-date:{j['id']}", f"Vendor line {j['id']} has a date out of range", to=reviewers(j.get("owner_email")),
+                                  title=f"Fix a date on the {j['vendor']} line", body=f"{j['vendor']}: {j.get('description') or j.get('po_number') or j['id']} has a date the watchdog cannot read, so it is not watched. Correct the date."))
+                continue
+            t = j.get("watchdog")
+            email = vendor_email(j["vendor"])
+            if not t or not email:
+                continue
+            po = j.get("po_number") or str(j["id"])
+            key = f"vendor-tier:{j['id']}:{t['due_on']}:{t['tier']}"
+            body = watchdog_body(j, t)
+            scrubbed = False
+            if _leaks(j, body):                                                # the part description holds the customer's name or our SO number: the check-in says "your order" instead
+                body, scrubbed = watchdog_body(j, t, part="your order"), True
+                if _leaks(j, body):
+                    out.append(Intent("alert", f"vendor-watch-leak:{j['id']}:{t['due_on']}:{t['tier']}", f"Check-in for {j['vendor']} PO {po} not drafted", to=reviewers(j.get("owner_email")),
+                                      title=f"A check-in to {j['vendor']} was held back", body="Something in the order's details names the customer, so no email was drafted. Write it by hand."))
+                    continue
+            why = [f"{TIER_WORDS[t['tier']].capitalize()}: ship date {t['due_on']}", f"Order: PO {po}, {j['vendor']}"] + (["The part description named the customer or our order number, so the email says \"your order\""] if scrubbed else []) + list(j.get("reasons") or [])
+            out.append(Intent("draft", key, f"Check in with {j['vendor']} on PO {po} ({TIER_WORDS[t['tier']]})", to=reviewers(j.get("owner_email")), tool="send_email",
+                              args={"to": email, "subject": f"Allied PO {po}: ship date check-in", "body": body, "_job_id": j["id"], "_po_date": j.get("ordered_on"),
+                                    "_tier": t["tier"], "_why": [w for w in why if not _leaks(j, w)]}))
+            if j.get("monday_item_id") and j.get("board_id"):
+                out.append(Intent("work", f"vendor-tier-note:{j['id']}:{t['due_on']}:{t['tier']}", f"Note for monday: {t['tier']} check-in on PO {po} drafted {on.isoformat()}",
+                                  work=(lambda j=j, t=t, po=po: _stage_checkin_note(j, t, po, on))))
+        except Exception as exc:  # noqa: BLE001 - one bad line never stops the check-ins for everyone else
+            logger.warning(f"Vendor watchdog skipped line {j.get('id')}: {type(exc).__name__}")
+    return out
+
+
+def _stage_checkin_note(j: Dict[str, Any], t: Dict[str, Any], po: str, on: date) -> None:
+    """Staged for monday (never pushed from here): when the check-in was drafted. A person pushes it with the rest of the staged changes."""
+    from app.services import monday_push
+
+    monday_push.stage("post_update", j["board_id"], j["monday_item_id"], {"text": f"Check-in drafted {on.isoformat()} ({t['tier'].replace('_', ' ').lower()}): PO {po}, ship date {t['due_on']}."},
+                      f"Vendor check-in note on PO {po}", key=f"vendor-tier-note:{j['id']}:{t['due_on']}:{t['tier']}", source="autopilot", by="autopilot")
+
+
 def vendor_chase_body(j: Dict[str, Any], on: date) -> str:
     what = j.get("description") or "your order"
     po = j.get("po_number") or str(j["id"])
@@ -450,6 +552,7 @@ PLAYS: Dict[str, Play] = {
     "rfq_board": Play(play_rfq_board, "auto", "Reads the monday Open RFQs board into the RFQ tracker."),
     "orders_watch": Play(play_orders_watch, "auto", "Weekly list of unpaid orders and vendor photos waiting."),
     "vendor_chaser": Play(play_vendor_chaser, "suggest", "Follows up a vendor when an order has not shipped and the usual waiting time after the PO is over."),
+    "vendor_watchdog": Play(play_vendor_watchdog, "suggest", "Checks in with a vendor 7 days and 3 days before its ship date, and when the date has passed; the email names the PO, the part and where it stands."),
     "rfq_vendor_chaser": Play(play_rfq_vendor_chaser, "suggest", "Asks bidding vendors for prices that are overdue."),
     "quote_followup": Play(play_quote_followup, "suggest", "Follows up customers on quotes they haven't answered."),
 }

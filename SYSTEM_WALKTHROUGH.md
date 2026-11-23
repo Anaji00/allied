@@ -8,13 +8,15 @@
 
 ## Ready now, and one step away
 
-| Ready now (shown in the demonstration) | One step away (needs a decision or a connection) |
+| Ready now (shown in the demonstration copy) | One step away (needs a decision, a setting or the rebuild) |
 |---|---|
-| Follow each job from request to shipment on one page | Connect to your real monday boards (read only first) |
-| Purchase orders drafted, checked and approved by the right person | Try a test import into a Sage sample company |
-| Customs invoice and packing list prepared, with gaps listed | Your customs broker still files; we prepare, not file |
-| Late vendors, late shipments and overdue quotes raised as alerts | Add everyone's name, email and phone for alerts |
-| Every email waits for a person to approve | Set real passwords and the dollar limit for approvals |
+| Follow each job from request to shipment on one page | Rebuild the screens only (the backend is already on the new version; the five newest screens and a few small fixes wait for your approval) |
+| Purchase orders drafted, checked and approved by the right person | Name the engineer who approves the two gates (one setting) |
+| Customs invoice and packing list prepared, with gaps listed | Connect to your real monday boards (read only first) |
+| Late vendors, late shipments and overdue quotes raised as alerts, and vendor check-ins drafted before a date is missed | Try a test import into a Sage sample company |
+| Every email waits for a person to approve | Add everyone's name, email and phone for alerts; real passwords and the dollar limit |
+| Paste an email or a scanned PO and get a filled form to check (new: the live back end has it; shown from the demonstration copy) | Try the reading on Allied's real emails and scans |
+| Customer details taken off drawings before a vendor sees them; vendor payments in steps; landed cost (new: the live back end has it; shown from the demonstration copy) | A trial on real exports, a monday test board and a Sage sample company |
 
 ---
 
@@ -170,22 +172,20 @@ It can also prepare a change, for example *"Email the customer that the quote co
 
 ## The screens
 
-| Screen | What you do there |
+The menu has four views, and the first screen after sign-in is **Today**.
+
+| View | What you do there |
 |---|---|
-| **Boards** | Read each monday board as monday shows it. "Needs fixing" says how clean it is. Changes waiting to go to monday show in green and are not sent until a manager sends them. |
-| **Jobs** | Follow one job from the customer's request to the shipment. Purchase orders, customs papers and the sales order all live here. |
-| **Today** | **Inbox**: alerts folded into areas with "Done with all", problems and drafts to approve. **My day**: everything waiting on you. **Who has the ball**: whose turn it is and for how long. |
-| **Orders** | Orders and packing slips. Order emails, supplier bills and suppliers are under More. |
-| **Projects** | Milestones and what's late. Submit drawings or review someone else's. Plan a new job from a template. |
-| **Shipments** | Every shipment and what's wrong with it. |
-| **Vendors** | Every vendor order against its project's dates, and each vendor's on-time record. |
-| **RFQs** | Every request for quote, who owns it, when it is due. |
-| **Wear & quotes, Leads** | Equipment wear and replacement quotes; target accounts. |
-| **Mill certificates** | Heat numbers and quarantines. |
-| **People & alerts** | Alert history, who gets told and how, and user accounts. |
-| **System** | Health, "Set these first", and **What runs by itself** (each automatic step set to Off, Suggest or Auto). |
-| **Sage & imports, Audit trail** | Sage import files, and a record of who did what and when. |
-| **Search** | Ctrl+K searches orders, RFQs, jobs, vendors, shipments, comments, files and people at once. |
+| **Secretary: Today** | One list of what needs you. Each row is one sentence with one button (Approve, Open, Send it). The morning brief sits on top, then "who owes what" with how long each person has had the ball, then your drafts, each showing who it goes to and its first line. |
+| **Secretary: Email** | The mail queue and your drafts waiting for your OK. Until the mailbox is connected it says so plainly. |
+| **Secretary: Orders & Sage** | Quote requests, sales orders and purchase orders in one place, packing slips, and the Sage files. "Needs a person" holds supplier bills and order emails. |
+| **Secretary: Contacts and Sales** | Vendors (with their next step), customers (with their quote contact), carriers, leads, and equipment wear and quotes. |
+| **Boards** | Every monday board as a grid you can edit: click a cell, type, add rows and columns, paste from Excel, undo. The **Jobs** board comes first. Changes wait in a bar until a manager sends them, and nothing is sent while monday is read-only. |
+| **Toolkit** | Seventeen tools: read and write, check, look up, record. Each says whether it uses AI. |
+| **Admin** | System health ("Is the database file sound?", backups, "Set these first"), Logistics (shipments, quiet ones flagged), People and alerts, and the Audit trail. |
+| **A job's page** | Stage, design approval, purchase orders, customs papers, shipments, drawings comparison, files and a thread with a "since yesterday" strip. |
+| **Search (Ctrl+K)** | Finds orders, RFQs, jobs, vendors, shipments, comments, files and people at once, and offers to add a job, PO, product or board row. |
+| **"+ New" and the assistant** | Add a job, quote request, order, PO, product, shipment or board row in a click, or by voice or typing. |
 
 Dropdowns for owners, customers, vendors and carriers suggest what the system already knows, so you pick instead of typing.
 
@@ -218,7 +218,7 @@ The AI runs on Groq's free service. It costs nothing and answers in a few second
 - **Sign-in is protected.** Repeated wrong passwords lock that account and address for a short while, passwords must be strong, and changing a password signs out the old sessions.
 - **Roles are checked every time.** Viewers read. Operators prepare and submit. Managers approve. Administrators approve large orders and manage accounts. A removed or demoted person loses access within 30 seconds.
 - **Everything is on the record.** The audit trail shows who did what and when, including purchase order approvals and edits to customs details after sending.
-- **The database is backed up** before any upgrade changes it, and a copy is kept.
+- **The database is checked and backed up.** The system checks its own data file and says plainly on the System page if it is damaged. Nightly backups are made, verified and copied; a failed backup tries again in 15 minutes and tells leadership if it keeps failing. A copy is also made before any upgrade changes the data. Only the system itself ever opens the data file; nothing else can.
 - **Passwords must be changed before real use.** The system ships with a placeholder administrator password. It warns until a real one is set, and an install marked as production refuses to start without one.
 
 ---
@@ -230,8 +230,31 @@ The AI runs on Groq's free service. It costs nothing and answers in a few second
 - **Customs papers are prepared, not filed.** No duty calculation, importer-of-record or advance shipping notice yet; the customs broker still files.
 - **The approval limit does not convert currencies.** If the limit is 10,000, an order of 50,000 yuan (about 7,000 dollars) is still held for an administrator, because only the number is compared. That errs on the safe side; making it currency-aware is a small change if you want it.
 - **Alert contacts need adding**, and real text messages need a Twilio account. Phone push works for free.
-- **The instruction check** (an engineer repeats a brief back and signs off) is designed but not built.
+- **The engineering sign-offs, vendor payment steps, drawing cleaning and landed cost are built and tested on made-up data. The back end that runs them is live (the database was upgraded once, after the app made a safety copy), but none of it has been used on real jobs.** The sign-offs need the owner to name the engineer first. The person who is named, and the amounts and dates they will see, have not been tried on Allied's real data.
+- **Nothing has been tested on Allied's real data.** The tests use made-up data. A trial on real exports, a monday test board and a Sage sample company come first.
 - **It runs on one computer.** If that computer fails, the system stops until it is restored from the copy made before each upgrade (plus any second copy you set up); your monday boards and Sage are not affected. The person who looks after the system restores it. A written restore guide and a named backup person are still to agree.
+
+---
+
+## The new sign-offs, payments and helpers (built; the back end is live, the newest screens wait for a screens-only rebuild)
+
+These are finished in the code and tested on made-up data. They are **not live** until the system is rebuilt, and the engineer sign-offs also need one setting from the owner (who the engineer is).
+
+**Two engineer sign-offs.** Gate 1: the vendor's shop drawing is approved before production counts as started. Gate 2: the vendor's measurement photos are approved before crating, the payment before shipping, or the carrier's pickup. Only the engineer the owner names can approve, never the person who drafted the job, and a decision stands unless a manager takes it back and writes why. A manager can also let a step go ahead without a gate by writing a reason; that is recorded. Until the owner names the engineer, nobody can approve, and the screen says so.
+
+**Customer details come off drawings before a vendor sees them.** A drawing can go to a vendor only as a cleaned copy: the customer's name, logo, address, contacts and their PO numbers are painted out of the pages, the file is rebuilt so nothing hidden is left, it is checked again, and a person confirms it. A page that is only a picture is read by the system's own text reader; if it cannot be read, it is called unreadable, never clean. A drawing the system cannot clean (a DWG) needs the engineer's signed statement, tied to that exact file: change the file and the statement no longer counts.
+
+**Paying vendors in steps.** A purchase order can be paid as 30/50/20, 30/70, 50/50 or another split that adds to exactly 100. The first payment becomes due when the PO has really gone to the vendor, the next when Gate 2 is approved, the last when delivery is confirmed. One entry records a payment and, from that one entry, updates the job's payment sheet, prepares a note for monday (not sent), updates the vendor payments workbook and prepares a remittance email with the wire copy and the proforma, as a draft. The same payment entered twice is one payment.
+
+**Chasing vendors earlier.** The system drafts a check-in to a vendor a week before the promised ship date, three days before, and when it has passed, once each. It says which PO, which part, where it stands and the date.
+
+**What a part will really cost.** Landed cost is the vendor's quote plus duty plus freight. If the duty or the freight is not known, the sheet says "unknown"; it never treats unknown as zero. Managers pick a markup from the tiers, and the workbook shows the working.
+
+**Shipping paths and the weekly forwarder update.** UPS tracking numbers are checked, Mountain Movers' emails are read for quote options, bill of lading and dates, and the forwarder's weekly update can move arrival dates (only from the forwarder's own address, or by a manager). After a delivery is confirmed, the freight is added, compared with the quote, and a freight-only file is prepared for Sage. Nothing is written to Sage.
+
+**Less typing.** Paste an email or drop a scanned purchase order and the system fills in the form for a person to check: it says how sure it is, where on the page it read each figure, and lists every amount, number and date to confirm. Forms start filled from the customer's last order and the vendor's last PO. "Make another like this" copies a record without its numbers and dates. None of it saves anything by itself.
+
+**Plain-language help.** The Control room shows in one place what needs attention. The Secretary page gives the day's mail, drafts, bills and late orders, and a box where you can type "reply to Maria" and get a draft. The Help page answers "what do I do?" and explains the words the system uses. Athish and Doug can send a nudge or a milestone message to any colleague by app, email and text; it never carries prices or a customer's name.
 
 ---
 
@@ -248,6 +271,10 @@ The AI runs on Groq's free service. It costs nothing and answers in a few second
 | **Incoterm** | Who pays for shipping, and where the risk passes (for example FOB) |
 | **Suggest / Auto** | Suggest: the system writes a draft and waits for a person. Auto: it does the routine step itself |
 | **Groq** | The company whose free AI service reads emails and drafts replies |
+| **Gate** | A check an engineer must approve before work goes on: Gate 1 is the vendor's shop drawing, Gate 2 the measurement photos |
+| **Redaction** | Removing the customer's details from a drawing before a vendor sees it |
+| **Landed cost** | What a part really costs here: the vendor's price plus duty and freight |
+| **Payment step** | One of the parts a vendor payment is split into (for example 30, 50 and 20 percent) |
 | **Docker / ODBC** | Technical plumbing that only the person looking after the system needs |
 
 ## Not yet answered here (the presenter should be ready)

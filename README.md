@@ -25,7 +25,7 @@ Allied designs parts and has them made overseas, so the system is built around t
 | **monday → orders** | Status changes on the jobs board (webhooks, plus a board reader that polls every 5 minutes) create the Sage sales order and vendor POs, release POs, or dispatch packing slips. Messages are saved before replying, de-duplicated, retried with backoff, and escalated to a person after 6 failures. | `monday_events.py`, `order_orchestrator.py` |
 | **Sage 50** | Import files (`SO_IMPORT.CSV`, `PO_IMPORT.CSV`) in Sage's mm/dd/yy format. Each file holds only orders not yet sent to Sage (sales orders and vendor POs are tracked separately) and marks them as it is made, claimed atomically so two downloads never contain the same order. The marked order numbers come back in the `X-Sage-Exported-Orders` header; if a file never saved, `POST /sage/export/unmark` (or the screen's "Put them back") returns them to the next file. Direct writing into Sage is not built (it needs the Sage SDK on the Sage PC). | `sage_export_service.py` |
 | **Vendor bills** | 3-way match of the bill against the PO and the sales order: unit price, line totals, freight, invoice total, vendor, and duplicate invoice numbers. Anything off is held and sent to a person. A dispute email goes to the vendor at most once, and never for a bill with no matching PO. | `reconciliation_service.py` |
-| **AI tools** | Email triage and drafts, Vietnamese and Mandarin translation with a glossary, call summaries, order lookup, exception explanations and drawing comparison. Runs on **Groq's free tier** by default (fast, rate limited); local Ollama or a fallback to it is optional, and Claude is opt-in. Anything binding waits for a person to approve it. | `app/services/ai/` |
+| **AI tools** | Email triage and drafts, Vietnamese and Mandarin translation with a glossary, call summaries, order lookup, exception explanations and drawing comparison. Runs on **Groq's free tier** by default (fast, rate limited); Ollama is not used; `AI_LOCAL_ONLY=True` turns AI off (templates and rules only); Claude is opt-in. Anything binding waits for a person to approve it. | `app/services/ai/` |
 | **Documents** | Reads customer POs, drawings and mill certificates. A file that can't be read gets 0% confidence and goes to a person; nothing is filled in from the file name. | `document_scanner_service.py` |
 | **Mill certificates** | Heat-number lookup (exact match only), ASTM limits and quarantines, and certificates of conformance. | `mtr_service.py` |
 
@@ -33,27 +33,21 @@ Allied designs parts and has them made overseas, so the system is built around t
 
 ## Screens
 
-The side menu has three groups. Phones get a bottom bar (Boards, Today, Orders, Projects) and "More" opens the rest.
+The side menu has four views. Phones get a bottom bar with the same four (Secretary, Boards, Toolkit, Admin). The first screen after sign-in is **Today** (`/inbox`; `/` redirects to it).
 
-| Screen | Path | For |
+| View | Where | What you do there |
 |---|---|---|
-| Boards | `/` | Each monday board as monday shows it, with "Needs fixing" (how clean the board is), notes to the engineers, an owner picker (staged for monday, never sent from here) and waiting changes shown as a green diff |
-| Jobs | `/jobs`, `/jobs/<ref>` | One job from the customer's request to the shipment: research, engineering, design approval, purchase orders to vendors, the sales order, shipments, drafts |
-| Today | `/inbox`, `/mine`, `/ball` | One menu item, three tabs: **Inbox** (alerts folded into areas with "Done with all", problems, drafts to approve), **My day** (everything waiting on me), **Who has the ball** |
-| Orders | `/orders` | Orders and packing slips in view; order emails, supplier bills and suppliers under More |
-| Projects | `/projects` | Milestones, design documents to submit or review, what is behind; plan a new job from a template |
-| Shipments | `/shipments` | Freight on the way, flags, forwarder emails |
-| Vendors | `/vendors` | Vendor jobs against project dates, what to chase, vendor scorecard |
-| Carrier prices | `/carriers` | Your rate card and live carrier prices (operators) |
-| RFQs | `/rfqs` | Quote requests, deadlines, owners, turnaround and win rate; "Open the job" starts a job from one |
-| Wear & quotes, Leads | `/sales/pipeline`, `/sales/leads` | Equipment wear and quotes; target accounts and Find prospects in view, calculator and proposal under More |
-| Mill certificates | `/compliance/vault` | Heat numbers and quarantines |
-| People & alerts | `/alerts` | Alert history, daily summary, who gets told, user accounts |
-| System | `/health` | Health with a "Set these first" card for managers; **What runs by itself** (one list, Off / Suggest / Auto per item); monday changes (staged, preview, push); under More: the monday.com link, required forms, job templates |
-| Sage & imports | `/operations` | Sage import files and list imports (managers) |
-| Audit trail | `/admin/audit` | Who did what, and when (managers) |
-| Search everything | Ctrl+K and the header box | One search across orders, RFQs, jobs, vendor jobs, shipments, comments, files, people and monday rows |
-| Document tools | `/chat` (from the assistant's "Other tools") | Read a document, translate, email, drawing checks, compare drawings, phone calls, part names, glossary, tasks |
+| **Secretary** | Today (`/inbox`) | One list of what needs you, each row one sentence and one button, with the morning brief on top, "Who owes what", drafts showing recipient and first line, and "Show the detailed view with filters" |
+| | Email | The mail queue, drafts waiting for your OK (send, edit, cancel), a new draft, and the reply helper settings. Says "Not connected yet" until the mailbox is set up |
+| | Orders & Sage | Orders (table or edit-like-a-spreadsheet), Quote requests, Sage (files, bring in from Sage), Packing slips; a "Needs a person" chip holds supplier bills and order emails; "Compare two drawings" and "+ New" |
+| | Contacts | Vendors (with vendor contacts and next steps), customers (with their quote contact), carriers |
+| | Sales | Leads and equipment wear and quotes |
+| **Boards** | `/boards` | Every monday board as an editable grid (click a cell, add rows and columns, paste from Excel, undo); the **Jobs** board comes first (real jobs, with a chip for monday items that are not jobs yet); changes wait as a green diff in a bar and a manager sends them (blocked while monday is read-only); group by customer family, tags, saved and pinned views |
+| **Toolkit** | `/toolkit` | Seventeen tools grouped as read and write, check, look up, record; each says whether it uses AI; includes notifications, the scorecard, supplier bills checked, automations (Off / Suggest / Auto) and company names |
+| **Admin** | `/admin` | Overview, System (health, "Set these first", backups, the database file check, what runs by itself, monday changes), Logistics (shipments, quiet-days flag), People & alerts (accounts, who is told), Audit trail (managers) |
+| Job page | `/jobs/<ref>` | One job from the request to the shipment: stage, design approval, purchase orders and customs papers, shipments, files, drawings comparison, a thread and a "since yesterday" strip |
+| Search | Ctrl+K and the header box | One search across orders, RFQs, jobs, vendor jobs, shipments, comments, files, people, monday rows and pending rows; it also offers "Add a job / PO / product / row" |
+| Add anything | "+ New" and the assistant | Job, quote request, sales order, purchase order, product, shipment, board row; each can be staged to a monday board |
 | Comments and Files | on every order, RFQ, vendor job, shipment, milestone and board row | Threads with @mentions (translated for each reader), attached files, owner and "ball is with" |
 
 **Names in the lists.** Every owner, customer, vendor, forwarder and carrier box suggests what the app already knows. The seven engineers (`frontend/src/lib/engineers.ts`) are always in every people list; one without an email on file shows greyed out ("no email yet") until it is added under People & alerts. Emails ending `.invalid` are placeholders and are never offered.
@@ -117,9 +111,36 @@ nothing is sent to monday, to a customer or to a vendor without a person approvi
 
 ---
 
+## Newer features and their routes
+
+All behind sign-in; everything that touches monday is staged and sent by a manager, and nothing is sent while `MONDAY_READ_ONLY` is on. Roles in the table are the minimum.
+
+| Feature | Routes | Notes |
+|---|---|---|
+| Today list and brief | `GET /my-day`, `/brief`, `/me/counts`, `/chase`, `/since`, `/prep/{job\|customer\|vendor}/{ref}`, `/conversations`, `/ball/summary` | One list with a button per row; `need_action` is the one count everything uses; `/ball/summary` carries `late_means` and days waiting |
+| Edit any board | `/board-edit/...` | Cell by text, add row (batch), columns, groups, paste, fill-down, duplicate, move, archive, undo per person; pending rows are ordinary rows (`new:<id>`) |
+| Create anything | `POST /create/{job\|rfq\|product\|order\|po\|shipment\|board_row}`, `/actions/{kind}/{ref}/to-monday` | `to_monday` stages a row; unmapped facts are listed as `left_out`; a double click within two minutes makes one record |
+| Edit any record | `PATCH /records/{kind}/{ref}`, `GET .../fields`, `POST /records/undo`, `GET /book` | Locked fields say why; before and after are audited; product price and cost need a manager |
+| One-click actions | `/actions/{kind}/{ref}`, `/text`, `/email-draft`, `/share` | Copy, email with attachments (drafts only), share with @mention; internal drafts go to Allied addresses only |
+| Job page in one call | `GET /jobs/{ref}/page` | Job, comments, since yesterday, prep and actions; money for managers only |
+| Drawing compare | `POST /drawings/compare`, `/compare-files` | PDF, pictures and DXF; DWG and STEP cannot be read |
+| Bring in from Sage | `/sage-import/preview`, `/commit`, `/history`, `GET /sage/export/overview` | Preview first, a manager saves; totals are per currency |
+| Mail and AI replies | `GET /mail?mine=true`, `/mail/status`, `POST /mail/{id}/draft-reply`, `/me/mail-settings` | Draft only; AI is opt-in per person; exclusions enforced on the server; the AI-use log keeps no text |
+| Leads | `/leads/...`, `POST /leads/sequences/run` | Do-not-contact checked on every draft; sequences make drafts only; web search off unless `LEAD_WEB_SEARCH` |
+| Organize data | `/aliases`, `/tags`, `/vendor-contacts`, `/owners`, `/workspace/views/{id}/pin` | Kept in the app; nothing is altered on the original records |
+| Follow | `/follow`, `/unfollow`, `/following`, `/seen` | "Changed since you looked" rows on Today |
+| Health | `GET /health`, `/health/backups`, `/health/setup`, `/health/live` | `status` is healthy, damaged or database_newer_than_app; the file check reads every table; backups are made on the container's own disk, checked, then copied |
+| Sign-in | `POST /auth/login`, `/auth/refresh` | Access token 8 hours, refresh token 30 days and slides with use; a lock after repeated wrong passwords |
+
+**Safety rules in code:** nothing opens or migrates the real `data/allied_enterprise.db` except the backend container (`ALLIED_ALLOW_REAL_DB=1`, set only in the compose file) and never under the test runner; a database whose version is newer than the code starts in a read-only "rebuild the app" mode instead of crash-looping; every GET read is tested not to write.
+
+---
+
 ## Running it
 
-**You need:** Python 3.11+, Node 18+ (22 tested), and a free [Groq API key](https://console.groq.com/keys) for the AI tools (set `GROQ_API_KEY`). [Ollama](https://ollama.com) is optional, as a local engine or a fallback (`ollama pull qwen2.5:7b`).
+> **Privacy: "pricing never leaves Allied" is NOT enforced while Groq is on.** With `AI_PROVIDER=groq` (the default), email text, assistant questions and tool results (which can hold supplier prices, payment terms, markups and customer names), drawing pictures and call audio are sent to Groq. Turning on Zero Data Retention in the Groq console (then `ALLIED_GROQ_ZDR_CONFIRMED=true`) reduces what Groq keeps, but the text still goes there. The optional switch `AI_LOCAL_ONLY=True` (default `False`) turns AI OFF (templates and rules only; no hosted or local model is called) so nothing leaves the building. **Ollama is not used.** Scanned documents are read by local Tesseract (English and Simplified Chinese) in both cases.
+
+**You need:** Python 3.11+, Node 18+ (22 tested), and a free [Groq API key](https://console.groq.com/keys) for the AI tools (set `GROQ_API_KEY`). Ollama is not used.
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
@@ -152,9 +173,9 @@ docker compose up --build -d
 ```
 
 - **What runs:** two images.
-  - The backend: Python 3.11, Tesseract for OCR, a non-root user, a single Uvicorn worker. The app runs its own background workers, so a second web worker would run every automation twice.
+  - The backend: Python 3.11, Tesseract for OCR (English, orientation data and Simplified Chinese: `tesseract-ocr-chi-sim`, so Chinese vendor quotations are read), a non-root user, a single Uvicorn worker. The app runs its own background workers, so a second web worker would run every automation twice.
   - The frontend: the Next.js standalone server on Node 22.
-- **Ports:** only the frontend is published (`3000`, or `FRONTEND_PORT`). It proxies `/api/v1` to the backend, so monday webhooks use `http://<host>:3000/api/v1/webhooks/monday`. The backend listens on `127.0.0.1:8000` for local tools. If either port is taken on the machine, set `BACKEND_PORT` / `FRONTEND_PORT` when starting (e.g. `BACKEND_PORT=8010 FRONTEND_PORT=3010 docker compose up -d`).
+- **Ports:** only the frontend is published, on every network interface of this PC (`3001` by default, or `FRONTEND_PORT`; this PC uses `3010`). That is plain HTTP, so passwords cross the office network unless staff use the HTTPS door below; binding it to `127.0.0.1` so Caddy is the only public door is an open owner decision. It proxies `/api/v1` to the backend, so monday webhooks use `http://<host>:<frontend port>/api/v1/webhooks/monday`. Set `APP_BASE_URL` (and `CORS_ALLOWED_ORIGINS`) to the address phones really use, or approval links point at the wrong port. The backend listens on `127.0.0.1:8000` for local tools. If either port is taken on the machine, set `BACKEND_PORT` / `FRONTEND_PORT` when starting (e.g. `BACKEND_PORT=8010 FRONTEND_PORT=3010 docker compose up -d`).
 - **Data:** `data/` (database, uploads, master catalog) and `output/` (packing slips) are bind-mounted and survive rebuilds.
   - The catalog lives in `data/catalog/`. The shipped defaults are copied in on first start, and a file there is never replaced, so CSV imports are kept.
   - On a Linux host, make the folders writable by the container user first: `mkdir -p data output && sudo chown -R 10001:10001 data output`.
@@ -194,7 +215,7 @@ The same app installs on a phone's home screen and opens full screen like a norm
 | `TRUSTED_PROXY_NETS` | Networks whose forwarded client address is believed, for the sign-in lockout. Narrow it if the office uses 172.16/12. |
 | Sign-in protection | Per address and per account lockout (429 with Retry-After), password rules, and a password stamp in the token so a changed password ends old sessions. Held in memory: a restart clears the locks. |
 | Startup checks | Production refuses to start with `AUTH_DEV_BYPASS` or default secrets. A non-production start warns about default secrets. Before a pending migration the database is copied to a `pre-migrate` folder (last 5 kept). |
-| `MONDAY_API_TOKEN`, `MONDAY_SIMULATION_MODE` | monday stays in simulation (no reads or writes) until you turn it off. |
+| `MONDAY_API_KEY`, `MONDAY_SIMULATION_MODE` | monday stays in simulation (no reads or writes) until you turn it off. |
 | `MONDAY_READ_ONLY` | On by default. With simulation off, the app reads monday boards but sends **no change of any kind**: every GraphQL mutation is blocked in the client (twice: before the call and at the transport) and logged as blocked. Writes back to monday (submission statuses, vendor dates, comments, order statuses) are then skipped. Turn it off only for a test board. |
 | `MONDAY_WEBHOOK_TOKEN` / `MONDAY_WEBHOOK_SECRET` | Webhook authentication: a URL token, or the monday app's signing secret. |
 | `MONDAY_PROJECTS_BOARD_ID` + `PROJECT_*` / `MILESTONE_*` columns | Which board holds projects, and which columns are owner, due date and status. Any column setting takes the column id or its title as shown on the board (e.g. `"Estimate finish"`). |
@@ -207,8 +228,14 @@ The same app installs on a phone's home screen and opens full screen like a norm
 | `GROQ_FALLBACK_MODELS` | Groq models tried in order when the main one has used its free daily limit. |
 | `BALL_NUDGE_DAYS`, `BALL_ESCALATE_DAYS`, `BALL_LEADERSHIP_DAYS` | Working days before whoever holds the ball is reminded, the owner is told, and leadership is told (2, 4, 7). |
 | `ATTACHMENT_EXTENSIONS`, `SUBMISSION_MAX_MB` | Which files can be attached to items and how big (50 MB). Programs are always refused. |
-| `AI_PROVIDER=groq`, `GROQ_API_KEY`, `GROQ_*_MODEL` | AI engine: Groq's free tier (text `openai/gpt-oss-120b`, scans `qwen/qwen3.8-27b`, calls `whisper-large-v3-turbo`). `ollama` runs locally; `claude` costs money per call. |
-| `AI_FALLBACK_PROVIDER` | Engine to use when Groq is rate limited or down (e.g. `ollama`). Blank = the screen says AI is busy. |
+| `AI_PROVIDER=groq`, `GROQ_API_KEY`, `GROQ_*_MODEL` | AI engine: Groq's free tier (text `openai/gpt-oss-120b`, scans `qwen/qwen3.8-27b`, calls `whisper-large-v3-turbo`). `off` turns AI off; `claude` costs money per call. Ollama is not used. |
+| `REFRESH_GRACE_SECONDS` (default 600) | How long a refresh token that was just replaced is still honoured (a second or idle browser tab). Reusing an older one, or the previous one after this time, ends all of that person's sessions. |
+| `ENGINEER_APPROVERS` | Emails who may approve Gate 1 / Gate 2 and attest a DWG. Empty = nobody. |
+| `NUDGE_SENDERS` | Emails who may send nudges and milestone blasts (admins always may). Empty = admins only. Nudges go to Allied staff only, at once (app notice, email, text), never carry prices or customer names, and are limited per sender and per person. |
+| `FORWARDER_DOMAINS` | Email domains of the freight forwarders whose weekly update may move ETAs (`apply=true` needs a mail from one of them, or a manager). Empty = only a manager can apply. |
+| `LANDED_CURRENCIES` | Currency codes a landed cost sheet may use (default USD, CAD, EUR, GBP, CNY, MXN). |
+| `AI_LOCAL_ONLY` | True turns AI off completely (no hosted or local model). Default False. |
+| `AI_FALLBACK_PROVIDER` | Engine to use when Groq is rate limited or down (leave blank: Ollama is not used). Blank = the screen says AI is busy. |
 | `MONDAY_VENDOR_BOARD_ID` + `VENDOR_*_COLUMN_ID` | The monday board with one item per vendor PO, and which columns hold vendor, project link, PO, owner, and the ordered / asked-for / confirmed / promised / shipped dates. `VENDOR_TRANSIT_DAYS_*` and `VENDOR_BUFFER_DAYS` set the ship-by date. |
 | `VENDOR_DOMESTIC_VENDORS` | Vendors that ship within the US, by their board name. With no mode column on the board, they get `VENDOR_TRANSIT_DAYS_TRUCK` (5) and every other vendor `VENDOR_TRANSIT_DAYS_SEA` (35 in Allied's `.env`, from the 2025 orders: US vendors arrive 1-5 days after shipping, overseas contacts 22-38). |
 | `VENDOR_CUSTOMER_*`, `VENDOR_OPEN_GROUPS` | For vendor jobs not linked to a project: the customer's date (a date column, or a start date + weeks, as Allied's Vendor PO Issued + Cust Lead), and whether it is delivery (transit taken off) or the ship date. Only items in the open groups are tracked; orders already finished when first read are history and not imported. With no promise column, a job is late once past PO date + quoted lead time. |
@@ -234,7 +261,7 @@ The same app installs on a phone's home screen and opens full screen like a norm
 
 ### Roles
 
-`VIEWER` reads. `OPERATOR` submits documents, adds shipments, runs checks and processes orders. `MANAGER` sees everyone's alerts, sends the summary and downloads Sage files. `ADMIN` manages alert contacts. The role is read from the account, not the login token, so a disabled, removed or re-roled account takes effect within 30 seconds rather than when the 8-hour token expires.
+`VIEWER` reads (a viewer still sees vendor names and PO numbers, and can download an attached file if they know its number; there are no customer accounts). `OPERATOR` submits documents, adds and edits records, stages board changes and drafts, previews a Sage import and reads company mail, but cannot approve a design or a PO or push to monday. `MANAGER` approves designs and purchase orders (up to `PO_APPROVAL_LIMIT`), commits Sage imports, sends staged changes to monday, sees costs and margins, and sees everyone's alerts. `ADMIN` also approves purchase orders above the limit and manages accounts and alert contacts. The role is read from the account, not the login token, so a disabled, removed or re-roled account takes effect within 30 seconds rather than when the 8-hour token expires.
 
 ---
 
@@ -265,7 +292,7 @@ All three start with the API and stop with it. Each loop survives any single fai
 python -m pytest -q
 ```
 
-Results (16 Nov 2026): 2,394 passed, 2 skipped, 2 xfailed, about 14 minutes. The suite includes 18 adversarial rounds, whole-flow scenarios (`tests/test_flow_make_me_this_part.py`), import paperwork and startup-safety tests. The skips need a live local AI; the xfails are known, accepted limits. No test calls Groq, monday or email: they are faked, and any key in `.env` is ignored during tests.
+Results (22 Nov 2026, run alone on the final code, temporary databases only): about 4,239 passed, 4 skipped (real-OCR and environment cases), 2 xfailed (accepted behaviours documented in Known limits), 0 failed; the pair takes 12 to 30 minutes depending on how busy the PC is. One test compares wall-clock login timings and can fail on a loaded PC; it passes alone. Re-run before quoting a number.
 
 ```bash
 python tests/run_end_to_end_use_cases.py
@@ -280,6 +307,10 @@ cd frontend && npm run lint && npm run build
 Results: clean lint and a production build.
 
 Tests and scenarios each use their own temporary database, data files and upload folders, never anything under `data/`.
+
+### Scanning on a Windows PC (outside Docker)
+
+Install Tesseract (the UB Mannheim build installs to `C:\Program Files\Tesseract-OCR`). It ships English only. To read Chinese too, download `chi_sim.traineddata` from the `tessdata_fast` repository of the tesseract-ocr project and put it, together with copies of `eng.traineddata` and `osd.traineddata`, in a folder called `tessdata` next to the app (or any folder named in `TESSDATA_DIR`). The app finds it by itself; nothing in Program Files needs changing (that folder needs administrator rights). `/health/setup` and the redaction page say whether OCR is available. The `tessdata` folder is not committed. On this PC the one file downloaded was `chi_sim.traineddata` (2,469,156 bytes, sha256 `a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730`) from `https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata`; `eng` and `osd` were copied from the existing Tesseract 5.4 install. Check the hash if you fetch it yourself.
 
 ### What is not in git
 
@@ -409,7 +440,7 @@ app/
     coordination/      (also) updates (comments), ball (whose turn), forms, files, project_templates, secretary
     monday_push.py     staged changes to monday and the push; search.py, exports.py, bridge.py (languages),
                        fx.py, fedex.py, carrier_rates.py, drawing_compare.py + drawing_dxf.py, packing_slip_queue.py
-    ai/                provider layer (Groq / Ollama / Claude), features, drawing check, speech
+    ai/                provider layer (Groq / Claude / off), features, drawing check, speech
     monday_*.py        monday API client and the board-event inbox
     sage_*.py          Sage import files; SDK writer (not live)
     ...                orders, documents, bills, mill certs, CSV import, exceptions, email in/out
@@ -426,6 +457,90 @@ scripts/               backup, Sage connection check
 
 ---
 
+## Verified workflows (built November 2026)
+
+Allied's own steps, as the office manager described them. Sage 50 stays the system of record: the app stages and exports; it never writes to Sage or (while `MONDAY_READ_ONLY` is on) to monday.
+
+- **Customer-redaction firewall** (`app/services/redaction.py`, `/redaction`): a drawing goes to a vendor only as a verified redacted copy stored on the job. PDFs and DXFs are painted over wherever the customer's name, spellings, contacts, domain or customer RFQ/PO numbers appear (text layer, picture text by local OCR, metadata, bookmarks, annotations, form fields, embedded files, file name), rebuilt from page pictures, then scanned again; a person (an engineer or a manager) verifies the copy. A DWG cannot be cleaned: an engineer attests it, tied to the file's hash, and any change to the file voids it. The hash is worked out from the file's bytes each time, never from the record. A page that is only a picture and cannot be read is never called clean.
+- **Two engineer gates** (`app/services/gates.py`, `/gates`): Gate 1 (vendor shop drawing) before production counts as started; Gate 2 (measurement photos) before crating, the ship date or the Gate 2 payment. Hard blocks; a manager can override with a written reason, audited. Only the emails in `ENGINEER_APPROVERS` (empty by default: nobody) may approve, never the person who drafted the job; a decision is final unless a manager revokes it with a reason.
+- **Vendor payment terms** (`app/services/payments.py`, `/payments`): 30/50/20, 30/70, 50/50 or custom percentages adding up to exactly 100.00; Decimal throughout, the last tranche takes the rounding remainder. Triggers: PO issued or proforma, Gate 2 approved, delivery confirmed. **One payment entry** (`vendor_payments.py`) updates the job's payment sheet, stages a monday update, rebuilds the master xlsx ledger by vendor (atomic) and stages a remittance email with the wire copy and proforma; the same entry twice is one payment.
+- **Vendor lead-time watchdog** (autopilot play `vendor_watchdog`): check-in emails 7 days and 3 days before the ship date and when it is overdue, once each, naming the PO, the part, where the order stands (awaiting Gate 1 / awaiting Gate 2) and the promised date.
+- **Landed cost** (`landed_cost.py`, `/landed-cost`): vendor quote + duty + freight, a tariff table with as-of dates and a stale warning, a multi-tier markup workbook. An unknown duty or freight is shown as unknown, never as zero. Manager only.
+- **Fulfilment pipelines** (`pipelines.py`, `/pipelines`): UPS parcel (tracking number check digit), Mountain Movers (quote options, BOL, pickup and delivery read from emails), China forwarder (weekly digest moves ETAs). After delivery is confirmed (`freight_close.py`) the freight is added, a variance against the quote is flagged and a sales-order-to-invoice payload is staged as a file for Sage.
+- **Figures read from a scan** (money, PO numbers, dates) always carry "needs a person to confirm against the image".
+- **Privacy:** see the note under Running it. `AI_LOCAL_ONLY=True` turns AI off. Scans are read by local Tesseract.
+
+Later (not built): a second-opinion drawing reader and a quote price-sanity check against Allied's own history. Local AI models (Ollama, eDOCr2, local vision models) are out: there is no machine for them.
+
+## Live today, and what needs the rebuild
+
+The **backend is live on the new version.** The container was rebuilt on 2026-11-22 (about 14:25), is healthy and serves 389 routes, including gates, payments, forwarder digest, extract, prefill, create-from-text, bulk edit, `me/defaults`, control attention, the Secretary summary, `me/can`, the glossary and the ledger download. Migration `s2c3e5a7b9d2` **has already been applied once**, at that start: the app first made a safety copy, `data/pre-migrate/pre-migrate-r1b2d4f6a8c1-20261122-144614.db`, then migrated. No separate rehearsal on a scratch copy was done.
+
+Still waiting for a rebuild (owner's OK needed):
+
+**Next migration, built and rehearsed, not applied:** `t3d4f6b8c1e4` (child of `s2c3e5a7b9d2`) adds two empty nullable columns: `purchase_orders.currency` (a PO's currency; blank stays blank, never dollars; the PDF and the commercial invoice follow it) and `reconciliations.bill_detail` (the bill's own lines, so `GET /purchase-orders/{id}/bill-match` can show them beside the PO's lines; older bills show `detail: null`). It was rehearsed on a copy of the 08:42 backup on 2026-11-22 (upgrade twice, integrity check ok, every row count equal, downgrade and upgrade again). It applies at the next backend rebuild, which makes its own safety copy first.
+
+| | State |
+|---|---|
+| The five newest frontend screens | Need one **frontend-only** rebuild (`docker compose up --build -d frontend`) |
+| Server-side hiding of order cost and margin from non-managers, and of PO prices from a view-only sign-in | In the code and tested; needs a **backend** rebuild |
+| `POST /inbox/simulate` refused unless `INBOX_SIMULATION_ENABLED` is on (default off) | In the code and tested; needs a **backend** rebuild |
+| Backup tile after a restart shown as ok / stale / none instead of a problem | In the code and tested; needs a **backend** rebuild |
+
+**Nothing has been tested on Allied's real data.** All tests use made-up data and temporary databases. The real database has only been migrated by the app itself, with the safety copy above.
+
+## Less typing, and plain-language helpers (new)
+
+Every route here only reads or **proposes**. None of them saves a record, pays, sends or writes to monday or Sage.
+
+- **Read an email or a file into form fields:** `POST /api/v1/extract/rfq-from-email`, `/order-from-email`, `/po-from-pdf` (a file), `/vendor-quote` (text or a file), `/call-to-job-note`. Each field comes with a coarse confidence (exact pattern 0.9, matched to the customer or vendor list 0.8, a customer found only by name in the text 0.4, read from a picture 0.6, AI 0.5), where it came from, and the page and line. Money, PO numbers, dates, terms, quantities, weights and dimensions are always listed in `needs_check`. A field the rules cannot find is left out, never guessed. It works with the AI off (`ai_used: false`). Text over 20,000 characters keeps its start and its last 5,000 characters and says so.
+- **Count what people change:** after the person saves the form, `POST /extract/feedback` records kept, changed, blank or added per field (once, by the person who was shown it). `GET /ai/extraction-stats` (managers) shows the totals, so thresholds can be set from Allied's own data.
+- **Start a form filled:** `GET /prefill/{order|po|rfq|shipment}?customer=&vendor=` gives likely values with where each came from (the customer list, the last order, the vendor's last PO). `GET /records/{kind}/{ref}/duplicate-template` gives a record without its numbers, dates and status ("make another like this"). `GET/PUT /me/defaults` remembers a person's last choices.
+- **Paste text, get a proposal:** `POST /create/from-text` says whether it is an RFQ, an order or a shipment and proposes the body to confirm. Nothing is saved.
+- **Bulk edit:** `POST /records/bulk` changes owner, who has the ball and tags for up to 100 records, as a dry run unless `dry_run` is false. Owner and ball need a manager; the record must exist; an owner must be an Allied staff address.
+- **What needs attention:** `GET /control/attention` (quiet shipments, payments due for managers, gates waiting, drawings not yet verified, drafts waiting, backup state) and `GET /secretary/summary` (mail needing a reply, drafts, order emails, bills to check and money owed for managers, late orders).
+- **The Secretary box:** `POST /ai/secretary` understands "reply to ...", "follow up with everyone who owes us" and "my summary" by simple rules and makes **drafts only**; if it cannot tell, it says so and gives examples.
+- **What can I do, and what do I do:** `GET /me/can` (plain flags with the reason for each no) and `GET /search/tasks?q=` (plain-language tasks with a link and whether you may do them).
+- **Plain words:** `GET /glossary/app` for tooltips; managers edit with `PUT /glossary/app/{term}` (kept in a small file in the data folder, every change audited).
+- **Nudges:** `POST /nudges` sends a nudge or a milestone blast at once to Allied staff only (app notice, email, text), never with prices or customer names, limited per sender and per person, every send audited, with a practice mode that sends nothing. Only the people in `NUDGE_SENDERS` and admins can send.
+
+## Before the meeting: three settings to check
+
+Set these in `.env` on the server, then restart the backend (`docker compose up -d backend`). They are the owner's to set; nothing in the code defaults them to a person.
+
+```
+ENGINEER_APPROVERS=<Athish's exact work email>
+NUDGE_SENDERS=<Athish's email>,<Doug's email>
+FORWARDER_DOMAINS=<the freight forwarder's email domain, for example forwarder-example.com>
+```
+
+| Setting | Needed for the meeting? | If left empty |
+|---|---|---|
+| `ENGINEER_APPROVERS` | **Yes**, if you want to show a gate being approved | Nobody can approve a gate; the screen says "nobody can approve yet: set the approver list". |
+| `NUDGE_SENDERS` | Only to show nudges by Athish or Doug | Only admins can send nudges. |
+| `FORWARDER_DOMAINS` | No | Only a manager can apply a forwarder update; everyone else can still preview it. |
+
+Check after the restart: sign in as Athish and open `GET /api/v1/me/can` (or the Help page): `can_approve_gates` must be true. `/health/setup` should no longer list the approver line as missing.
+
+## Rebuilding from here (procedure for the next build; the owner approves each one)
+
+Migration `s2c3e5a7b9d2` has **already been applied** to the real database (see above; safety copy `data/pre-migrate/pre-migrate-r1b2d4f6a8c1-20261122-144614.db`). The steps below are for future builds. For a frontend-only change, rebuild only the frontend (`docker compose up --build -d frontend`); the database is not touched. For a build with a new migration, do the rehearsal in step 3 first.
+
+Never run any step below against the real database file from Windows while the app is up. The backend container is the only process allowed to open `data/allied_enterprise.db`.
+
+1. **Build without starting:** `docker compose build`. Keep the current image: `docker tag allied-backend:latest allied-backend:before-next` and the same for `allied-frontend` (use a new tag each time).
+2. **Back up, inside the container:** `docker compose exec backend python scripts/backup.py` (the safe copy while the app is live; it checks the copy and runs an integrity check). Copy the newest file from `data\backups` to another disk, and run `python scripts/backup.py --verify-only <file>` on the copy.
+3. **Only if the build adds a migration, rehearse on a copy, never on the live file:** make a scratch folder, copy the verified backup file into it as `rehearsal.db`, then from the repo folder:
+   ```
+   set DATABASE_URL=sqlite:///C:/scratch/rehearsal.db
+   python -m alembic upgrade head
+   ```
+   Check that `python -m alembic current` says the new head, that `pragma integrity_check` is `ok`, that the new tables exist, that the row counts of `orders`, `rfqs`, `purchase_orders` and `users` equal the backup's, and run it a second time (it must change nothing). The same rehearsal is automated in `tests/test_migration_follow_mail_prefs.py`.
+4. **Set the three settings** in `.env` (above). Keep `MONDAY_READ_ONLY=True` and `MONDAY_SIMULATION_MODE=True`.
+5. **Go live:** `docker compose up --build -d`. The backend migrates the database itself on start (new tables only; nothing existing is changed).
+6. **Smoke checks:** sign in; `GET /api/v1/health/live` answers and `/api/v1/health/setup` does not say the database is "newer than the app"; open Today, one job, Logistics and the Control room; `POST /api/v1/database/check` as a manager; open `/health/setup`.
+7. **Roll back if anything is wrong:** `docker compose down`; restore the backup over `data/allied_enterprise.db` (the old app refuses a database that has the new migration, so the backup is the way back, and anything entered after the migration is lost); put the old image back (`docker tag allied-backend:before-next allied-backend:latest`, same for the frontend) and `docker compose up -d`. Because the migration only adds tables, nothing else in the database was touched.
+
 ## Known limits
 
 Two accepted behaviours, kept as expected failures in the adversary tests (`tests/test_adversary_round16.py`, `round17.py`) so they stay visible:
@@ -439,6 +554,7 @@ Two accepted behaviours, kept as expected failures in the adversary tests (`test
 - **After a restart:** the board copy and monday history are empty until the next board read (up to an hour). Screens that use them say "not read yet" rather than fail.
 - **Indexes:** several often-filtered columns have no index yet (assistant_actions status/role/created, orders status/created, exceptions, audit log). Fine at today's size; worth a migration as history grows.
 - **Texts:** carrier email-to-text gateways are shut down. Real texts need Twilio with A2P 10DLC registration; ntfy push is the free option.
+- **Scanned pages:** every figure read by OCR is a suggestion until a person confirms it against the image; a faint scan is flagged low-confidence. A page that is only a picture is unreadable for the redaction check when Tesseract is not installed.
 - **CAD formats:** drawing compare reads PDF, pictures and DXF. DWG is a closed format with no free reader (export DXF or PDF) and STEP/IGES 3D models can't be compared yet.
 - **Translation can be wrong:** it uses the free AI and the engineering glossary (`data/ai_glossary.json`; add the company's terms there). Unsure terms are marked and the original is always one tap away. Nothing is translated automatically on outgoing mail.
 - **FedEx** has only been tested against a fake FedEx: enter the sandbox credentials, press Check connection, and compare one quote with FedEx's own before relying on it. FedEx Freight (LTL) isn't in FedEx's rates API, so freight prices come from the rate card, which someone must keep current.
@@ -450,5 +566,5 @@ Two accepted behaviours, kept as expected failures in the adversary tests (`test
 - **Bring in from Sage** is verified only against Sage's own Import/Export template field names (2023 help pages). Printed report headers (A/R and A/P aging, ledgers) and file encodings are not verified: try one real export with the owner before relying on it. Open-order mirrors close only when a newer full export of the same kind arrives.
 - **Import paperwork is prepared, not filed:** no duty table, importer-of-record or ISF fields, and no landed cost. The currency is chosen by the person.
 - **Approval limit ignores currency;** alert snooze is per alert, not per person (urgent alerts cap at 24 hours).
-- **demo_reset.py deletes the live database file (after a backup copy).** Never run it to prepare a demo; use the demo copy described under Presenting it.
+- **demo_reset.py refuses to run unless given `--delete-real-database`;** with that flag it deletes the live database file (after a backup copy). Never run it to prepare a demo; use the demo copy described under Presenting it.
 - **Large uploads without a size header:** a call recording sent without a Content-Length is still written to disk in full before the 25 MB limit applies.

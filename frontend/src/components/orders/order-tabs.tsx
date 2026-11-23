@@ -121,7 +121,8 @@ export function OrderEmails() {
       >
         <pre className="font-sans text-sm whitespace-pre-wrap">{open?.customer_acknowledgment_email}</pre>
       </DetailPanel>
-      {health?.simulation_mode && hasRole('OPERATOR') && <SampleEmail />}
+      {/* The sample order email is switched off on the server (it answers 403), so it is not offered. */}
+      {false && health?.simulation_mode && hasRole('ADMIN') && <SampleEmail />}
     </div>
   );
 }
@@ -150,12 +151,12 @@ function SampleEmail() {
 
   return (
     <details className="rounded-lg border bg-card p-4">
-      <summary className="cursor-pointer text-sm font-medium">Try a sample order email (practice mode)</summary>
+      <summary className="cursor-pointer text-sm font-medium">Demo only: make a real order from a sample email</summary>
       <form
         className="mt-3 grid gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          run.mutate();
+          if (window.confirm('This creates a real order in the app, not a practice one. Continue?')) run.mutate();
         }}
       >
         <div className="grid gap-3 sm:grid-cols-2">

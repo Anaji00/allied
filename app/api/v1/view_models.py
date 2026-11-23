@@ -588,6 +588,7 @@ class ShipmentRow(V):
     id: int
     project_item_id: Optional[str] = None
     forwarder: Optional[str] = None
+    forwarder_label: Optional[str] = None
     mode: Optional[str] = None
     reference: Optional[str] = None
     container_no: Optional[str] = None

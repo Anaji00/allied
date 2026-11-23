@@ -242,6 +242,7 @@ class DatabaseService:
             discrepancies=rec_data.get("discrepancies", []),
             suggested_action=rec_data.get("suggested_action"),
             dispute_email_draft=rec_data.get("dispute_email_draft"),
+            bill_detail=rec_data.get("bill_detail"),
         )
         db.add(record)
         db.commit()

@@ -55,6 +55,26 @@ def _name(email_or_text: Optional[str]) -> str:
     return email_or_text or ""
 
 
+def _local_date(at: Optional[datetime]) -> Optional[str]:
+    """The calendar day in the business's own time zone (YYYY-MM-DD), so a screen shows the same day everywhere: the UTC date can be a day ahead of the shop's evening."""
+    at = _aware(at)
+    if at is None:
+        return None
+    from zoneinfo import ZoneInfo
+
+    return at.astimezone(ZoneInfo(settings.BUSINESS_TZ)).date().isoformat()
+
+
+def _say_date(iso: Any) -> str:
+    """"2026-11-16" as "Nov 16" (with the year when it is not this year); anything that is not a date is left as it is."""
+    try:
+        d = date.fromisoformat(str(iso)[:10])
+    except ValueError:
+        return str(iso)
+    month = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[d.month - 1]
+    return f"{month} {d.day}" + ("" if d.year == notify.today().year else f", {d.year}")
+
+
 def _days(since: Optional[datetime]) -> float:
     since = _aware(since)
     return round(workdays.days_between(since, _now()), 1) if since else 0.0
@@ -67,12 +87,12 @@ def level_for(days: float, overdue: bool = False) -> int:
 
 def _view(r: ItemBallDB, label: str = "") -> Dict[str, Any]:
     days = _days(r.ball_since)
-    overdue = bool(r.due_at and r.due_at < date.today().isoformat() and not r.resolved_at)
+    overdue = bool(r.due_at and r.due_at < notify.today().isoformat() and not r.resolved_at)
     return {"item_type": r.item_type, "item_ref": r.item_ref, "label": label, "derived": False,
             "owner_email": r.owner_email, "owner_name": _name(r.owner_email),
             "ball_with": r.ball_with, "ball_label": KINDS.get(r.ball_with, r.ball_with), "ball_person": r.ball_person,
             "ball_name": _name(r.ball_person), "note": r.note or "", "due_at": r.due_at, "overdue": overdue,
-            "since": _aware(r.ball_since).isoformat(), "days_waiting": days, "level": r.escalation_level,
+            "since": _aware(r.ball_since).isoformat(), "since_date": _local_date(r.ball_since), "days_waiting": days, "level": r.escalation_level,
             "status": ("done" if r.resolved_at else {0: "on track", 1: "reminded", 2: "owner told", 3: "leadership told"}[r.escalation_level]),
             "resolved": bool(r.resolved_at), "history": r.history or []}
 
@@ -127,9 +147,9 @@ def set_ball(item_type: str, item_ref: str, user: Dict[str, Any], ball_with: Opt
         if kind in INTERNAL:
             person = (person or owner or row.owner_email or me).lower()
             if person not in directory:
-                raise BallError(f"I don't know {person}. Pick who has the ball from the list of people.")
+                raise BallError(f"I don't know {person}. Pick who it is waiting on from the list of people.")
         elif not person:
-            raise BallError(f"Say who has the ball ({KINDS[kind].lower()}: their name).")
+            raise BallError(f"Say who it is waiting on ({KINDS[kind].lower()}: their name).")
         moved = row.resolved_at is not None or (kind, (person or "")) != (row.ball_with, row.ball_person or "") or not row.history
         old = f"{KINDS.get(row.ball_with, row.ball_with)}: {_name(row.ball_person)}" if row.history else "nobody"
         if owner:
@@ -175,7 +195,7 @@ def resolve(item_type: str, item_ref: str, user: Dict[str, Any]) -> Dict[str, An
     with SessionLocal() as db:
         row = db.query(ItemBallDB).filter(ItemBallDB.item_type == item_type, ItemBallDB.item_ref == ref).first()
         if row is None or row.resolved_at:
-            raise LookupError("Nobody has the ball on that item.")
+            raise LookupError("Nobody is set as waiting on anything for that item.")
         row.resolved_at, row.set_by = _now(), me
         row.history = (row.history or []) + [{"at": _now().isoformat(), "by": me, "from": f"{KINDS[row.ball_with]}: {_name(row.ball_person)}",
                                               "to": "done", "note": ""}]
@@ -211,7 +231,7 @@ def _derived() -> List[Dict[str, Any]]:
         out.append({"item_type": item_type, "item_ref": ref, "label": label, "derived": True, "owner_email": owner,
                     "owner_name": _name(owner), "ball_with": kind, "ball_label": KINDS[kind], "ball_person": person,
                     "ball_name": _name(person), "note": note, "due_at": None, "overdue": False,
-                    "since": since.isoformat() if since else None, "days_waiting": days, "level": level_for(days),
+                    "since": since.isoformat() if since else None, "since_date": _local_date(since), "days_waiting": days, "level": level_for(days),
                     "status": "worked out from the item", "resolved": False, "history": []})
 
     try:
@@ -289,22 +309,26 @@ def summary() -> Dict[str, Any]:
         i["ball_name"] = spell.get(str(who_).casefold(), who_) if i["ball_name"] else i["ball_name"]
     by_kind: Dict[str, Dict[str, Any]] = {}
     people: Dict[str, Dict[str, Any]] = {}
+    no_owner = 0
     for i in items:
         k = by_kind.setdefault(i["ball_with"], {"kind": i["ball_with"], "label": i["ball_label"], "count": 0, "late": 0, "oldest_days": 0.0})
         k["count"] += 1
         k["late"] += i["days_waiting"] >= settings.BALL_NUDGE_DAYS
         k["oldest_days"] = max(k["oldest_days"], i["days_waiting"])
         who = i["ball_name"] or i["ball_person"] or "?"
+        if who == "?":                                           # nobody named: counted on its own, never shown as a holder called "?"
+            no_owner += 1
+            continue
         who = spell.get(str(who).casefold(), who)
         p = people.setdefault((i["ball_with"], str(who).casefold()), {"name": who, "kind": i["ball_with"], "count": 0, "late": 0, "oldest_days": 0.0})
         p["count"] += 1
         p["late"] += i["days_waiting"] >= settings.BALL_NUDGE_DAYS
         p["oldest_days"] = max(p["oldest_days"], i["days_waiting"])
-    return {"open": len(items), "late": sum(i["days_waiting"] >= settings.BALL_NUDGE_DAYS for i in items),
+    return {"no_owner_set": {"label": "No owner set", "count": no_owner}, "open": len(items), "late": sum(i["days_waiting"] >= settings.BALL_NUDGE_DAYS for i in items),
             "escalated": sum(i["level"] >= 2 for i in items), "by_kind": sorted(by_kind.values(), key=lambda k: -k["count"]),
             "by_holder": [{**p, "waiting_days": int(p["oldest_days"])} for p in sorted(people.values(), key=lambda p: (-p["late"], -p["count"]))[:15]], "oldest": items[:10],
-            "late_means": (f"Late means someone has had the ball for {settings.BALL_NUDGE_DAYS} working days or more. Escalated means {settings.BALL_ESCALATE_DAYS} days or more (the owner is told), "
-                           f"and {settings.BALL_LEADERSHIP_DAYS} days or more reaches leadership. Every escalated item is also late and also open: the three are not separate piles."),
+            "late_means": (f"Late means it has been waiting on someone for {settings.BALL_NUDGE_DAYS} working days or more. After {settings.BALL_ESCALATE_DAYS} days or more the owner is told, "
+                           f"and after {settings.BALL_LEADERSHIP_DAYS} days or more leadership is told. Every item the owner has been told about is also late and also still open: the three are not separate piles."),
             "rules": {"nudge_days": settings.BALL_NUDGE_DAYS, "escalate_days": settings.BALL_ESCALATE_DAYS,
                       "leadership_days": settings.BALL_LEADERSHIP_DAYS}}
 
@@ -372,7 +396,7 @@ def _climb(row_id: int, level: int, days: float) -> bool:
             elif level == 2:
                 to = [e for e in (owner, holder) if e]
                 title = f"{n} days waiting on {who}: {v['label']}"
-                body = f"{what}. Nothing has moved for {n} working days" + (f" and it was due {r.due_at}." if v["overdue"] else ".")
+                body = f"{what}. Nothing has moved for {n} working days" + (f" and it was due {_say_date(r.due_at)}." if v["overdue"] else ".")
                 kw = {"severity": "warning"}
             else:
                 to = [e for e in (owner, holder) if e]

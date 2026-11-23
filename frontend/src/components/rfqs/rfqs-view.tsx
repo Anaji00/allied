@@ -9,6 +9,7 @@ import { DataTable, columnHelper, recordKey } from '@/components/data/data-table
 import { DetailPanel, Facts } from '@/components/data/detail-panel';
 import { OwnerField } from '@/components/organize/owner-field';
 import { Tags } from '@/components/organize/tags';
+import { PasteToFill } from '@/components/extract/paste-to-fill';
 import { OpenJob } from '@/components/jobs/open-job';
 import { CompareForOrder } from '@/components/jobs/compare-for-order';
 import { RecordFields } from '@/components/data/record-fields';
@@ -27,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useListNav } from '@/hooks/use-list-nav';
+import { authFetch } from '@/lib/api';
 import { dateTime, money, person, words } from '@/lib/format';
 import { addRfq, fetchRfqs, updateRfq } from '@/lib/opsApi';
 import { BulkBar } from '@/components/data/bulk-bar';
@@ -523,12 +525,30 @@ function AddRfq({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: 
   const blank = { customer: '', contact_email: '', subject: '', summary: '', complexity: 'STANDARD', owner_email: '' };
   const customers = useKnownCustomers();
   const [form, setForm] = useState(blank);
+  const [pasting, setPasting] = useState(false);
+  // What the app read from a pasted email, so the person's corrections can be counted after saving.
+  const [extraction, setExtraction] = useState<{ id: string; shown: Record<string, string> } | null>(null);
   const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const add = useMutation({
     mutationFn: async () =>
       (await addRfq({ ...form, owner_email: form.owner_email || null, contact_email: form.contact_email || null })) as Rfq,
     onSuccess: (r) => {
       toast.success(`Logged ${r.number}`);
+      if (extraction)
+        void authFetch('/api/v1/extract/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            extraction_id: extraction.id,
+            fields: {
+              customer: form.customer,
+              contact_email: form.contact_email,
+              subject: form.subject,
+              items: form.summary,
+            },
+          }),
+        }).catch(() => null);
+      setExtraction(null);
       void client.invalidateQueries({ queryKey: ['rfqs'] });
       setForm(blank);
       onOpenChange(false);
@@ -545,6 +565,40 @@ function AddRfq({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: 
           <DialogTitle>Log an RFQ</DialogTitle>
           <DialogDescription>For requests that came by phone or in person. Emailed ones are logged automatically.</DialogDescription>
         </DialogHeader>
+        <Button type="button" variant="outline" size="sm" className="justify-self-start" onClick={() => setPasting(true)}>
+          Paste an email to fill this in
+        </Button>
+        {pasting && (
+          <PasteToFill
+            kind="rfq-from-email"
+            labels={{
+              customer: 'Customer',
+              contact_email: 'Contact email',
+              subject: 'What to quote',
+              items: 'Lines (quantity and what)',
+              customer_rfq_number: 'Customer’s RFQ number',
+              due_date: 'Due date',
+            }}
+            onClose={() => setPasting(false)}
+            onUse={(v, id) => {
+              const details = [
+                v.items,
+                v.customer_rfq_number ? `Customer RFQ: ${v.customer_rfq_number}` : '',
+                v.due_date ? `Due: ${v.due_date}` : '',
+              ]
+                .filter(Boolean)
+                .join('\n');
+              setForm((f) => ({
+                ...f,
+                customer: v.customer ?? f.customer,
+                contact_email: v.contact_email ?? f.contact_email,
+                subject: v.subject ?? f.subject,
+                summary: details || f.summary,
+              }));
+              if (id) setExtraction({ id, shown: v });
+            }}
+          />
+        )}
         <form
           id="add-rfq"
           className="grid gap-3"

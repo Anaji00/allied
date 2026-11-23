@@ -61,7 +61,7 @@ export function OrderStatusTool() {
   });
   return (
     <Card
-      title="Where is my order?"
+      title="Where is a customer’s order?"
       note="Type a sales order number to see its status the way you would tell a caller. Nothing is changed."
     >
       <form
@@ -268,7 +268,7 @@ export function AutomationsTool() {
               </span>
               {a.description && <span className="text-muted-foreground">{a.description}</span>}
               <span className="text-xs text-muted-foreground">
-                Would act on {a.would_act_on_today ?? 0} today
+                Would draft or flag {a.would_act_on_today ?? 0} today (nothing is sent)
                 {(a.waiting_for_ok ?? 0) > 0 ? ` · ${a.waiting_for_ok} waiting for your OK` : ''}
                 {(a.failed ?? 0) > 0 ? ` · ${a.failed} failed` : ''}
               </span>

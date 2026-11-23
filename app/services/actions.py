@@ -25,9 +25,10 @@ _INT = frozenset({"internal"})
 _COST = frozenset({"internal$"})                  # costs and margins: Allied managers only (and a vendor sees the price on its own PO)
 # which attachment kinds may go to which audience
 ATTACH_FOR = {"po_pdf": {"internal", "vendor"}, "design_file": {"internal", "vendor"}, "commercial_invoice": {"internal", "forwarder"},
-              "packing_list": {"internal", "forwarder"}, "packing_slip": {"internal", "customer"}, "board_export": {"internal"}, "drawing_overlay": {"internal", "vendor"}}
+              "packing_list": {"internal", "forwarder"}, "packing_slip": {"internal", "customer"}, "board_export": {"internal"}, "drawing_overlay": {"internal", "vendor"},
+              "payment_doc": {"internal", "vendor"}, "po_file": {"internal", "vendor"}}
 _ATTACH_LABEL = {"po_pdf": "Purchase order PDF", "design_file": "Drawing", "commercial_invoice": "Commercial invoice", "packing_list": "Packing list",
-                 "packing_slip": "Packing slip", "board_export": "This row as a CSV file", "drawing_overlay": "Drawing comparison overlay"}
+                 "packing_slip": "Packing slip", "board_export": "This row as a CSV file", "drawing_overlay": "Drawing comparison overlay", "payment_doc": "Wire copy or proforma", "po_file": "File on this PO's job"}
 
 
 class ActionError(ValueError):
@@ -276,6 +277,12 @@ def _spec_ok(spec: Any, audience: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     hit = next((f for f in ctx["files"] if f["type"] == spec["type"] and str(f["id"]) == str(spec.get("id"))), None)
     if hit is None:
         raise ActionError(f"That {_ATTACH_LABEL[spec['type']].lower()} is not one of this item's files.")
+    if hit["type"] == "design_file" and audience == "vendor":
+        from app.services import redaction
+
+        blocked = redaction.vendor_block(hit["id"])
+        if blocked:
+            raise ActionError(blocked)
     if hit["type"] == "drawing_overlay" and audience != "internal":
         from app.services import drawing_files
 
@@ -421,6 +428,20 @@ def resolve_attachments(specs: Any, audience: str, user: Dict[str, Any]) -> List
             out.append(_packing_slip(str(i)))
         elif t == "board_export":
             out.append(_row_csv(str(i)))
+        elif t == "payment_doc":
+            from app.services import vendor_payments
+
+            try:
+                out.append(vendor_payments.payment_doc_bytes(int(i)))
+            except Exception as exc:  # noqa: BLE001
+                raise ActionError(str(getattr(exc, "message", exc)))
+        elif t == "po_file":
+            from app.services import vendor_payments
+
+            try:
+                out.append(vendor_payments.po_file_bytes(int(i), int(spec.get("po"))))
+            except Exception as exc:  # noqa: BLE001
+                raise ActionError(str(getattr(exc, "message", exc)))
         elif t == "drawing_overlay":
             from app.services import drawing_files
 

@@ -64,6 +64,14 @@ export function TopBar({ onOpenPalette, shortcut }: { onOpenPalette: () => void;
           <span className="hidden flex-1 text-left sm:inline">Search everything</span>
           <Kbd className="hidden sm:inline-flex">{shortcut}</Kbd>
         </Button>
+        <Link
+          href="/help"
+          aria-label="Help"
+          title="Help: what you want to do, in plain words"
+          className="inline-flex size-8 items-center justify-center rounded-full border text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          ?
+        </Link>
         <StatusPill />
         <UserMenu />
       </div>
@@ -79,7 +87,7 @@ function StatusPill() {
     : isError
       ? { dot: 'bg-bad', text: 'Server unreachable', tip: 'The API did not answer. Pages may show old data.' }
       : data?.simulation_mode
-        ? { dot: 'bg-warn', text: 'Sage practice mode', tip: 'Sage writes are simulated until a live connection is switched on.' }
+        ? { dot: 'bg-warn', text: 'Sage practice mode', tip: 'Nothing is written into Sage. You download files and import them yourself.' }
         : { dot: 'bg-ok', text: 'All systems normal', tip: 'API, database and Sage connection are up.' };
 
   return (
@@ -155,6 +163,7 @@ function UserMenu() {
           <DropdownMenuSeparator />
           <LanguageMenuGroup />
           <DropdownMenuSeparator />
+          <DropdownMenuItem render={<Link href="/toolkit?tab=notifications" />}>My notifications</DropdownMenuItem>
           <DropdownMenuItem onClick={() => setPwOpen(true)}>
             <KeyRound /> Change password
           </DropdownMenuItem>

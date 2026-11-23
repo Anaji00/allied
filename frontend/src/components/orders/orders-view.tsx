@@ -22,7 +22,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useListNav } from '@/hooks/use-list-nav';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { openDocument } from '@/lib/assistant-api';
-import { date, money, moneyNamed, pct, kindWord, words } from '@/lib/format';
+import { date, money, moneyNamed, pct, sumUsd, fxNote, kindWord, words } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { authFetch } from '@/lib/api';
@@ -169,6 +169,9 @@ const col = columnHelper<Order>();
 
 /** Order totals in each order's own currency; mixed currencies are never added together. */
 function totalsByCurrency(rows: Order[]) {
+  // Everything in US dollars when every currency has a rate; otherwise each currency on its own, never added together.
+  const inUsd = sumUsd(rows.map((o) => ({ value: o.total_revenue, currency: o.currency })));
+  if (inUsd) return inUsd;
   const sums: Record<string, number> = {};
   rows.forEach((o) => {
     sums[o.currency] = (sums[o.currency] ?? 0) + Number(o.total_revenue || 0);
@@ -270,8 +273,10 @@ function OrderList() {
     }),
     col.accessor('gross_margin_pct', {
       header: 'Margin',
-      meta: { align: 'right', footer: (rows) => `avg ${averageMargin(rows)}` },
+      meta: { align: 'right', footer: (rows) => (hasRole('MANAGER') ? `avg ${averageMargin(rows)}` : '') },
       cell: (c) => {
+        if (!hasRole('MANAGER')) return null;
+        if (!Number(c.row.original.total_expense)) return <span className="text-muted-foreground">no cost yet</span>;
         const thin = Number(c.row.original.total_revenue) > 0 && Number(c.getValue()) < floor;
         const loss = Number(c.row.original.total_revenue) > 0 && Number(c.getValue()) < 0;
         return (
@@ -444,6 +449,7 @@ function OrderList() {
                     </EmptyState>
                   }
                 />
+                {fxNote() && <p className="mt-2 text-xs text-muted-foreground">{fxNote()}</p>}
               </div>
             </>
           )}

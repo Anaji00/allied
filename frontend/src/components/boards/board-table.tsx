@@ -8,6 +8,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -463,8 +464,8 @@ export function BoardTable({
                               {drag.can && !isJobs && (
                                 <DropdownMenu>
                                   <DropdownMenuTrigger
-                                    aria-label={`More for ${item.name}`}
-                                    className="shrink-0 rounded p-1 text-muted-foreground opacity-0 outline-none group-hover/row:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+                                    aria-label={`Row actions for ${item.name}`}
+                                    className="shrink-0 rounded p-1 text-muted-foreground opacity-60 outline-none group-hover/row:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <MoreHorizontal className="size-3.5" />
@@ -472,7 +473,9 @@ export function BoardTable({
                                   <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
                                     <DropdownMenuItem onClick={() => drag.rowAction(item, 'duplicate')}>Make a copy</DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuLabel>Move to</DropdownMenuLabel>
+                                    <DropdownMenuGroup>
+                                      <DropdownMenuLabel>Move to</DropdownMenuLabel>
+                                    </DropdownMenuGroup>
                                     {board.groups
                                       .filter((x) => x.id !== g.id)
                                       .map((x) => (

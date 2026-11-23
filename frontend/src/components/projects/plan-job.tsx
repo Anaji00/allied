@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { authFetch } from '@/lib/api';
-import { day } from '@/lib/format';
+import { day, localIso } from '@/lib/format';
 
 export type Template = {
   id: string;
@@ -56,7 +56,7 @@ export function PlanJob() {
   const [open, setOpen] = useState(false);
   const [id, setId] = useState('');
   const [project, setProject] = useState('');
-  const [start, setStart] = useState(() => new Date().toISOString().slice(0, 10));
+  const [start, setStart] = useState(() => localIso(new Date()));
   const [owners, setOwners] = useState<Record<string, string>>({});
   const [steps, setSteps] = useState<Step[] | null>(null);
   const people = useAppPeople();

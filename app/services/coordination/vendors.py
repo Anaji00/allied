@@ -160,12 +160,12 @@ def _assess_core(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Opt
     need_source = "set by hand" if need else None
     if not need and project and _day(project.get("due_date")):
         need = _day(project["due_date"]) - timedelta(days=_transit(j.get("mode")) + settings.VENDOR_BUFFER_DAYS)
-        need_source = f"project due {project['due_date']} - {_transit(j.get('mode'))} days transit - {settings.VENDOR_BUFFER_DAYS} days buffer"
+        need_source = f"project due {_nice(_day(project['due_date']))} - {_transit(j.get('mode'))} days transit - {settings.VENDOR_BUFFER_DAYS} days buffer"
     elif not need and _day(j.get("customer_due")):
         transit = _transit(j.get("mode")) if settings.VENDOR_CUSTOMER_DUE_IS_DELIVERY else 0
         need = _day(j["customer_due"]) - timedelta(days=transit + settings.VENDOR_BUFFER_DAYS)
-        need_source = (f"customer due {j['customer_due']} - {transit} days transit - {settings.VENDOR_BUFFER_DAYS} days buffer"
-                       if transit else f"customer ship date {j['customer_due']} - {settings.VENDOR_BUFFER_DAYS} days buffer")
+        need_source = (f"customer due {_nice(_day(j['customer_due']))} - {transit} days transit - {settings.VENDOR_BUFFER_DAYS} days buffer"
+                       if transit else f"customer ship date {_nice(_day(j['customer_due']))} - {settings.VENDOR_BUFFER_DAYS} days buffer")
     promised = _day(j.get("promised_on"))
     ordered = _day(j.get("ordered_on"))
     expected, basis = promised, "vendor's promise" if promised else None
@@ -202,13 +202,13 @@ def _assess_core(j: Dict[str, Any], project: Optional[Dict[str, Any]], card: Opt
         if state != "late":
             state = "will_miss"
         whose = "the customer" if need_source and need_source.startswith("customer") else "the project"
-        reasons.append(f"expected {_nice(expected)} but must ship by {_nice(need)} for {whose}")
+        reasons.append(f"the vendor says {_nice(expected)}; it must ship by {_nice(need)} for {whose}")
     elif need and promised and forecast and history >= settings.VENDOR_HISTORY_MIN_JOBS and forecast > need and state == "on_track":
         state = "at_risk"
         reasons.append(f"promise is in time, but this vendor usually takes longer (forecast {_nice(forecast)})")
     elif need and expected and state == "on_track" and (need - expected).days < settings.VENDOR_BUFFER_DAYS // 2:
         state = "at_risk"
-        reasons.append(f"only {(need - expected).days} days of slack before the ship-by date")
+        reasons.append(f"only {(need - expected).days} day{'s' if (need - expected).days != 1 else ''} of slack before the ship-by date")
     # A board with no confirmation column can't show one, so it isn't chased for it.
     tracks_ack = j.get("source") != "monday" or bool(settings.VENDOR_ACK_COLUMN_ID)
     if tracks_ack and not j.get("acknowledged_on") and not promised and ordered:
@@ -353,6 +353,37 @@ def _follow_up(j: Dict[str, Any], chased: Dict[str, Any], on: date) -> Optional[
             "started": started, "owner": j.get("owner_email"), "reason": reason}
 
 
+WATCHDOG_TIERS = (("OVERDUE", None), ("APPROACHING_3", 3), ("APPROACHING_7", 7))
+
+
+_FINISHED_WORDS = ("delivered", "received", "complete", "closed", "shipped", "done", "fulfilled", "finished", "picked up", "arrived", "dropped")
+
+
+def is_finished_status(status: Any) -> bool:
+    """A status that means the order is over: cancelled in any spelling or sentence, delivered, received, complete, closed, shipped. Case, spaces and punctuation are ignored."""
+    t = " ".join(str(status or "").lower().replace("-", " ").split())
+    return "cancel" in t or "\u53d6\u6d88" in t or any(w in t for w in _FINISHED_WORDS)
+
+
+def watchdog_tier(j: Dict[str, Any], on: date) -> Optional[Dict[str, Any]]:
+    """The lead-time watchdog: where a not-yet-shipped order stands against the date the vendor promised (or, with no promise, the PO date plus the quoted lead time).
+    tier OVERDUE (past it), APPROACHING_3 (0 to 3 days left), APPROACHING_7 (4 to 7 days left), else None. {tier, days_left, due_on}."""
+    if _day(j.get("shipped_on")) or is_finished_status(j.get("status")):
+        return None
+    try:
+        due = _day(j.get("promised_on"))
+        if due is None and j.get("ordered_on") and j.get("quoted_lead_days") is not None:
+            ordered = _day(j.get("ordered_on"))
+            due = ordered + timedelta(days=int(j["quoted_lead_days"])) if ordered else None
+        if due is None:
+            return None
+        left = (due - on).days
+    except (OverflowError, ValueError):                                      # an impossible date on one line is that line's problem, not the watchdog's
+        return None
+    tier = "OVERDUE" if left < 0 else "APPROACHING_3" if left <= 3 else "APPROACHING_7" if left <= 7 else None
+    return {"tier": tier, "days_left": left, "due_on": due.isoformat()} if tier else None
+
+
 def overview(on: Optional[date] = None, include_shipped: bool = False) -> Dict[str, Any]:
     on = on or alerts.today()
     jobs = _all()
@@ -363,11 +394,17 @@ def overview(on: Optional[date] = None, include_shipped: bool = False) -> Dict[s
     counts = {"late": 0, "will_miss": 0, "at_risk": 0, "no_ack": 0, "checkin": 0}
     for j in jobs:
         p = projects.get(j.get("project_item_id") or "")
-        j.update(assess(j, p, cards.get(j["vendor"]), on))
-        j["project_name"] = p["name"] if p else None
-        j["project_due"] = p["due_date"] if p else None
-        j["blocked_by"] = _blocked_by(j, p, on)
-        j["follow_up"] = _follow_up(j, chased.get(j["id"], {}), on)
+        try:
+            j.update(assess(j, p, cards.get(j["vendor"]), on))
+            j["project_name"] = p["name"] if p else None
+            j["project_due"] = p["due_date"] if p else None
+            j["blocked_by"] = _blocked_by(j, p, on)
+            j["follow_up"] = _follow_up(j, chased.get(j["id"], {}), on)
+            j["watchdog"] = watchdog_tier(j, on)
+        except (OverflowError, ValueError):                                  # one line with an impossible date is shown as such; it never stops the rest of the board
+            j.update({"state": "no_dates", "reasons": ["a date on this line is out of range: correct it"], "need_by": None, "need_source": None, "expected": None, "expected_basis": None,
+                      "slack_days": None, "days_late": None, "text": "A date on this line is out of range.", "next_step_suggested": "Correct the date.", "project_name": p["name"] if p else None,
+                      "project_due": p["due_date"] if p else None, "blocked_by": None, "follow_up": None, "watchdog": None, "bad_dates": True})
         if j["state"] in counts:
             counts[j["state"]] += 1
         if include_shipped or j["state"] != "shipped":
@@ -390,8 +427,43 @@ def _log(row: VendorJobDB, who: str, notes: List[str]) -> None:
     row.updated_at = workdays.now()
 
 
+# A status on an order tied to a PO needs no gate only when it is one of these (the order is not yet in the vendor's shop, or it is called off). Anything else is production, crating or pickup in some words
+# (machining, WIP, 生产中, boxed, ready for pickup ...) and is gated: the words on the Gate 2 side are listed, every other unknown word is treated as production (Gate 1).
+_NO_GATE_STATUSES = ("ordered", "po sent", "po issued", "sent", "quoted", "quote", "requested", "waiting for drawing", "waiting on drawing", "waiting for approval", "awaiting drawing", "acknowledged", "confirmed",
+                     "on hold", "delayed", "cancelled", "canceled", "new", "draft", "open", "pending", "waiting")
+_GATE2_WORDS = ("crat", "pack", "box", "pallet", "ready", "load", "pickup", "pick up", "pick-up", "ship", "deliver", "received", "complete", "closed", "done", "dispatch", "freight", "\u88c5\u7bb1", "\u53d1\u8d27", "\u5305\u88c5")
+
+
+def _gate_check(row: VendorJobDB, data: Dict[str, Any]) -> None:
+    """The engineer gates on a vendor order tied to a job: production counts as started only after Gate 1, and crating or the carrier's pickup (the ship date) only after Gate 2. A hard block with a plain
+    sentence; a manager's override (with a written reason) opens it. An order not tied to a job is not gated."""
+    if not settings.GATES_ENFORCED or not row.purchase_order_id:
+        return
+    from app.models.db_models import PurchaseOrderDB
+    from app.services import gates
+
+    with SessionLocal() as db:
+        po = db.get(PurchaseOrderDB, row.purchase_order_id)
+    if po is None or not po.job_id:
+        return
+    status = " ".join(str(data.get("status") or "").lower().split())
+    wants = []
+    if status and not any(status == w or status.startswith(w + " ") or ("cancel" in status) for w in _NO_GATE_STATUSES):
+        if any(w in status for w in _GATE2_WORDS):
+            wants.append((2, "Crating and pickup cannot go ahead"))
+        else:
+            wants.append((1, "Production cannot start"))
+    if data.get("shipped_on") and not row.shipped_on and not any(g == 2 for g, _w in wants):
+        wants.append((2, "Crating and pickup cannot go ahead"))
+    for gate, what in wants:
+        why = gates.blocked(po.job_id, gate, po.id)
+        if why:
+            raise ValueError(f"{what}: {why}")
+
+
 def _apply(row: VendorJobDB, data: Dict[str, Any], who: str) -> List[str]:
     """Sets fields, keeping the first promise and counting every later move as a slip."""
+    _gate_check(row, data)
     notes = []
     for f in TEXT_FIELDS:
         if f not in data or data[f] is None:
@@ -418,8 +490,8 @@ def _apply(row: VendorJobDB, data: Dict[str, Any], who: str) -> List[str]:
         if f not in data or data[f] in (None, ""):
             continue
         value = _date_ok(str(data[f]))
-        if value is None:
-            raise ValueError(f"{f.replace('_', ' ')} must be a real date as YYYY-MM-DD.")
+        if value is None or not ("2000-01-01" <= value <= "2100-12-31"):
+            raise ValueError(f"{f.replace('_', ' ')} must be a real date between 2000 and 2100, as YYYY-MM-DD.")
         old = getattr(row, f)
         if value == old:
             continue
@@ -431,7 +503,7 @@ def _apply(row: VendorJobDB, data: Dict[str, Any], who: str) -> List[str]:
         notes.append(f"{f.replace('_', ' ')} {old or 'none'} -> {value}")
         setattr(row, f, value)
     if not row.vendor:
-        raise ValueError("Say which vendor.")
+        raise ValueError("Say which vendor this order is with.")
     return notes
 
 
@@ -445,6 +517,13 @@ def create(data: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     who = user.get("email", "system")
     with SessionLocal() as db:
         row = VendorJobDB(vendor="", description="", history=[], source="manual", owner_email=who)
+        number = str(data.get("po_number") or "").strip()
+        if number:                                                          # a new line made with a PO number is linked to that PO now, so the gates apply from its first status
+            from app.models.db_models import PurchaseOrderDB
+
+            po = db.query(PurchaseOrderDB).filter(PurchaseOrderDB.po_number == number).first()
+            if po is not None:
+                row.purchase_order_id = po.id
         notes = _apply(row, data, who)
         _log(row, who, ["added"] + notes)
         db.add(row)

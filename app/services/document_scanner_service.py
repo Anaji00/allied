@@ -76,7 +76,23 @@ def init_tesseract() -> Optional[str]:
     p = get_tesseract_path()
     if p:
         pytesseract.pytesseract.tesseract_cmd = p
+        _use_local_tessdata()
     return p
+
+
+def _use_local_tessdata() -> None:
+    """A tessdata folder next to the app (BASE_DIR/tessdata, or TESSDATA_DIR) that holds eng and chi_sim is used when TESSDATA_PREFIX is not already set: on a PC where Tesseract sits in Program Files and the
+    Chinese data cannot be added there without administrator rights. In the Docker image the package puts all data in place and this does nothing."""
+    from pathlib import Path
+
+    if os.environ.get("TESSDATA_PREFIX"):
+        return
+    from app.config import settings
+
+    for folder in (getattr(settings, "TESSDATA_DIR", None), Path(settings.BASE_DIR) / "tessdata"):
+        if folder and (Path(folder) / "eng.traineddata").is_file() and (Path(folder) / "chi_sim.traineddata").is_file():
+            os.environ["TESSDATA_PREFIX"] = str(folder)
+            return
 
 
 # Longest side of a rendered page. An oversized (e.g. A0 or a crafted) page at
@@ -166,23 +182,67 @@ def _prepare(img: Any) -> Any:
     return img
 
 
+def chinese_available() -> bool:
+    """Is Simplified Chinese reading installed (tesseract-ocr-chi-sim)?"""
+    try:
+        return "chi_sim" in set(pytesseract.get_languages(config=""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def ocr_lang() -> str:
+    """English, plus Simplified Chinese when its data is installed; English alone otherwise."""
+    return "eng+chi_sim" if chinese_available() else "eng"
+
+
+def _cjk_count(text: str) -> int:
+    return len(re.findall(r"[一-鿿]", text or ""))
+
+
+def looks_chinese(first_reading: str) -> bool:
+    """A page that probably holds Chinese: the English-only reading came out as gibberish (almost no real words) or already shows some Chinese characters."""
+    return _cjk_count(first_reading) >= 2 or (len((first_reading or "").strip()) >= 8 and _read_score(first_reading) < 6)
+
+
 def ocr_upright(img: Any) -> str:
-    """Read a picture of a page however it was sent. Reads it as it is; if that comes out like gibberish (a sideways or upside-down
-    scan, a PDF whose page was scanned on its side) it tries the other three ways up and keeps the best reading."""
+    """Read a picture of a page however it was sent. Reads it as English; a page that looks Chinese is read again as English plus Simplified Chinese (when installed) and the better reading is kept. If it
+    still comes out like gibberish (a sideways or upside-down scan) it tries the other three ways up and keeps the best reading."""
     img = _prepare(img)
-    best = pytesseract.image_to_string(img).strip()
-    best_score = _read_score(best)
+    best = pytesseract.image_to_string(img, lang="eng").strip()
+    if chinese_available() and looks_chinese(best):
+        both = pytesseract.image_to_string(img, lang="eng+chi_sim").strip()
+        if _cjk_count(both) > _cjk_count(best) or _read_score(both) > _read_score(best):
+            best = both
+    best_score = _read_score(best) + (_cjk_count(best) // 2)
     if best_score >= 20:
         return best
+    lang = ocr_lang()
     for angle in (90, 270, 180):
         try:
-            text = pytesseract.image_to_string(img.rotate(angle, expand=True)).strip()
+            text = pytesseract.image_to_string(img.rotate(angle, expand=True), lang=lang).strip()
         except Exception:  # noqa: BLE001
             continue
-        score = _read_score(text)
+        score = _read_score(text) + (_cjk_count(text) // 2)
         if score > best_score:
             best, best_score = text, score
     return best
+
+
+def low_confidence_words(img: Any, threshold: int = 60) -> List[str]:
+    """Words Tesseract itself is unsure of (confidence under the threshold): a faint scan gives many. A person confirms every figure anyway; this says which ones to look at hardest."""
+    try:
+        data = pytesseract.image_to_data(_prepare(img), lang=ocr_lang(), output_type=pytesseract.Output.DICT)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for text, conf in zip(data.get("text", []), data.get("conf", [])):
+        try:
+            c = float(conf)
+        except (TypeError, ValueError):
+            continue
+        if str(text).strip() and 0 <= c < threshold:
+            out.append(str(text).strip())
+    return out
 
 
 def parse_quantity(line: str) -> Decimal:

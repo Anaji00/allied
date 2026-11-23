@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Lock, Pencil } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { day, words } from '@/lib/format';
 
 type Field = {
   field: string;
@@ -18,6 +19,17 @@ type Field = {
 };
 
 const show = (v: unknown) => (v === null || v === undefined || v === '' ? '–' : String(v));
+/** How a value reads on screen: calendar dates as "Nov 4", choice codes by their label or as words. Editing still uses the raw value. */
+function shown(f: Field): string {
+  const v = f.value;
+  if (v === null || v === undefined || v === '') return '–';
+  const text = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(text) && (f.type === 'date' || f.field.includes('date') || f.field.startsWith('eta'))) return day(text);
+  const hit = (f.choices ?? []).map((c) => (typeof c === 'string' ? { value: c, label: c } : c)).find((c) => c.value === text);
+  if (hit && hit.label !== hit.value) return hit.label;
+  return /^[A-Z][A-Z_]+$/.test(text) ? words(text) : text;
+}
+const GENERIC_LOCK = 'It is worked out or fixed by the app.';
 
 /**
  * The details of any record (job, quote request, purchase order, shipment, customer, vendor, product) as a list you can edit in place:
@@ -87,7 +99,7 @@ export function RecordFields({ kind, refId, title = 'Details' }: { kind: string;
                   )}
                   title="Click to change"
                 >
-                  {show(f.value)}
+                  {shown(f)}
                   <Pencil className="size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" aria-hidden />
                 </button>
               ) : (
@@ -95,9 +107,9 @@ export function RecordFields({ kind, refId, title = 'Details' }: { kind: string;
                   className="inline-flex items-center gap-1.5 px-1 py-0.5 text-muted-foreground"
                   title={f.why_locked || 'This can’t be changed'}
                 >
-                  {show(f.value)}
+                  {shown(f)}
                   <Lock className="size-3 shrink-0" aria-hidden />
-                  {f.why_locked && <span className="text-xs">{f.why_locked}</span>}
+                  {f.why_locked && f.why_locked !== GENERIC_LOCK && <span className="text-xs">{f.why_locked}</span>}
                 </span>
               )}
             </dd>

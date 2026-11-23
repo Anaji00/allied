@@ -5,12 +5,15 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 
-const TABS: { href: string; label: string; also?: string[]; minRole?: 'OPERATOR' | 'MANAGER' }[] = [
+const TABS: { href: string; label: string; exact?: boolean; also?: string[]; minRole?: 'OPERATOR' | 'MANAGER' }[] = [
+  { href: '/secretary', label: 'Start here', exact: true },
   { href: '/inbox', label: 'Today', also: ['/chase', '/mine', '/ball'] },
   { href: '/secretary/mail', label: 'Email', minRole: 'OPERATOR' },
   { href: '/orders', label: 'Orders & Sage', also: ['/rfqs'] },
+  { href: '/logistics', label: 'Freight and shipping', also: ['/shipments', '/carriers'] },
   { href: '/contacts', label: 'Contacts', also: ['/vendors'] },
   { href: '/sales', label: 'Sales', minRole: 'OPERATOR' },
+  { href: '/help', label: 'Help' },
 ];
 
 /** The Secretary workspace: the pages of the day's work, one click apart. */
@@ -20,7 +23,7 @@ export function SecretaryTabs() {
   return (
     <nav aria-label="Secretary" className="mb-4 flex gap-1 overflow-x-auto border-b">
       {TABS.filter((t) => !t.minRole || hasRole(t.minRole)).map((t) => {
-        const on = [t.href, ...(t.also ?? [])].some((h) => pathname === h || pathname.startsWith(`${h}/`));
+        const on = t.exact ? pathname === t.href : [t.href, ...(t.also ?? [])].some((h) => pathname === h || pathname.startsWith(`${h}/`));
         return (
           <Link
             key={t.href}

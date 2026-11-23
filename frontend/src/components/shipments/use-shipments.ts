@@ -9,6 +9,7 @@ export type ShipmentEvent = { at: string; status: string; description?: string |
 export type Shipment = {
   id: number;
   /** Added by the server: how long since the last update, and the owner's real name. */
+  forwarder_label?: string | null;
   quiet_days?: number | null;
   quiet_flag?: string | null;
   owner_name?: string | null;

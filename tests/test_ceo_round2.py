@@ -25,7 +25,7 @@ def test_the_summary_says_what_late_means_and_gives_waiting_days_per_holder(monk
     out = ball.summary()
     assert len(out["by_holder"]) == 1 and out["by_holder"][0]["name"] == "Helen" and out["by_holder"][0]["count"] == 3
     assert out["by_holder"][0]["waiting_days"] == 68 and out["by_holder"][0]["late"] == 3
-    assert f"{settings.BALL_NUDGE_DAYS} working days" in out["late_means"] and "also late" in out["late_means"] and str(settings.BALL_LEADERSHIP_DAYS) in out["late_means"]
+    assert f"{settings.BALL_NUDGE_DAYS} working days" in out["late_means"] and "also late" in out["late_means"] and "ball" not in out["late_means"].lower() and "escalated" not in out["late_means"].lower() and str(settings.BALL_LEADERSHIP_DAYS) in out["late_means"]
     assert {r["ball_name"] for r in out["oldest"]} == {"Helen"}
 
 

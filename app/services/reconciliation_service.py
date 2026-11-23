@@ -497,6 +497,8 @@ class ReconciliationService:
 
         # In-memory history for fast API responses
         rec_dict = result.model_dump()
+        rec_dict["bill_detail"] = {"lines": [{"item_id": l.item_id, "description": l.description, "quantity": str(l.quantity_billed), "unit_cost": str(l.unit_cost_billed), "amount": str(l.total_amount)} for l in invoice.lines],
+                                   "freight": str(invoice.freight_billed), "currency": invoice.currency, "invoice_date": str(invoice.invoice_date)}
         self._history.insert(0, rec_dict)
         del self._history[_MAX_HISTORY:]
 

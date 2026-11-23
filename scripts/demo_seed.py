@@ -93,6 +93,7 @@ def demo_env(p: dict, password: str = "") -> dict:
         "FEDEX_ENABLED": "False", "FEDEX_CLIENT_ID": "", "FEDEX_CLIENT_SECRET": "", "FEDEX_ACCOUNT_NUMBER": "",
         "SAGE_LIVE_CONNECTION": "False", "SAGE_SIMULATION_MODE": "True", "SAGE_PASSWORD": "", "FX_LIVE_RATES": "False",
         "MONDAY_API_KEY": "", "ASSISTANT_MCP_SERVERS": "",
+        "INBOX_SIMULATION_ENABLED": "True",                          # the practice-order route works only here: it makes a real order, but in this scratch database
     }
 
 
@@ -195,7 +196,7 @@ def _records(people: dict) -> None:
     j1 = jobs.from_rfq(r1["id"], ops)
     jobs.approve_design(j1["ref"], boss)
     po1 = purchase_orders.create(j1["ref"], zibo, ops, lines=[{"description": "5in ID x 120in alumina ceramic-lined rubber flex hose, per drawing", "quantity": 2, "unit_cost": 1040, "revision": "B"}],
-                                 terms="Net 45", ship_via="Sea freight")
+                                 terms="Net 45", ship_via="Sea freight", currency="CNY")             # a Chinese vendor, priced in yuan
     purchase_orders.update(po1["id"], {"vendor_email": "purchasing@zibo-demo.example.test"}, boss)
     po1 = purchase_orders.approve(po1["id"], boss)
     purchase_orders.set_customs(po1["id"], {"lines": [{"line": 1, "hts_code": "4016.93.50", "origin": "China", "uom": "EA", "net_kg": 38.5}],
@@ -210,6 +211,8 @@ def _records(people: dict) -> None:
                       "free_time_ends": (today + timedelta(days=2)).isoformat(), "status": "DISCHARGED"}, ops)      # at the Houston port, free time ends in 2 days
     jobs.create_sales_order(j1["ref"], {"customer_reference": "4500912345", "lines": [{"raw_item_text": "OC262064", "quantity": 2, "unit_price": 1385.00}],
                                         "shipping_address": "OWENS CORNING- STARR\n4837 Highway 81 South\nStarr, SC 29684"}, boss)
+
+    _walk_extras(j1, r1, po1, boss, ops)
 
     # 2. A request that has only just become a job (stage "Request received"): the presenter runs design approval -> purchase order live from here
     r2 = rfqs.create({"customer": customer, "subject": "Quote for ceramic liner tiles, 400 pieces", "complexity": "SIMPLE",
@@ -267,6 +270,47 @@ def _records(people: dict) -> None:
                        ("open_purchase_orders", "open_purchase_orders.csv"), ("bills", "bills.csv")):
         shown = sage_import.preview((folder / name).read_bytes(), name, kind, admin)
         sage_import.commit(shown["token"], admin)
+
+
+def _walk_extras(j1: dict, r1: dict, po1: dict, boss: dict, ops: dict) -> None:
+    """What the PO screens need to be walked: a vendor quote with weights and dimensions on the PO, a drawing that names the customer (to be cleaned), a payment step that is due, and a supplier bill
+    that was checked against the PO with its own lines. All made-up, all in the scratch database and its own uploads folder."""
+    import uuid
+    from pathlib import Path as _P
+
+    import fitz
+
+    from app.config import settings
+    from app.core.database import SessionLocal
+    from app.models.db_models import ItemFileDB
+    from app.services import payments
+    from app.services.coordination import files
+    from app.services.database_service import DatabaseService
+
+    folder = _P(settings.DB_DIR) / "demo_extras"
+    folder.mkdir(parents=True, exist_ok=True)
+    quote = folder / "zibo_quote_Q-2026-114.txt"
+    quote.write_text("Quotation Q-2026-114\nZibo Supereal\nGross weight: 1,250 kg\nDimensions: 120 x 80 x 100 cm\n12 crates\nTotal CNY 148,000\nPayment terms: 30/50/20\n", encoding="utf-8")
+    with SessionLocal() as db:                                        # the vendor's quote, attached to the PO (the only kind of file that may go into a payment note or a freight request)
+        db.add(ItemFileDB(item_type="po", item_ref=str(po1["id"]), filename=quote.name, stored_path=str(quote), size=quote.stat().st_size, sha256=uuid.uuid4().hex, content_type="text/plain", uploaded_by=ops["email"]))
+        db.commit()
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((40, 80), "Owens Corning Starr Composites  -  DRAWING OC-SR-08272024-FH_01  REV B", fontsize=11)
+    page.insert_text((40, 110), "Flex hose 5in ID x 120in. Customer PO 4500912345. Starr, SC.", fontsize=10)
+    files.add("rfq", r1["number"], "OC-SR-08272024-FH_01.pdf", pdf.tobytes(), ops)                 # names the customer: the redaction check paints it out
+
+    payments.create_schedule(po1["id"], "30/50/20", boss, currency="CNY")
+    payments.fire(po1["id"], "PO_ISSUED", boss)                                                   # the first step is now due
+
+    with SessionLocal() as db:                                        # a supplier bill, checked against the PO: one line billed higher than the PO, with freight
+        DatabaseService.persist_reconciliation(db, {
+            "reconciliation_id": uuid.uuid4().hex[:16], "invoice_number": "ZB-INV-2026-0457", "vendor_name": po1["vendor"], "po_number": po1["po_number"], "reconciliation_status": "DISCREPANCY_FLAGGED",
+            "authorized_po_total": 2080, "actual_billed_total": 2405, "cost_variance_amount": 325, "cost_variance_pct": 15.6,
+            "discrepancies": ["Price Surcharge on 1: Billed $1,170.00 vs PO $1,040.00 (+$130.00/unit)", "Unauthorized Freight Add-On: Billed $195.00 vs Agreed $0.00 (+$195.00)"],
+            "suggested_action": "Ask Zibo to correct the invoice (demo).",
+            "bill_detail": {"lines": [{"item_id": "1", "description": "5in ID x 120in alumina ceramic-lined rubber flex hose, per drawing", "quantity": "2", "unit_cost": "1170.00", "amount": "2340.00"}],
+                            "freight": "195.00", "currency": "CNY", "invoice_date": "2026-11-20"}})
 
 
 def main(argv=None) -> int:

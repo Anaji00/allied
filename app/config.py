@@ -30,6 +30,21 @@ class Settings(BaseSettings):
     # API (billed, needs ANTHROPIC_API_KEY and `pip install anthropic`); "off"
     # disables AI and every feature reports that plainly instead of guessing.
     AI_PROVIDER: str = "groq"
+    AI_LOCAL_ONLY: bool = False               # optional switch: True means no text, image or audio goes to Groq or any hosted AI; only local Ollama is used (default False: Groq stays on)
+    REDACTION_ENFORCED: bool = True           # a drawing goes to a vendor only as a verified redacted copy (or an engineer-attested DWG); False only for tests
+    GATES_ENFORCED: bool = True               # Gate 1 / Gate 2 are hard blocks (a manager can override with a reason); False only for tests
+    TARIFF_STALE_DAYS: int = 30               # the tariff table is flagged stale when nothing in it was added or confirmed this long
+    MARKUP_TIERS: str = "20,30,40"            # default markup percentages offered on a landed cost sheet
+    FREIGHT_VARIANCE_PCT: float = 10.0        # freight that differs from its quote by more than this percent is flagged
+    REFRESH_GRACE_SECONDS: float = 600.0      # a refresh token that was just replaced is still honoured this long (a sibling or idle tab); older reuse ends all sessions
+    TESSDATA_DIR: Optional[Path] = None       # optional folder holding eng + chi_sim traineddata when Tesseract is installed where it cannot be extended
+    NUDGE_SENDERS: str = ""                   # comma separated emails who may send nudges and milestone blasts (admins always may); empty = admins only
+    NUDGE_PER_RECIPIENT_PER_HOUR: int = 3     # nudges one sender may send to one person per hour
+    NUDGE_RATE_PER_HOUR: int = 10             # nudge requests one sender may make per hour
+    LANDED_CURRENCIES: str = "USD,CAD,EUR,GBP,CNY,MXN"   # currency codes a landed cost sheet may use
+    FORWARDER_DOMAINS: str = ""               # comma separated email domains of the freight forwarders whose weekly updates may move ETAs (empty: only a manager can apply a digest)
+    INBOX_SIMULATION_ENABLED: bool = False    # POST /inbox/simulate makes a REAL order and vendor POs; off unless this is a test or demo system
+    ENGINEER_APPROVERS: str = ""              # comma separated emails of the engineers who may approve Gate 1 / Gate 2; empty means nobody can approve until the owner sets it
     GROQ_API_KEY: str = ""
     LEAD_WEB_SEARCH: bool = False             # the optional people search (DuckDuckGo on linkedin.com) is OFF: it scrapes personal profiles and may not fit LinkedIn's terms; the owner decides
     ALLIED_GROQ_ZDR_CONFIRMED: bool = False   # the owner sets this to true only after turning on Zero Data Retention in the Groq console (Data Controls); the app cannot check it

@@ -140,7 +140,7 @@ def brief_for(email: str) -> List[str]:
     lines = []
     n = autopilot.waiting_for(email)
     if n:
-        lines.append(f"{n} message{'s' if n != 1 else ''} waiting for your OK in your Inbox")
+        lines.append(f"{n} message{'s' if n != 1 else ''} of yours waiting for your OK in your Inbox")
     for j in vendors.overview()["jobs"]:
         if (j.get("owner_email") or "").lower() == email and j["state"] in ("late", "will_miss"):
             lines.append(f"{j['vendor']} PO {j.get('po_number') or j['id']}: {j['reasons'][0] if j['reasons'] else j['state']}")

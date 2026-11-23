@@ -25,7 +25,7 @@ _model_lock = threading.Lock()
 
 
 def _use_groq() -> bool:
-    return (settings.AI_PROVIDER or "").strip().lower() == "groq" and bool(settings.GROQ_API_KEY)
+    return not settings.AI_LOCAL_ONLY and (settings.AI_PROVIDER or "").strip().lower() == "groq" and bool(settings.GROQ_API_KEY)
 
 
 def status() -> Dict[str, Any]:

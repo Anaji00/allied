@@ -197,13 +197,23 @@ function BoardScreen({
               ? ([
                   ['kanban', 'Columns by status'],
                   ['calendar', 'Calendar'],
-                  ['timeline', 'Timeline'],
                 ] as const)
               : []),
             ['late', 'Late or urgent'],
           ]}
         />
         <div className="flex flex-wrap items-center gap-2 pb-1">
+          {hasRole('MANAGER') && (
+            <NativeSelect
+              aria-label="More ways to look at this board"
+              value={view === 'timeline' ? 'timeline' : ''}
+              onChange={(e) => void setView(e.target.value === 'timeline' ? 'timeline' : null)}
+              className={`h-8 w-auto text-xs ${view === 'timeline' ? 'border-foreground font-medium' : 'text-muted-foreground'}`}
+            >
+              <option value="">More views…</option>
+              <option value="timeline">Timeline</option>
+            </NativeSelect>
+          )}
           <SavedViews screen="boards" />
           {readRole && hasRole(readRole) && (
             <Button variant="ghost" size="sm" disabled={readNow.isPending} onClick={() => readNow.mutate()}>
@@ -309,7 +319,7 @@ function BoardScreen({
       <p className="text-xs text-muted-foreground">
         {isJobs
           ? 'Jobs are saved in the app. Put one on a monday board from its row.'
-          : `${board.label} · ${items.length} of ${pool.length} item${pool.length === 1 ? '' : 's'}${board.hide_done && !showDone ? ', finished ones hidden' : ''} · last updated from monday: ${since(board.read_at) || 'never'}. ${waiting > 0 ? `${waiting} change${waiting === 1 ? '' : 's'} waiting. ` : ''}Changes go to monday only when a manager sends them.`}
+          : `${board.label} · ${items.length} of ${pool.length} item${pool.length === 1 ? '' : 's'}${board.hide_done && !showDone ? ', finished ones hidden' : ''} · last updated from monday: ${since(board.read_at) || 'never'}. ${waiting > 0 ? `${waiting} change${waiting === 1 ? '' : 's'} waiting across all boards. ` : ''}Changes go to monday only when a manager sends them.`}
       </p>
       {pool.length >= 100 &&
         (() => {

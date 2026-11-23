@@ -168,7 +168,7 @@ def recipes_preview(args: Dict[str, Any], user: Dict[str, Any]) -> str:
 def sage_export_preview(args: Dict[str, Any], user: Dict[str, Any]) -> str:
     from app.services.sage_export_service import sage_export_service
 
-    _csv, orders = sage_export_service.export_sales_orders(only_new=True, mark_exported=False)
+    _csv, orders = sage_export_service.export_sales_orders(only_new=True, mark_exported=False, audit=False)
     return (f"{len(orders)} sales orders are waiting for the next Sage import file: " + ", ".join(map(str, orders[:15]))
             if orders else "No new sales orders are waiting for Sage.")
     # The file itself (and marking orders as sent) is made on the Sage export screen, so a person decides when.

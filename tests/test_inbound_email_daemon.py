@@ -48,6 +48,7 @@ def test_inbound_email_simulate_api(monkeypatch):
 
     # Knauf's buyers write from knaufinsulation.com; the record only has its knauf.com AP address.
     monkeypatch.setattr(settings, "ORDER_TRUSTED_SENDER_DOMAINS", "knaufinsulation.com=10148")
+    monkeypatch.setattr(settings, "INBOX_SIMULATION_ENABLED", True)    # the route is refused unless a test or demo system switches it on
     payload = {
         "sender_email": "procurement@knaufinsulation.com",
         "sender_name": "Sarah Jenkins (Knauf)",

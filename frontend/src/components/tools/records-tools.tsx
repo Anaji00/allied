@@ -102,6 +102,26 @@ type Score = {
 const rate = (n?: number | null) => (n == null ? '–' : `${Math.round(n <= 1 ? n * 100 : n)}%`);
 
 /** How the automations have done: what each drafted and what a person did with it, and how alerts were handled. Rules only. */
+/** Plain names for the automations the server reports by code. A name not listed is shown as words, never as a raw code. */
+const AUTOMATION_NAME: Record<string, string> = {
+  rfq_vendor_chaser: 'Chasing vendors for an RFQ price',
+  vendor_late_chase: 'Chasing a late vendor',
+  vendor_watchdog: 'Watching vendor ship dates',
+  vendor_chaser: 'Chasing vendors',
+  rfq_board_row: 'Adding a new RFQ to the board',
+  rfq_acknowledge: 'Confirming a customer’s RFQ was received',
+};
+const automationName = (n: string) => {
+  const recipe = /^recipe_(\d+)$/.exec(n);
+  return AUTOMATION_NAME[n] ?? (recipe ? `Your own rule ${recipe[1]}` : words(n));
+};
+const MODE_WORD: Record<string, string> = {
+  Suggest: 'asks you first',
+  Auto: 'runs by itself',
+  Off: 'off',
+  'Per recipe': 'as set on its board',
+};
+
 export function ScorecardTool() {
   const { hasRole } = useAuth();
   const q = useQuery({
@@ -121,7 +141,8 @@ export function ScorecardTool() {
             {q.data.automations.map((a) => (
               <li key={a.name} className="grid gap-0.5 px-3 py-2">
                 <span className="font-medium">
-                  {a.name} <span className="font-normal text-muted-foreground">({words(a.mode)})</span>
+                  {automationName(a.name)}{' '}
+                  <span className="font-normal text-muted-foreground">({MODE_WORD[words(a.mode)] ?? words(a.mode).toLowerCase()})</span>
                 </span>
                 <span className="text-xs text-muted-foreground">
                   Drafted {a.drafted} · sent {a.sent} ({rate(a.send_rate)}) · cancelled {a.cancelled} · waiting {a.waiting}
@@ -207,7 +228,7 @@ export function MyNotificationsTool() {
   return (
     <Card
       title="My notifications"
-      note="Choose how each kind of news reaches you. These are saved now; the app does not hold messages for quiet hours yet."
+      note="Choose how each kind of news reaches you. These are saved now. Phone and text messages wait out quiet hours unless they are urgent."
     >
       <div className="overflow-x-auto rounded-md border">
         <table className="w-full border-collapse text-[13px]">

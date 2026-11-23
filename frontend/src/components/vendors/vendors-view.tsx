@@ -48,6 +48,8 @@ type Job = {
   reasons?: string[];
   /** The server's plain reading of this job and what to do next. */
   assessment?: { text?: string | null; next_step_suggested?: string | null } | null;
+  /** How close the vendor is to the date they owe us, from the server's watchdog. */
+  watchdog?: { tier: 'OVERDUE' | 'APPROACHING_3' | 'APPROACHING_7'; days_left?: number | null; due_on?: string | null } | null;
   text?: string | null;
   next_step_suggested?: string | null;
   ordered_on?: string | null;
@@ -238,7 +240,7 @@ function Jobs({
     col.accessor('vendor', { header: 'Vendor', meta: { className: 'font-medium' } }),
     col.display({
       id: 'what',
-      header: 'Making',
+      header: 'Order',
       meta: { className: 'max-w-72 truncate' },
       cell: (x) => {
         const j = x.row.original;
@@ -250,10 +252,10 @@ function Jobs({
         );
       },
     }),
-    col.accessor('expected', { header: 'Expected', cell: (x) => day(x.getValue()) }),
+    col.accessor('expected', { header: 'Vendor says', cell: (x) => day(x.getValue()) }),
     col.accessor('need_by', { header: 'Must ship by', cell: (x) => day(x.getValue()) }),
     col.accessor('slack_days', {
-      header: 'Spare',
+      header: 'Days to spare',
       meta: {
         align: 'right',
         footer: (rows) => {
@@ -425,6 +427,15 @@ function JobDetail({ job: j, canEdit }: { job: Job; canEdit: boolean }) {
           </ToneBadge>
         ))}
       </div>
+      {j.watchdog && (
+        <p
+          className={`rounded-md px-3 py-2 text-[13px] ${j.watchdog.tier === 'OVERDUE' ? 'bg-bad-soft text-bad' : 'bg-warn-soft text-warn'}`}
+        >
+          {j.watchdog.tier === 'OVERDUE'
+            ? `Overdue${j.watchdog.due_on ? `: it was due ${j.watchdog.due_on}` : ''}.`
+            : `Due in ${j.watchdog.days_left ?? (j.watchdog.tier === 'APPROACHING_3' ? 3 : 7)} days${j.watchdog.due_on ? ` (${j.watchdog.due_on})` : ''}. A check-in is drafted for you.`}
+        </p>
+      )}
       {(j.assessment?.text ?? j.text) && <p className="text-[13px]">{j.assessment?.text ?? j.text}</p>}
       {(j.assessment?.next_step_suggested ?? j.next_step_suggested) && (
         <p className="rounded-md bg-info-soft px-3 py-2 text-[13px]">

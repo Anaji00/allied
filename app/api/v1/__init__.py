@@ -11,6 +11,12 @@ from app.api.v1.endpoints import (
     compliance,
     coordination,
     csv_import,
+    payments as payments_ep,
+    landed_cost as landed_cost_ep,
+    nudges as nudges_ep,
+    guide as guide_ep,
+    extract as extract_ep,
+    pipelines as pipelines_ep,
     documents,
     eng_notes,
     exceptions,
@@ -36,6 +42,7 @@ from app.api.v1.endpoints import (
     forms,
     fedex,
     health,
+    fx,
     inbound_email,
     jobs,
     me,
@@ -60,6 +67,7 @@ from app.api.v1.endpoints import (
 api_v1_router = APIRouter()
 
 api_v1_router.include_router(health.router, prefix="/health", tags=["Health & Diagnostics"])
+api_v1_router.include_router(fx.router, prefix="/fx", tags=["Exchange rates"])
 api_v1_router.include_router(automation.router, prefix="/automation", tags=["Automation Status"])
 api_v1_router.include_router(auth.router, prefix="/auth", tags=["Authentication & RBAC"])
 api_v1_router.include_router(audit.router, prefix="/audit", tags=["Immutable Audit Trail"])
@@ -69,6 +77,14 @@ api_v1_router.include_router(inbound_email.router, prefix="/inbox", tags=["Auton
 api_v1_router.include_router(reconciliation.router, prefix="/reconciliation", tags=["Vendor Bill 3-Way Reconciliation"])
 api_v1_router.include_router(sage_export.router, prefix="/sage/export", tags=["Sage 50 ERP CSV Export"])
 api_v1_router.include_router(sage_import.router, prefix="/sage-import", tags=["Sage 50 import files"])
+api_v1_router.include_router(pipelines_ep.router, prefix="/pipelines", tags=["Shipment Pipelines"])
+api_v1_router.include_router(extract_ep.router, tags=["Less typing"])
+api_v1_router.include_router(guide_ep.router, tags=["Guide"])
+api_v1_router.include_router(nudges_ep.router, prefix="/nudges", tags=["Nudges"])
+api_v1_router.include_router(landed_cost_ep.router, prefix="/landed-cost", tags=["Landed Cost"])
+api_v1_router.include_router(payments_ep.router, prefix="/payments", tags=["Vendor Payments"])
+api_v1_router.include_router(payments_ep.gates_router, prefix="/gates", tags=["Engineer Gates"])
+api_v1_router.include_router(payments_ep.redaction_router, prefix="/redaction", tags=["Customer Redaction"])
 api_v1_router.include_router(csv_import.router, prefix="/csv", tags=["Master Data & Batch Order CSV Imports"])
 api_v1_router.include_router(exceptions.router, prefix="/exceptions", tags=["Operations Exceptions Queue"])
 api_v1_router.include_router(leads.router, prefix="/leads", tags=["Lead Generation & Sales Agent"])

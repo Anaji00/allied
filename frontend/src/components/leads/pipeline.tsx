@@ -37,7 +37,9 @@ export function Pipeline() {
   if (list.isPending) return <RowsSkeleton rows={6} />;
   if (!list.data)
     return (
-      <EmptyState title="Leads aren’t ready yet">The app’s server needs an update to keep leads. Ask whoever runs the server to restart it, then reload this page.</EmptyState>
+      <EmptyState title="Leads aren’t ready yet">
+        The app’s server needs an update to keep leads. Ask whoever runs the server to restart it, then reload this page.
+      </EmptyState>
     );
 
   const by = summary.data?.by_stage ?? {};
@@ -45,7 +47,7 @@ export function Pipeline() {
 
   return (
     <div className="grid min-w-0 gap-3">
-      {summary.data && (
+      {summary.data && list.data.items.length > 0 && (
         <p className="text-xs text-muted-foreground">
           {summary.data.replied_week} replied this week · {summary.data.won} won · {summary.data.lost} lost
           {summary.data.pipeline_value ? ` · pipeline ${money(summary.data.pipeline_value)}` : ''}
@@ -87,7 +89,7 @@ export function Pipeline() {
       )}
 
       {list.data.items.length === 0 ? (
-        <EmptyState title={due ? 'Nothing is due today' : 'No leads here yet'}>
+        <EmptyState title={due ? 'Nothing is due today' : stage ? 'No leads at this stage' : 'Not started yet'}>
           Add one by hand or from a file on the Find tab, or pick one from your own history above.
         </EmptyState>
       ) : (
@@ -115,7 +117,13 @@ function LeadRow({
   const [template, setTemplate] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const blocked = l.do_not_contact || l.bad_address;
-  const why = l.do_not_contact ? 'On the do-not-contact list' : l.bad_address ? 'This address bounced' : !l.email ? 'No email address yet' : '';
+  const why = l.do_not_contact
+    ? 'On the do-not-contact list'
+    : l.bad_address
+      ? 'This address bounced'
+      : !l.email
+        ? 'No email address yet'
+        : '';
 
   const patch = useMutation({
     mutationFn: (body: Record<string, unknown>) => leads(`/${l.id}`, 'PATCH', body),
@@ -150,7 +158,9 @@ function LeadRow({
           {l.score != null && <ToneBadge tone={scoreTone(l.score)}>Score {l.score}</ToneBadge>}
           {l.do_not_contact && <ToneBadge tone="bad">Do not contact</ToneBadge>}
           {l.bad_address && <ToneBadge tone="bad">Address bounced</ToneBadge>}
-          {l.sequence?.name && <ToneBadge>{l.sequence.paused ? 'Follow-ups paused' : `Follow-up step ${(l.sequence.step ?? 0) + 1}`}</ToneBadge>}
+          {l.sequence?.name && (
+            <ToneBadge>{l.sequence.paused ? 'Follow-ups paused' : `Follow-up step ${(l.sequence.step ?? 0) + 1}`}</ToneBadge>
+          )}
         </div>
         {l.reason && <p className="text-xs text-pretty text-muted-foreground">{l.reason}</p>}
         <p className="text-xs text-muted-foreground">
@@ -162,13 +172,23 @@ function LeadRow({
       </div>
       {canAct && (
         <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
-          <NativeSelect aria-label={`Stage of ${l.name || l.company}`} value={l.status} onChange={(e) => patch.mutate({ status: e.target.value })} className="h-7 w-auto text-xs">
+          <NativeSelect
+            aria-label={`Stage of ${l.name || l.company}`}
+            value={l.status}
+            onChange={(e) => patch.mutate({ status: e.target.value })}
+            className="h-7 w-auto text-xs"
+          >
             {STAGES.map((s) => (
               <option key={s}>{s}</option>
             ))}
           </NativeSelect>
           {templates && Object.keys(templates).length > 0 && (
-            <NativeSelect aria-label="Which email" value={template} onChange={(e) => setTemplate(e.target.value)} className="h-7 w-auto text-xs">
+            <NativeSelect
+              aria-label="Which email"
+              value={template}
+              onChange={(e) => setTemplate(e.target.value)}
+              className="h-7 w-auto text-xs"
+            >
               <option value="">Usual email</option>
               {Object.entries(templates).map(([k, t]) => (
                 <option key={k} value={k}>

@@ -88,7 +88,7 @@ export function BoardChanges({ boardId }: { boardId: string }) {
             variant="outline"
             className="ml-auto"
             disabled={act.isPending || !canPush}
-            title={canPush ? undefined : 'monday is read-only, so nothing can be sent'}
+            title={canPush ? undefined : 'Sending to monday is switched off, so nothing can be sent'}
             onClick={() => {
               if (
                 window.confirm(
@@ -98,7 +98,7 @@ export function BoardChanges({ boardId }: { boardId: string }) {
                 act.mutate({ path: '/api/v1/monday-push/push', body: { board_id: boardId } });
             }}
           >
-            {canPush ? 'Send this board’s changes' : 'Send (monday is read-only)'}
+            {canPush ? 'Send this board’s changes' : 'Sending to monday is switched off'}
           </Button>
         )}
       </div>

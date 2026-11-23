@@ -397,19 +397,22 @@ def plain_text(now: Optional[datetime] = None) -> Dict[str, Any]:
     when = lambda iso: datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC")      # noqa: E731
     items = listing()
     ran = last.get("at")
-    if ran and last.get("ok") is False:
+    newer_success = bool(ran and items and datetime.fromisoformat(items[0]["made"]) > datetime.fromisoformat(ran))      # a backup file made after the failed attempt means the failure is history
+    if ran and last.get("ok") is False and not newer_success:
         again = datetime.fromisoformat(ran) + timedelta(minutes=settings.BACKUP_RETRY_MINUTES)
         kept = " The finished backup is kept safely and will be copied across." if last.get("kept_for_retry") else ""
         return {"state": "failed", "text": f"The last backup failed at {when(ran)}; it will try again at {again:%H:%M} UTC.{kept}", "details": str(last.get("error") or last.get("check") or "")[:400],
                 "last_good": items[0]["made"] if items else None}
-    if ran and last.get("ok"):
-        return {"state": "ok", "text": f"The last backup worked at {when(ran)}.", "details": "", "last_good": items[0]["made"] if items else None}
-    if items:
-        return {"state": "unknown", "text": f"The newest backup was made at {when(items[0]['made'])}. No backup has run since the app started.", "details": "", "last_good": items[0]["made"]}
+    if ran and (last.get("ok") or newer_success):
+        return {"state": "ok", "text": f"The last backup worked at {when(ran if last.get('ok') else items[0]['made'])}.", "details": "", "last_good": items[0]["made"] if items else None}
+    if items:                                                                           # no run since the app started: judged by the age of the newest file, not called a problem
+        age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(items[0]["made"])).total_seconds() / 3600
+        fresh = age_h <= max(2, settings.BACKUP_EVERY_HOURS * 2)
+        return {"state": "ok" if fresh else "stale", "text": f"The newest backup was made at {when(items[0]['made'])}." + ("" if fresh else f" That is {int(age_h)} hours ago; the next one runs on schedule."), "details": "", "last_good": items[0]["made"]}
     return {"state": "none", "text": "No backup has been made yet.", "details": "", "last_good": None}
 
 
 def status() -> Dict[str, Any]:
     items = listing()
     return {"summary": plain_text(), "waiting_to_copy": [p.name for p in pending()], "enabled": settings.BACKUP_ENABLED, "every_hours": settings.BACKUP_EVERY_HOURS, "keep_days": settings.BACKUP_KEEP_DAYS,
-            "count": len(items), "newest": items[0] if items else None, "last_run": dict(last), "backups": items[:30], "copy": copy_line()}
+            "count": len(items), "newest": items[0] if items else None, "last_run": {**{k: v for k, v in last.items() if k != "error"}, "failed": plain_text()["state"] == "failed"}, "backups": items[:30], "copy": copy_line()}

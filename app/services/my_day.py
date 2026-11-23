@@ -552,17 +552,50 @@ def chase(user: Dict[str, Any]) -> Dict[str, Any]:
     def draft_action(did: str) -> Dict[str, Any]:
         return {"draft_id": did, "send": _act("Send it", "POST", f"/api/v1/chase/{did}", {"action": "send"}), "dismiss": _act("Dismiss", "POST", f"/api/v1/chase/{did}", {"action": "dismiss"})}
 
+    import re
+
+    _SUFFIX = {"ltd", "limited", "inc", "incorporated", "co", "company", "corp", "corporation", "llc", "llp", "plc", "gmbh", "the", "and"}
+
+    def _toks(s: Any) -> frozenset:
+        return frozenset(w for w in re.findall(r"[a-z0-9]+", str(s or "").casefold()) if w not in _SUFFIX)
+
+    def belongs(did: str, ref: str, who: str) -> bool:
+        """A draft is for this row only when the row's reference appears in it as a whole token (9282 is not inside 192823 or RFQ-2026-9282-B), and, when both the row and the draft say who it is for,
+        they are the same name (KWS is not KWS Steel): a vendor name must match whole, an address matches by its domain name or by the person's own name."""
+        a = full.get(did, {})
+        text = json.dumps(a, default=str) + " " + str(drafts[did].get("summary") or "")
+        if not re.search(r"(?<![A-Za-z0-9_-])" + re.escape(ref) + r"(?![A-Za-z0-9_-])", text, re.I):
+            return False
+        w = _toks(who)
+        if not w or str(who).strip().lower() == "someone":
+            return True
+        seen = False
+        for field in ("vendor_name", "vendor"):
+            if _toks(a.get(field)):
+                seen = True
+                if _toks(a.get(field)) == w:
+                    return True
+        for addr in re.findall(r"[^\s,;<>()]+@[^\s,;<>()]+", str(a.get("to") or "")):
+            seen = True
+            local, _, domain = addr.rpartition("@")
+            labels = [x for x in domain.casefold().split(".") if x]
+            main = labels[-2] if len(labels) >= 2 else (labels[0] if labels else "")
+            lt = _toks(local)
+            if frozenset(re.findall(r"[a-z0-9]+", main)) == w or (lt and (w <= lt or lt <= w)):
+                return True
+        return not seen
+
     used: set = set()
     holders = [b for b in ball.list_open("all", include_derived=True) if b.get("ball_with") in _EXTERNAL and not b.get("resolved")]
     for b in holders:
         ref = str(b["item_ref"])
-        match = next((did for did, a in full.items() if did not in used and (ref in json.dumps(a, default=str) or ref in drafts[did]["summary"])), None)
+        who = _person(b.get("ball_name") or b.get("ball_person") or b.get("ball_label") or "someone")
+        match = next((did for did in full if did not in used and belongs(did, ref, who)), None)
         if match:
             used.add(match)
-        who = _person(b.get("ball_name") or b.get("ball_person") or b.get("ball_label") or "someone")
         d = int(b.get("days_waiting") or 0)
         row = {"id": f"ball:{b['item_type']}:{ref}", "kind": "ball", "who": who, "role": b.get("ball_label"), "owes": b.get("note") or "a reply", "what": b.get("label") or ref, "days_waiting": d,
-               "age": _age(d), "since": b.get("since"), "link": _link(str(b["item_type"]), ref), "overdue": bool(b.get("overdue")), "draft_id": None, "send": None, "dismiss": None}
+               "age": _age(d), "since": b.get("since"), "since_date": b.get("since_date"), "link": _link(str(b["item_type"]), ref), "overdue": bool(b.get("overdue")), "draft_id": None, "send": None, "dismiss": None}
         if match:
             row.update(draft_action(match), draft_summary=drafts[match]["summary"].split("\n", 1)[0], kind="chase")
         rows.append(row)

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 
+import { logRefresh } from '@/lib/authlog';
 import { authFetch, loginUser, refreshAccessToken, setAuthToken, setUnauthorizedHandler } from '@/lib/api';
 
 const STORAGE_KEY = 'allied_staff_auth';
@@ -26,12 +27,15 @@ let _session = EMPTY_SESSION;
 let _hydrated = false;
 const _listeners = new Set();
 
+let _storageOk = true;
+
 function readStoredSession() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : EMPTY_SESSION;
   } catch {
     // Private mode / blocked storage: start signed out rather than throwing.
+    _storageOk = false;
     return EMPTY_SESSION;
   }
 }
@@ -64,6 +68,10 @@ function setSession(next) {
   _session = next;
   setAuthToken(next?.access_token || null);
   try {
+    if (!next?.access_token) {
+      localStorage.removeItem('allied.tomonday.board');
+      localStorage.removeItem('allied.tomonday.group');
+    }
     if (next) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     } else {
@@ -71,6 +79,7 @@ function setSession(next) {
     }
   } catch {
     // Non-fatal: the session just will not survive a reload.
+    _storageOk = false;
   }
   _listeners.forEach((l) => l());
 }
@@ -132,42 +141,82 @@ export function AuthProvider({ children }) {
     };
     void syncProfile();
 
-    // One refresh at a time: several requests that hit the expiry together share it. The server hands back a new refresh token
-    // each time, so a second call with the old one would fail and look like a lost session.
-    let refreshing = null;
-    const renew = () => {
-      if (refreshing) return refreshing;
-      // Another tab may have just renewed: its newer tokens are in storage. Use them instead of spending the old refresh token again,
-      // which the server treats as a sign-in used twice.
-      const stored = readStoredSession();
-      if (stored?.refresh_token && stored.refresh_token !== _session?.refresh_token && stored.access_token) {
-        setSession(stored);
-        return Promise.resolve({ token: stored.access_token });
+    // ------------------------------------------------------------------ renewal
+    // A renewal runs only when (a) a request that carried a token is answered "Token has expired", or (b) the quiet timer says
+    // 75% of the token's life is gone. Never on a page load, never because a request went out with no token yet. Everything it
+    // does is written to the renewal log (shown to admins on the System page).
+    const decodeExp = (token) => {
+      try {
+        const body = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        return { exp: body.exp ? body.exp * 1000 : null, iat: body.iat ? body.iat * 1000 : null };
+      } catch {
+        return { exp: null, iat: null };
       }
-      const refresh = _session?.refresh_token;
-      if (!refresh) return Promise.resolve({ rejected: true });
-      refreshing = (async () => {
-        try {
-          // A restart or a bad moment on the server is retried a couple of times before anything is given up.
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            try {
-              const out = await refreshAccessToken(refresh);
-              setSession({
-                ..._session,
-                access_token: out.access_token,
-                refresh_token: out.refresh_token || _session.refresh_token,
-                tokenAt: new Date().toISOString(),
-              });
-              void syncProfile();
-              return { token: out.access_token };
-            } catch (err) {
-              if (!err?.transient) return { rejected: true, why: err?.message };
-              if (attempt === 2) return { transient: true };
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    let refreshing = null;
+
+    // One renewal at a time across every tab, using the browser's own lock. Inside the lock the stored tokens are read afresh: if another
+    // tab already renewed, its tokens are used and no request is made; otherwise the renewal uses the token read inside the lock, and
+    // is read again before every retry, so a rotated token is never sent twice.
+    const renew = (trigger) => {
+      if (refreshing) return refreshing;
+      const startedWith = _session?.refresh_token;
+      const run = async () => {
+        const newer = () => {
+          const stored = readStoredSession();
+          return stored?.refresh_token && stored.refresh_token !== startedWith && stored.access_token ? stored : null;
+        };
+        let other = newer();
+        if (other) {
+          setSession(other);
+          logRefresh({ trigger, status: 'other tab', did: 'used the tokens another tab stored' });
+          return { token: other.access_token };
+        }
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          // With working storage, nothing stored means signed out. With blocked storage this tab's own copy is all there is.
+          const current = _storageOk ? readStoredSession() : _session;
+          const refresh = current?.refresh_token;
+          if (!refresh) {
+            logRefresh({ trigger, status: 'none', did: 'no renewal token to use' });
+            return { rejected: true, reason: 'no renewal token' };
+          }
+          try {
+            const out = await refreshAccessToken(refresh);
+            setSession({
+              ...current,
+              access_token: out.access_token,
+              refresh_token: out.refresh_token || refresh,
+              tokenAt: new Date().toISOString(),
+            });
+            logRefresh({ trigger, status: 200, did: 'renewed' });
+            void syncProfile();
+            return { token: out.access_token };
+          } catch (err) {
+            other = newer();
+            if (other) {
+              setSession(other);
+              logRefresh({ trigger, status: err?.status ?? 'error', did: 'another tab renewed meanwhile; used its tokens' });
+              return { token: other.access_token };
+            }
+            if (err?.transient) {
+              logRefresh({ trigger, status: err.status ?? 'no answer', did: 'server busy, will retry' });
+              if (attempt >= 3) return { transient: true };
               toast('The server is restarting, trying again…', { id: 'server-restarting' });
-              await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+              await sleep(2000 * (attempt + 1));
+            } else {
+              // The server refused. A refused renewal token is never sent a second time: the server treats a repeat as reuse and
+              // ends every session. The check for another tab's newer tokens above has already run, so a refusal ends this session once.
+              logRefresh({ trigger, status: err.status, did: 'refused, signing out', why: err.message });
+              return { rejected: true, reason: 'the server refused the renewal', why: err.message };
             }
           }
-          return { transient: true };
+        }
+        return { transient: true };
+      };
+      refreshing = (async () => {
+        try {
+          return typeof navigator !== 'undefined' && navigator.locks ? await navigator.locks.request('allied-renew', run) : await run();
         } finally {
           refreshing = null;
         }
@@ -175,35 +224,67 @@ export function AuthProvider({ children }) {
       return refreshing;
     };
 
-    setUnauthorizedHandler(async () => {
-      if (!_session?.refresh_token) {
-        setSession(EMPTY_SESSION);
-        toast.error('Your session expired — please sign in again.', { id: 'session-ended' });
-        return null;
-      }
-      const out = await renew();
-      if (out?.token) return out.token;
-      // The server is only having a bad moment: keep the session, the next request tries again.
-      if (out?.transient) return null;
-      // Refresh token expired, the account was disabled or deleted, or the password was changed elsewhere.
+    const endSession = (reason, why) => {
+      logRefresh({ trigger: 'sign-out', did: reason });
       setSession(EMPTY_SESSION);
-      const why = out?.why && /password was changed/i.test(out.why) ? out.why : 'Your session ended. Sign in again.';
+      const text = why && /password was changed/i.test(why) ? why : `Your session ended: ${reason}. Sign in again.`;
       try {
-        sessionStorage.setItem('allied.signin.notice', why);
+        sessionStorage.setItem('allied.signin.notice', text);
       } catch {
         // Private windows refuse storage; the toast below still tells them.
       }
-      toast.error(why, { id: 'session-ended' });
+      toast.error(text, { id: 'session-ended' });
+    };
+
+    setUnauthorizedHandler(async ({ url, sentToken, detail } = {}) => {
+      // Signed out (here or on another tab): nothing to renew.
+      if (!_session) return null;
+      const current = _session?.access_token;
+      // The request went out with no token (before sign-in finished loading) or an older one: retry with the current token.
+      if (!sentToken || (current && sentToken !== current)) {
+        logRefresh({ trigger: `401 on ${url}`, status: 'none', did: sentToken ? 'retried with the newer token' : 'request had no token yet; retried without renewing' });
+        return current || null;
+      }
+      if (/password was changed|no longer exists/i.test(detail || '')) {
+        endSession('the account changed', detail);
+        return null;
+      }
+      const out = await renew(`401 on ${url}`);
+      if (out?.token) return out.token;
+      if (out?.transient) return null;
+      endSession(out?.reason || 'the server refused the renewal', out?.why);
       return null;
     });
 
-    // Renew quietly well before the 8 hours are up, so a working session is never interrupted.
+    // Signing out (or in) in another tab arrives here as a storage event: follow it, so a signed-out tab never renews and writes the session back.
+    const onStorage = (e) => {
+      if (e.key !== STORAGE_KEY) return;
+      let next = EMPTY_SESSION;
+      try {
+        next = e.newValue ? JSON.parse(e.newValue) : EMPTY_SESSION;
+      } catch {
+        next = EMPTY_SESSION;
+      }
+      _session = next;
+      setAuthToken(next?.access_token || null);
+      if (!next) logRefresh({ trigger: 'storage', did: 'signed out on another tab' });
+      _listeners.forEach((l) => l());
+    };
+    window.addEventListener('storage', onStorage);
+
+    // The quiet timer: renew at 75% of the token's life, with a little jitter so tabs do not renew together.
     const quiet = window.setInterval(() => {
-      const at = Date.parse(_session?.tokenAt || _session?.loginTime || '');
-      if (_session?.refresh_token && Number.isFinite(at) && Date.now() - at > 7 * 3600_000) void renew();
-    }, 5 * 60_000);
+      const tok = _session?.access_token;
+      if (!tok || !_session?.refresh_token) return;
+      const { exp, iat } = decodeExp(tok);
+      const start = iat ?? Date.parse(_session.tokenAt || _session.loginTime || '');
+      if (!exp || !Number.isFinite(start)) return;
+      const jitter = Math.random() * 120_000;
+      if (Date.now() > start + (exp - start) * 0.75 + jitter) void renew('quiet timer');
+    }, 60_000);
     return () => {
       window.clearInterval(quiet);
+      window.removeEventListener('storage', onStorage);
       setUnauthorizedHandler(null);
     };
   }, []);

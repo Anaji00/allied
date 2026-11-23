@@ -159,7 +159,7 @@ export const NAV: NavGroup[] = [
       {
         hidden: true,
         href: '/admin',
-        label: 'Admin',
+        label: 'Control room',
         description: 'Health, what runs by itself, background workers and the monday.com link',
         icon: Activity,
       },
@@ -189,6 +189,18 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    section: 'Help',
+    items: [
+      {
+        hidden: true,
+        href: '/help',
+        label: 'Help',
+        description: 'What you want to do, in plain words, with the words we use and who does what',
+        icon: Inbox,
+      },
+    ],
+  },
+  {
     section: 'Allied',
     items: [
       {
@@ -211,7 +223,7 @@ export const NAV: NavGroup[] = [
       },
       {
         href: '/admin',
-        label: 'Admin',
+        label: 'Control room',
         description: 'Freight, certificates, people and alerts, Sage files, automations, health and the audit trail',
         icon: Activity,
       },
@@ -240,8 +252,12 @@ const TABBED: Record<string, string[]> = {
     '/conversations',
     '/rfqs',
     '/vendors',
+    '/help',
+    '/logistics',
+    '/shipments',
+    '/carriers',
   ],
-  '/admin': ['/health', '/alerts', '/operations', '/admin/audit', '/logistics', '/shipments', '/carriers', '/compliance'],
+  '/admin': ['/health', '/alerts', '/operations', '/admin/audit', '/admin/automations', '/quality', '/compliance'],
   '/sales': ['/sales/leads', '/sales/pipeline'],
   '/boards': ['/jobs', '/projects'],
   '/toolkit': ['/chat'],

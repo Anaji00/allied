@@ -28,6 +28,13 @@ def ingest_customer_email(
     generates Sage 50 Sales Order + Split Vendor POs, updates Monday.com,
     and returns the customer Order Acknowledgment.
     """
+    from app.config import settings
+
+    if not settings.INBOX_SIMULATION_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This does not rehearse anything: it would make a real sales order and real vendor purchase orders. Practice orders are switched off on this system. Use the demo copy, or ask the owner to turn on INBOX_SIMULATION_ENABLED on a test system.",
+        )
     try:
         return inbound_email_daemon.process_inbound_email(email)
     except Exception as e:

@@ -27,7 +27,7 @@ from app.core.audit import audit_log
 from app.core.database import SessionLocal
 from app.core.logging import logger
 from sqlalchemy.exc import IntegrityError
-from app.models.db_models import SageBillDB, SageImportDB, SageInvoiceDB, SageOpenOrderDB, SagePaymentDB
+from app.models.db_models import SageBillDB, SageImportDB, SageImportRowDB, SageInvoiceDB, SageOpenOrderDB, SagePaymentDB
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 50_000
@@ -713,8 +713,11 @@ def _open_rows_missing(db, kind: str, parsed: Dict[str, Any]) -> List[SageOpenOr
 
 def already_imported(kind: str, file_hash: str) -> Optional[Dict[str, Any]]:
     with SessionLocal() as db:
-        row = db.query(SageImportDB).filter(SageImportDB.kind == kind, SageImportDB.file_hash == file_hash).first()
-        return _history_row(row) if row else None
+        undone = {r[0] for r in db.query(SageImportRowDB.import_id).filter(SageImportRowDB.action == "UNDONE").all()}
+        for row in db.query(SageImportDB).filter(SageImportDB.kind == kind, SageImportDB.file_hash == file_hash).order_by(SageImportDB.id.desc()).all():
+            if row.id not in undone:                              # a file whose import was undone can be brought in again
+                return _history_row(row)
+        return None
 
 
 def _summary(result: Dict[str, Any], counts: Dict[str, int], closing: List[str]) -> Dict[str, Any]:
@@ -730,8 +733,27 @@ def _summary(result: Dict[str, Any], counts: Dict[str, int], closing: List[str])
     return {"will_add": counts["new"], "will_change": counts["changed"], "will_skip": skip, "unchanged": counts["unchanged"], "problems": counts["problems"], "will_close": len(closing), "differences": diffs, "text": text}
 
 
+OWN_FILE_MESSAGE = "That is the file Allied makes for Sage, not a file from Sage. Use Sage's own export (File > Select Import/Export)."
+_OWN_NAMES = ("so_import.csv", "po_import.csv")
+
+
+def _refuse_own_file(data: bytes, filename: str) -> None:
+    """The app's own SO_IMPORT.CSV / PO_IMPORT.CSV (by name, or by the columns of that format) is never a Sage export: bringing it in would fill the mirror with orders Sage never had."""
+    name = str(filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+    if name in _OWN_NAMES:
+        raise ImportRefused(OWN_FILE_MESSAGE)
+    try:
+        head = (data or b"")[:4096].decode("utf-8-sig", errors="ignore").splitlines()[:1]
+    except Exception:  # noqa: BLE001
+        head = []
+    first = {c.strip().strip('"').lower() for c in (head[0].split(",") if head else [])}
+    if "number of distributions" in first and ({"so distribution", "po distribution"} & first):
+        raise ImportRefused(OWN_FILE_MESSAGE)
+
+
 def preview(data: bytes, filename: str, kind: str, user: Dict[str, Any], date_order: Optional[str] = None) -> Dict[str, Any]:
     """What importing this file would do. Saves nothing; hands back a token for commit (kept 30 minutes, in memory)."""
+    _refuse_own_file(data, filename)
     parsed = parse(data, filename, kind, date_order)
     result = classify(parsed)
     file_hash = hashlib.sha256(data).hexdigest()
@@ -769,8 +791,18 @@ def _warnings(data: bytes, filename: str, parsed: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _history_row(r: SageImportDB) -> Dict[str, Any]:
-    return {"id": r.id, "kind": r.kind, "kind_label": LABELS.get(r.kind, r.kind), "file_name": r.file_name, "file_hash": r.file_hash, "rows_total": r.rows_total,
+def _undone_ids(db) -> set:
+    return {r[0] for r in db.query(SageImportRowDB.import_id).filter(SageImportRowDB.action == "UNDONE").all()}
+
+
+def _history_row(r: SageImportDB, undone: Optional[bool] = None) -> Dict[str, Any]:
+    if undone is None:
+        try:
+            with SessionLocal() as db:
+                undone = r.id in _undone_ids(db)
+        except Exception:  # noqa: BLE001 - before the migration the table is not there
+            undone = False
+    return {"undone": bool(undone), "id": r.id, "kind": r.kind, "kind_label": LABELS.get(r.kind, r.kind), "file_name": r.file_name, "file_hash": r.file_hash, "rows_total": r.rows_total,
             "created": r.created, "updated": r.updated, "unchanged": r.unchanged, "problems": r.problems, "imported_by": r.imported_by,
             "imported_at": r.imported_at.isoformat() if r.imported_at else None}
 
@@ -782,6 +814,18 @@ def history(limit: int = 50) -> List[Dict[str, Any]]:
 
 def _money_value(v: Optional[str]) -> Optional[Decimal]:
     return Decimal(v) if v not in (None, "") else None
+
+
+def _plain_value(v: Any) -> Any:
+    return v if v is None or isinstance(v, (str, int, float, bool)) else str(v)
+
+
+def _journal(db, import_id: int, kind: str, key: str, action: str, before: Optional[Dict[str, Any]]) -> None:
+    """Remembers what an import did to one row, so it can be undone exactly. Never stops an import."""
+    try:
+        db.add(SageImportRowDB(import_id=import_id, kind=kind, row_key=key[:200], action=action, before=before))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _save_mirror(db, kind: str, parsed: Dict[str, Any], rows: List[Dict[str, Any]], import_id: int) -> Tuple[int, int, int]:
@@ -804,14 +848,18 @@ def _save_mirror(db, kind: str, parsed: Dict[str, Any], rows: List[Dict[str, Any
                      "open_sales_orders": {"kind": "SO", "number": row["key"].split("|", 1)[-1]},
                      "open_purchase_orders": {"kind": "PO", "number": row["key"].split("|", 1)[-1]}, "bills": {"bill_key": row["key"]}}[kind]
             db.add(model(**ident, **fields, import_id=import_id))
+            _journal(db, import_id, kind, row["key"], "CREATED", None)
             created += 1
             continue
         changed = False
+        before: Dict[str, Any] = {"import_id": getattr(have, "import_id", None)}
         for attr, val in fields.items():
             if _as_text(attr, getattr(have, attr, None)) != _as_text(attr, val):
+                before[attr] = _plain_value(getattr(have, attr, None))
                 setattr(have, attr, val)
                 changed = True
         if changed:
+            _journal(db, import_id, kind, row["key"], "UPDATED", before)
             have.import_id = import_id
             updated += 1
         else:
@@ -850,6 +898,7 @@ def _commit_locked(token: str, user: Dict[str, Any], confirm_close: bool = False
         with SessionLocal() as db:
             gone = _open_rows_missing(db, kind, parsed)
             for x in gone:
+                _journal(db, prior["id"], kind, f"{x.kind}|{x.number}", "CLOSED", {"open_amount": _plain_value(x.open_amount), "import_id": x.import_id})
                 x.open_amount, x.import_id = Decimal("0.00"), prior["id"]
             db.commit()
             numbers = [x.number for x in gone]
@@ -886,6 +935,7 @@ def _commit_locked(token: str, user: Dict[str, Any], confirm_close: bool = False
                     skipped_close = len(missing)                                # looks like a cut-off or partial export: close nothing unless a person confirms
                     missing = []
                 for x in missing:
+                    _journal(db, hist.id, kind, f"{x.kind}|{x.number}", "CLOSED", {"open_amount": _plain_value(x.open_amount), "import_id": x.import_id})
                     x.open_amount, x.import_id = Decimal("0.00"), hist.id
                     closed.append(x.number)
                 hist.created, hist.updated, hist.unchanged = created, updated, unchanged
@@ -907,6 +957,69 @@ def _commit_locked(token: str, user: Dict[str, Any], confirm_close: bool = False
             "closed": len(closed), "not_closed": skipped_close, "message": f"Imported {LABELS[kind].lower()}: {created} new, {updated} changed, {unchanged} unchanged"
             + (f"; {len(closed)} no longer open" if closed else "")
             + (f"; {skipped_close} held orders are missing from this file, which is more than half of those open, so none were closed (import again with confirm_close if the file is complete; every open order not in the file is closed, not only these)" if skipped_close else "") + (f"; {problems} row(s) were left out." if problems else ".")}
+
+
+_MIRROR_MODELS = {"invoices": (SageInvoiceDB, "invoice_number"), "payments": (SagePaymentDB, "pay_key"), "bills": (SageBillDB, "bill_key"), "open_sales_orders": (SageOpenOrderDB, None), "open_purchase_orders": (SageOpenOrderDB, None)}
+
+
+def _mirror_row(db, kind: str, key: str):
+    model, col = _MIRROR_MODELS[kind]
+    if kind in ("open_sales_orders", "open_purchase_orders"):
+        tag, number = key.split("|", 1)
+        return db.query(SageOpenOrderDB).filter(SageOpenOrderDB.kind == tag, SageOpenOrderDB.number == number).first()
+    return db.query(model).filter(getattr(model, col) == key).first()
+
+
+def undo(import_id: int, user: Dict[str, Any]) -> Dict[str, Any]:
+    """Takes back exactly what one import saved into the mirror and nothing else: rows it created are removed, rows it changed or closed are put back as they were. A row a LATER import has touched since is
+    left alone and counted. Idempotent (a second undo says so and does nothing). Parts, customers and vendors write the master files, which are never undone here. A file whose import was undone can be brought in again."""
+    who = user.get("email", "system")
+    with _commit_lock, SessionLocal() as db:
+        hist = db.get(SageImportDB, import_id)
+        if hist is None:
+            raise ImportRefused("There is no such import.")
+        kind_, name_ = hist.kind, str(hist.file_name or "")
+        if hist.kind in MASTER:
+            raise ImportRefused("That import wrote the master parts, customers or vendors list, which is not undone from here. Correct the list itself.")
+        if import_id in _undone_ids(db):
+            return {"import_id": import_id, "removed": 0, "restored": 0, "kept": 0, "already_undone": True, "message": "This import was already undone. Nothing changed."}
+        journal = db.query(SageImportRowDB).filter(SageImportRowDB.import_id == import_id, SageImportRowDB.action.in_(("CREATED", "UPDATED", "CLOSED"))).all()
+        removed = restored = kept = 0
+        if not journal:
+            # An import made before the journal existed: only a pure first load (nothing updated, nothing closed that we can tell) can be taken back exactly, by the rows it stamped.
+            model, _col = _MIRROR_MODELS[hist.kind]
+            q = db.query(model).filter(model.import_id == import_id)
+            if hist.updated != 0 or q.count() != hist.created:
+                raise ImportRefused("This import was made before changes were recorded and it changed existing rows, so it cannot be taken back exactly. Nothing was changed.")
+            for row in q.all():
+                db.delete(row)
+                removed += 1
+        else:
+            for j in journal:
+                row = _mirror_row(db, hist.kind, j.row_key)
+                if row is None:
+                    continue
+                if getattr(row, "import_id", None) != import_id:
+                    kept += 1                                         # a later import has changed this row since: not ours to undo
+                    continue
+                if j.action == "CREATED":
+                    db.delete(row)
+                    removed += 1
+                else:
+                    for attr, old in (j.before or {}).items():
+                        setattr(row, attr, _money_value(old) if (attr in _MONEY_COLS and old not in (None, "")) else old)
+                    restored += 1
+        db.add(SageImportRowDB(import_id=import_id, kind=hist.kind, row_key="-", action="UNDONE", before=None))
+        hist.file_hash = f"u{import_id}-{str(hist.file_hash)[:50]}"[:64]               # frees the file's identity: the same file can be brought in again
+        db.commit()
+    audit_log(action="SAGE_IMPORT_UNDONE", resource_type=f"SAGE_{kind_.upper()}", resource_id=str(import_id), actor_email=who, actor_role=user.get("role", ""),
+              detail=f"{LABELS[kind_]} import {import_id} ({name_[:60]}) undone: {removed} removed, {restored} put back, {kept} left because a later import changed them")
+    msg = f"{removed} row{'s' if removed != 1 else ''} removed"
+    if restored:
+        msg += f", {restored} put back as they were"
+    if kept:
+        msg += f", {kept} left alone because a later import changed them"
+    return {"import_id": import_id, "removed": removed, "restored": restored, "kept": kept, "already_undone": False, "message": msg + "."}
 
 
 def _write_history(kind: str, name: str, file_hash: str, rows_total: int, created: int, updated: int, unchanged: int, problems: int, who: str) -> int:

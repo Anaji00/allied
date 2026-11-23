@@ -239,7 +239,7 @@ def build_summary(on: Optional[date] = None) -> Dict[str, Any]:
                 due_week.append(f"{line} (due {m['due_date']})")
             elif m["state"] == "waiting_review":
                 review.append(f"{line} (submitted by {m['latest_submission']['submitted_by']})")
-    ships = [f"{shipments._label(s)}: {', '.join(s['flags'])}" for s in shipments.list_shipments(False) if s["flags"]]
+    ships = [f"{shipments._label(s)}: {', '.join(s['flags'])} (ask {s.get('forwarder') or 'the forwarder'})" for s in shipments.list_shipments(False) if s["flags"]]
     open_all = alerts.inbox(open_only=True, limit=500)                       # the same list the Today screen and the badge count (snoozed ones left out)
     open_alerts = [n for n in open_all if n["severity"] == "critical"]
     alerts_behind = [f"{n['title']}" for n in open_all if n["severity"] == "warning"]

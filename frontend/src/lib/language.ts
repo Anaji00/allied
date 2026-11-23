@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { authFetch } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 
 export type LangCode = 'en' | 'zh' | 'vi';
 export type LangOption = { code: LangCode; label: string };
@@ -89,8 +90,10 @@ export function navLabel(href: string, fallback: string, lang: LangCode): string
 /** The signed-in person's language, and a way to change it. Everyone defaults to English. */
 export function useLanguage() {
   const client = useQueryClient();
+  const { isAuthenticated } = useAuth();
   const q = useQuery({
     queryKey: ['language', 'me'],
+    enabled: isAuthenticated,
     queryFn: async (): Promise<Me | null> => {
       const res = await authFetch('/api/v1/language/me', { cache: 'no-store' });
       return res.ok ? ((await res.json()) as Me) : null;

@@ -625,6 +625,8 @@ def get_provider() -> AIProvider:
     """The configured provider, read at call time so settings changes apply."""
     if _override is not None:
         return _override
+    if settings.AI_LOCAL_ONLY:
+        return AIProvider()                           # AI is OFF: templates and rules only; no model, hosted or local, is ever called
     primary = _named(settings.AI_PROVIDER or "groq")
     fallback = (settings.AI_FALLBACK_PROVIDER or "").strip().lower()
     if fallback and fallback != primary.name:

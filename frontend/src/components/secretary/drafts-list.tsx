@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { EmptyState, RowsSkeleton } from '@/components/data/states';
@@ -21,9 +21,10 @@ import { useUndoQueue } from '@/lib/undo';
 export function DraftsList() {
   const inbox = useInbox();
   const client = useQueryClient();
-  const undo = useUndoQueue();
+  const undo = useUndoQueue({ dropOnLeave: true });
   const [gone, setGone] = useState<Set<string>>(() => new Set());
   const [armed, setArmed] = useState<string | null>(null);
+  const armedAt = useRef(0);
   const [editing, setEditing] = useState<InboxItem | null>(null);
   const drafts = inbox.items.filter((i) => i.source === 'drafts' && i.draft && !gone.has(i.key));
 
@@ -70,7 +71,10 @@ export function DraftsList() {
                 <p className="text-[13px]">
                   <span className="text-muted-foreground">To </span>
                   <span className="font-medium">{email?.to || 'Nobody yet'}</span>
-                  {email?.to && /@/.test(email.to) && !/@alliedweldingsystems\.com\s*$/i.test(email.to.trim()) && (
+                  {email?.delivery_note && <span className="ml-1.5 text-xs text-muted-foreground">({email.delivery_note})</span>}
+                  {(email?.to ?? '')
+                    .split(/[,;]/)
+                    .some((a) => a.includes('@') && !a.trim().toLowerCase().endsWith('@alliedweldingsystems.com')) && (
                     <span className="ml-1.5 rounded-full bg-warn-soft px-1.5 py-0.5 text-[11px] font-normal text-warn">outside Allied</span>
                   )}
                   <span className="text-xs text-muted-foreground">
@@ -93,7 +97,12 @@ export function DraftsList() {
                     variant={armed === i.key ? 'destructive' : 'default'}
                     onClick={() => {
                       // Anything that goes outside asks once more.
-                      if (armed !== i.key) return setArmed(i.key);
+                      if (armed !== i.key) {
+                        armedAt.current = Date.now();
+                        return setArmed(i.key);
+                      }
+                      // A double-click or held key must not count as the second, deliberate click.
+                      if (Date.now() - armedAt.current < 700) return;
                       setArmed(null);
                       run(i, 'send');
                     }}
